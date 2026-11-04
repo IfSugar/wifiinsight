@@ -13,7 +13,7 @@
 #              -o /tmp/wifiinsight.sh && sh /tmp/wifiinsight.sh install
 ###############################################################################
 
-VERSION="1.0.2"
+VERSION="1.0.3"
 NAME="wifiinsight"
 TITLE="WiFi Insight"
 
@@ -33,7 +33,9 @@ SCAN_FLAG="$ROOT/tmp/$NAME.scanning"
 TMPD="$ROOT/tmp/$NAME"
 CHART_URL="https://cdn.jsdelivr.net/npm/chart.js@4.6.1/dist/chart.umd.min.js"
 CHART_SHA256="87364cc2b2a76a6684929e7d6b80b18a897794db38400caff1fcf1791c6925d2"   # npm chart.js@4.6.1
-RAW_URL="${WI_RAW_URL:-https://raw.githubusercontent.com/IfSugar/wifiinsight/main}"
+REPO="IfSugar/wifiinsight"
+RAW_BASE="https://raw.githubusercontent.com/$REPO"
+RAW_URL="${WI_RAW_URL:-$RAW_BASE/main}"   # WI_RAW_URL: test hook only
 
 [ -z "$ROOT" ] && PATH="/opt/bin:/opt/sbin:/sbin:/bin:/usr/sbin:/usr/bin:$PATH"
 export PATH
@@ -916,9 +918,16 @@ install() {
 		asp="$src/$NAME.asp"
 		if ! asp_matches "$asp"; then   # missing, or left over from another version
 			say "Downloading the web page from GitHub..."
-			asp="$TMPD/$NAME.asp.dl"
-			{ curl -fsL --retry 2 "$RAW_URL/$NAME.asp?t=$(now)" -o "$asp" && asp_matches "$asp"; } || {
-				rm -f "$asp"; die "Couldn't get $NAME.asp $VERSION. Put it in the same folder as $NAME.sh and run install again."; }
+			asp="$TMPD/$NAME.asp.dl"; got=0
+			# 1) the release tag for this exact version (tags never change), 2) main, 3) the newest commit
+			if [ -n "$WI_RAW_URL" ]; then bases="$RAW_URL"; else bases="$RAW_BASE/$VERSION $RAW_URL"; fi
+			for base in $bases release; do
+				[ "$base" = release ] && base=$(release_url)
+				if fetch "$base/$NAME.asp" "$asp" quiet; then
+					asp_matches "$asp" && { got=1; break; }
+				fi
+			done
+			[ $got -eq 1 ] || { rm -f "$asp"; die "Couldn't get $NAME.asp $VERSION. Put it in the same folder as $NAME.sh and run install again."; }
 		fi
 		# rename into place: a running copy of the old script (e.g. during update) keeps reading its own file
 		cp -f "$src/$NAME.sh" "$SCRIPT.new" && mv -f "$SCRIPT.new" "$SCRIPT"
@@ -966,10 +975,37 @@ install() {
 
 asp_matches() { [ -s "$1" ] && grep -q "wifiinsight-version: $VERSION " "$1"; }
 
+# Download $1 to $2 [quiet]. Succeeds only if a non-empty file arrived; otherwise says why.
+fetch() {
+	rm -f "$2"
+	code=$(curl -sL --retry 2 --connect-timeout 15 -w '%{http_code}' -o "$2" "$1" 2>/dev/null); rc=$?
+	if [ $rc -ne 0 ]; then why="curl error $rc"
+	elif [ "$code" != "200" ]; then why="HTTP $code"
+	elif [ ! -s "$2" ]; then why="empty response"
+	else return 0
+	fi
+	[ "$3" = quiet ] || say "  download failed ($why): $1"
+	rm -f "$2"; return 1
+}
+
+# Raw URL of the newest commit on main. raw.githubusercontent.com caches files for up to
+# 5 minutes and ignores query strings, but a commit-pinned URL is always exact and fresh,
+# and keeps the script and the page from the same commit. Falls back to main.
+release_url() {
+	[ -n "$WI_RAW_URL" ] && { echo "$RAW_URL"; return; }
+	sha=$(curl -fsS --retry 2 --connect-timeout 15 -H 'Accept: application/vnd.github.sha' \
+		"https://api.github.com/repos/$REPO/commits/main" 2>/dev/null | cut -c1-40 | head -1)
+	case "$sha" in
+		*[!0-9a-f]*|'') echo "$RAW_URL" ;;
+		*) if [ ${#sha} -eq 40 ]; then echo "$RAW_BASE/$sha"; else echo "$RAW_URL"; fi ;;
+	esac
+}
+
 update() {   # [force]  fetch the latest release from GitHub and reinstall over this one
-	dl="$TMPD/update"; rm -rf "$dl"; mkdir -p "$dl"
+	dl="$TMPD/update"; rm -rf "$dl"; mkdir -p "$dl" || die "Couldn't create $dl"
 	say "Checking GitHub for updates..."
-	curl -fsL --retry 2 "$RAW_URL/$NAME.sh?t=$(now)" -o "$dl/$NAME.sh" || { rm -rf "$dl"; die "Couldn't reach GitHub."; }
+	rel=$(release_url)
+	fetch "$rel/$NAME.sh" "$dl/$NAME.sh" || { rm -rf "$dl"; die "Couldn't download the update; nothing was changed."; }
 	new=$(sed -n 's/^VERSION="\([0-9][0-9.]*\)".*/\1/p' "$dl/$NAME.sh" | head -1)
 	if [ -z "$new" ] || ! sh -n "$dl/$NAME.sh" 2>/dev/null; then
 		rm -rf "$dl"; die "The downloaded script looks incomplete; nothing was changed."
@@ -977,7 +1013,7 @@ update() {   # [force]  fetch the latest release from GitHub and reinstall over 
 	if [ "$new" = "$VERSION" ] && [ "$1" != "force" ]; then
 		rm -rf "$dl"; say "Already up to date ($VERSION)."; return 0
 	fi
-	if ! { curl -fsL --retry 2 "$RAW_URL/$NAME.asp?t=$(now)" -o "$dl/$NAME.asp" && grep -q "wifiinsight-version: $new " "$dl/$NAME.asp"; }; then
+	if ! fetch "$rel/$NAME.asp" "$dl/$NAME.asp" || ! grep -q "wifiinsight-version: $new " "$dl/$NAME.asp"; then
 		rm -rf "$dl"; die "Couldn't download the matching web page; nothing was changed."
 	fi
 	say "Updating $VERSION -> $new (settings and history are kept)"

@@ -75,7 +75,7 @@ Open **Wireless → WiFi Insight** (the tab after *Professional*). The interfere
 
 If the tab doesn't show up, reload the router page with **Ctrl+F5** (Windows) or **Cmd+Shift+R** (Mac): browsers cache the router's menu. The installer also prints a direct link to the page.
 
-**Updating:** run `/jffs/addons/wifiinsight/wifiinsight.sh update`. It checks this repo, and if there's a newer version it installs it over the old one, keeping your settings, history and page slot. `update force` reinstalls the current version.
+**Updating:** run `/jffs/addons/wifiinsight/wifiinsight.sh update`. It asks GitHub for the newest commit, and if that's a newer version it installs it over the old one, keeping your settings, history and page slot. `update force` reinstalls the current version. Every version is also published under [Releases](https://github.com/IfSugar/wifiinsight/releases), with an install command pinned to that version.
 
 **amtm:** WiFi Insight isn't in amtm's built-in list, but you can launch it from amtm by adding `/jffs/addons/wifiinsight/wifiinsight.sh` as a personal script, with `status` as the argument.
 
@@ -152,6 +152,10 @@ Storage is about 21 MB for 30 days of 30-second samples on two radios.
 - **Load:** the per-minute job takes about 0.5 s of CPU on a 2.1 GHz x86 core with 30 days of history (expect a few times that on the router's ARM cores), at the lowest CPU priority (`nice 19`). Each scan takes the radio off-channel briefly; see *How the numbers are made*.
 
 To remove everything: `wifiinsight.sh uninstall`. If the web UI ever looks wrong, a reboot clears all RAM-side changes.
+
+## Releasing
+
+Bump `VERSION` in `wifiinsight.sh` and the matching `wifiinsight-version:` line in `wifiinsight.asp`, then push to `main`. The [Release workflow](.github/workflows/release.yml) checks that the two versions match, that the script parses in BusyBox `ash` (the router's shell) and that the page's JavaScript is valid, then tags the commit with the version (for example `1.0.3`) and publishes a GitHub release with both files attached. If the tag already exists, it does nothing.
 
 ## License
 
