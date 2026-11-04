@@ -60,9 +60,19 @@ js() { printf '%s' "$1" | tr -d '\000-\037' | sed 's/\\/\\\\/g; s/"/\\"/g'; }   
 num() { case "$1" in ''|-|?*-*|*[!0-9-]*) echo NULL ;; *) echo "$1" ;; esac; }    # SQL number
 jnum() { case "$1" in ''|-|?*-*|*[!0-9-]*) echo null ;; *) echo "$1" ;; esac; }   # JSON number
 
+# Is a program on PATH? (Router BusyBox builds can lack the `command` builtin, so walk PATH.)
+have() {
+	case "$1" in */*) [ -f "$1" ] && [ -x "$1" ]; return ;; esac
+	_ifs=$IFS; IFS=:
+	for _d in $PATH; do
+		if [ -f "${_d:-.}/$1" ] && [ -x "${_d:-.}/$1" ]; then IFS=$_ifs; return 0; fi
+	done
+	IFS=$_ifs; return 1
+}
+
 sha256_of() {
-	if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
-	elif command -v openssl >/dev/null 2>&1; then openssl dgst -sha256 "$1" | awk '{print $NF}'
+	if have sha256sum; then sha256sum "$1" | cut -d' ' -f1
+	elif have openssl; then openssl dgst -sha256 "$1" | awk '{print $NF}'
 	fi
 }
 chart_ok() {   # the downloaded Chart.js is byte-identical to the published npm release
@@ -799,8 +809,8 @@ check_support() {
 	fi
 
 	# Broadcom driver with per-channel airtime statistics
-	if ! command -v wl >/dev/null 2>&1; then
-		ck_fail "No Broadcom Wi-Fi driver ('wl' is missing). Only Broadcom-based models are supported."
+	if ! have wl; then
+		ck_fail "No Broadcom Wi-Fi driver ('wl' not found in $PATH). Only Broadcom-based models are supported."
 	else
 		good=0; seen=0; off=0
 		for r in $(radios); do
@@ -825,6 +835,20 @@ check_support() {
 		elif [ $good -eq 0 ] && [ $off -gt 0 ]; then ck_fail "No Wi-Fi radio is switched on, so support can't be checked. Turn one on and try again."
 		elif [ $good -eq 0 ]; then ck_fail "No radio provides the airtime statistics WiFi Insight is built on."
 		fi
+	fi
+
+	# Shell tools the addon relies on (router BusyBox builds vary)
+	t="$ROOT/tmp/$NAME.selftest.$$"; printf 'ab' > "$t" 2>/dev/null; lack=""
+	[ "$(tail -c 1 "$t" 2>/dev/null)" = "b" ] || lack="$lack tail-c"
+	date -r "$t" +%s >/dev/null 2>&1 || lack="$lack date-r"
+	[ "$(date -u -d @86400 +%Y%m%d 2>/dev/null)" = "19700102" ] || lack="$lack date-d"
+	[ -n "$(readlink -f "$ROOT/tmp" 2>/dev/null)" ] || lack="$lack readlink-f"
+	[ "$(printf 'x\n' | sed 's/x/y/')" = "y" ] && [ "$(echo 1 | awk '{ print toupper("a") $1 + 1 }')" = "A2" ] || lack="$lack sed/awk"
+	[ "$(printf 'a\tb' | tr -d '\000-\037')" = "ab" ] || lack="$lack tr"
+	for p in flock md5sum cru; do have "$p" || lack="$lack $p"; done
+	rm -f "$t"
+	if [ -z "$lack" ]; then ck_ok "Shell tools (BusyBox)"
+	else ck_fail "This firmware's BusyBox lacks:$lack"
 	fi
 
 	# Entware + sqlite3 with JSON on persistent storage
