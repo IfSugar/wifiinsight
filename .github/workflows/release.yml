@@ -1,0 +1,94 @@
+# On every push to main: check the addon, then tag and publish a GitHub release
+# named after VERSION in wifiinsight.sh (e.g. 1.0.3) if that tag doesn't exist yet.
+# To release: bump VERSION in wifiinsight.sh and the matching
+# "wifiinsight-version:" line in wifiinsight.asp, then push.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - wifiinsight.sh
+      - wifiinsight.asp
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # need existing tags
+
+      - name: Read and match versions
+        id: version
+        run: |
+          sh_ver=$(sed -n 's/^VERSION="\([0-9][0-9.]*\)".*/\1/p' wifiinsight.sh | head -1)
+          asp_ver=$(sed -n 's/.*wifiinsight-version: \([0-9][0-9.]*\) .*/\1/p' wifiinsight.asp | head -1)
+          echo "wifiinsight.sh: $sh_ver   wifiinsight.asp: $asp_ver"
+          if [ -z "$sh_ver" ]; then echo "::error file=wifiinsight.sh::No VERSION=\"x.y.z\" line"; exit 1; fi
+          if [ "$sh_ver" != "$asp_ver" ]; then
+            echo "::error file=wifiinsight.asp::Page is version '$asp_ver' but the script is '$sh_ver'. The installer needs them to match."
+            exit 1
+          fi
+          echo "version=$sh_ver" >> "$GITHUB_OUTPUT"
+
+      - name: Check the script runs on a router shell
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq busybox > /dev/null
+          busybox ash -n wifiinsight.sh   # the router's shell
+          sh -n wifiinsight.sh            # dash, a strict POSIX shell
+          if grep -n 'command -v' wifiinsight.sh; then
+            echo "::error file=wifiinsight.sh::Router BusyBox builds can lack 'command'; use have() instead."
+            exit 1
+          fi
+
+      - name: Check the page's JavaScript
+        run: |
+          python3 - <<'EOF'
+          import re
+          page = open('wifiinsight.asp', encoding='utf-8').read()
+          js = '\n'.join(re.findall(r'<script type="text/javascript">(.*?)</script>', page, re.S))
+          js = re.sub(r'<%.*?%>', '{}', js)   # router template tags
+          open('/tmp/page.js', 'w', encoding='utf-8').write(js)
+          EOF
+          node --check /tmp/page.js
+          # The page code must stay inside its private (function () { ... })(); scope:
+          # a global $ or store() replaces the firmware's and breaks the router's menu.
+          if ! grep -q '^(function () {$' wifiinsight.asp || ! grep -q '^})();$' wifiinsight.asp; then
+            echo "::error file=wifiinsight.asp::Page code must stay wrapped in (function () { ... })(); so it can't clash with the firmware's globals."
+            exit 1
+          fi
+
+      - name: Tag and publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/$VERSION" > /dev/null; then
+            echo "Tag $VERSION already exists, nothing to release."
+            exit 0
+          fi
+          cat > /tmp/notes.md <<EOF
+          Install or update over SSH on the router:
+
+          \`\`\`sh
+          curl -fsL --retry 3 "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${VERSION}/wifiinsight.sh" -o /tmp/wifiinsight.sh && sh /tmp/wifiinsight.sh install
+          \`\`\`
+
+          Already installed? \`/jffs/addons/wifiinsight/wifiinsight.sh update\`
+          EOF
+          gh release create "$VERSION" wifiinsight.sh wifiinsight.asp \
+            --target "$GITHUB_SHA" \
+            --title "WiFi Insight $VERSION" \
+            --notes-file /tmp/notes.md \
+            --generate-notes
+          echo "Released $VERSION"
