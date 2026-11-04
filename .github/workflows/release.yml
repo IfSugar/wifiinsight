@@ -98,3 +98,20 @@ jobs:
             --title "WiFi Insight $VERSION" \
             --notes-file /tmp/notes.md
           echo "Released $VERSION"
+
+      - name: Sync every release's notes with CHANGELOG.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --tags --force --quiet
+          tags=$(git tag --list --sort=-v:refname)
+          for t in $tags; do
+            grep -q "^## $t\( \|$\)" CHANGELOG.md || continue
+            gh release view "$t" > /dev/null 2>&1 || continue
+            prev=$(printf '%s\n' "$tags" | awk -v v="$t" 'f { print; exit } $0 == v { f = 1 }')
+            sh .github/release-notes.sh "$t" "$prev" > "/tmp/notes-$t.md"
+            if [ "$(gh release view "$t" --json body --jq .body)" != "$(cat "/tmp/notes-$t.md")" ]; then
+              gh release edit "$t" --notes-file "/tmp/notes-$t.md"
+              echo "Updated the notes of $t"
+            fi
+          done
