@@ -8,7 +8,7 @@
 <link rel="shortcut icon" href="images/favicon.png"/>
 <link rel="icon" href="images/favicon.png"/>
 <title>WiFi Insight</title>
-<!-- wifiinsight-version: 1.0.6 (must match VERSION in wifiinsight.sh) -->
+<!-- wifiinsight-version: 1.0.7 (must match VERSION in wifiinsight.sh) -->
 <link rel="stylesheet" type="text/css" href="index_style.css"/>
 <link rel="stylesheet" type="text/css" href="form_style.css"/>
 <script type="text/javascript" src="/js/jquery.js"></script>
@@ -113,7 +113,7 @@
 #wi .form .hint { color: var(--muted); font-size: 11px; margin-top: 4px; line-height: 1.4; }
 #wi select, #wi input[type=text] { background-color: #1f282b; border: 1px solid var(--axis); color: var(--ink); font: inherit; padding: 6px 12px; border-radius: 6px; }
 /* Own chevron with the same 12px inset as the text, instead of the browser's arrow hugging the edge */
-#wi select { -webkit-appearance: none; -moz-appearance: none; appearance: none; min-width: 190px; padding-right: 36px; cursor: pointer;
+#wi select { -webkit-appearance: none; -moz-appearance: none; appearance: none; padding-right: 34px; cursor: pointer;
 	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%2393a9b1' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 	background-repeat: no-repeat; background-position: right 12px center; background-size: 12px 8px; }
 #wi select:hover { border-color: var(--muted); }

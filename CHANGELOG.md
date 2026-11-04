@@ -2,6 +2,10 @@
 
 What changed in each release of WiFi Insight. The release workflow copies a version's section into its GitHub release notes, so write for people running the addon.
 
+## 1.0.7
+
+- Settings: each dropdown is sized to its text again (1.0.6 made them all one width). The even padding and the new arrow stay.
+
 ## 1.0.6
 
 - Settings: the dropdowns have even padding on both sides and a matching arrow, are all the same width, and line up with the text field below them.
