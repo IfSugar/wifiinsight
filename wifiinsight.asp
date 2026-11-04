@@ -8,7 +8,7 @@
 <link rel="shortcut icon" href="images/favicon.png"/>
 <link rel="icon" href="images/favicon.png"/>
 <title>WiFi Insight</title>
-<!-- wifiinsight-version: 1.0.1 (must match VERSION in wifiinsight.sh) -->
+<!-- wifiinsight-version: 1.0.2 (must match VERSION in wifiinsight.sh) -->
 <link rel="stylesheet" type="text/css" href="index_style.css"/>
 <link rel="stylesheet" type="text/css" href="form_style.css"/>
 <script type="text/javascript" src="/js/jquery.js"></script>
@@ -136,7 +136,7 @@ var TAGS = {
 	radar: 'Regulatory (RADAR)', changed: 'Channel changed'
 };
 var PHY = { be: 'Wi-Fi 7', ax: 'Wi-Fi 6', ac: 'Wi-Fi 5', n: 'Wi-Fi 4', g: 'Legacy', a: 'Legacy' };
-var RAMP = ['#33424a', '#104281', '#184f95', '#1c5cab', '#256abf', '#2a78d6', '#3987e5', '#5598e7', '#6da7ec', '#86b6ef', '#9ec5f4', '#b7d3f6', '#cde2fb'];
+var RAMP = ['#eff4fc', '#d8e7fd', '#c3d9fa', '#afccf5', '#9bbff0', '#88b2ea', '#75a4e3', '#6297dd', '#4e8ad5', '#397dce', '#216fc6', '#0062ba'];   /* clean (near-white) -> busy (deep blue), even OKLab lightness steps */
 var C = { others: '#3987e5', nonwifi: '#d95926', yours: '#199e70', rx: '#9085e9', unclass: '#c98500', plcp: '#d55181', fail: '#e66767', idle: '#46555a', grid: 'rgba(255,255,255,0.07)', tick: '#93a9b1', ink2: '#c3c2b7', surface: '#2b3539' };
 /* live sample columns / 15-minute aggregate columns */
 var FL = { obss: 1, nocat: 2, tx: 3, inbss: 4, idle: 5, glitch: 6, noise: 7, nopkt: 11, doze: 12, txop: 13, goodtx: 14, badtx: 15, badplcp: 16, knoise: 17 };
