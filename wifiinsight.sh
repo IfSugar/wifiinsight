@@ -13,7 +13,7 @@
 #              -o /tmp/wifiinsight.sh && sh /tmp/wifiinsight.sh install
 ###############################################################################
 
-VERSION="1.0.5"
+VERSION="1.0.6"
 NAME="wifiinsight"
 TITLE="WiFi Insight"
 

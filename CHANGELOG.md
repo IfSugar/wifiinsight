@@ -2,6 +2,10 @@
 
 What changed in each release of WiFi Insight. The release workflow copies a version's section into its GitHub release notes, so write for people running the addon.
 
+## 1.0.6
+
+- Settings: the dropdowns have even padding on both sides and a matching arrow, are all the same width, and line up with the text field below them.
+
 ## 1.0.5
 
 - `update` retries each download up to three times, so a momentary failure no longer stops the update. Before, you sometimes had to run `update` again.
