@@ -155,7 +155,11 @@ To remove everything: `wifiinsight.sh uninstall`. If the web UI ever looks wrong
 
 ## Releasing
 
-Bump `VERSION` in `wifiinsight.sh` and the matching `wifiinsight-version:` line in `wifiinsight.asp`, then push to `main`. The [Release workflow](.github/workflows/release.yml) checks that the two versions match, that the script parses in BusyBox `ash` (the router's shell) and that the page's JavaScript is valid, then tags the commit with the version (for example `1.0.3`) and publishes a GitHub release with both files attached. If the tag already exists, it does nothing.
+1. Bump `VERSION` in `wifiinsight.sh` and the matching `wifiinsight-version:` line in `wifiinsight.asp`.
+2. Add a `## x.y.z` section to [CHANGELOG.md](CHANGELOG.md) saying what changed, written for people running the addon.
+3. Push to `main`.
+
+The [Release workflow](.github/workflows/release.yml) checks that the two versions match, that the script parses in BusyBox `ash` (the router's shell) and that the page's JavaScript is valid. It then tags the commit with the version (for example `1.0.5`) and publishes a GitHub release with both files attached. The release notes are that version's changelog section plus install instructions. Editing the changelog later refreshes the notes of the current release.
 
 ## License
 

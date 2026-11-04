@@ -1,7 +1,8 @@
 # On every push to main: check the addon, then tag and publish a GitHub release
 # named after VERSION in wifiinsight.sh (e.g. 1.0.3) if that tag doesn't exist yet.
-# To release: bump VERSION in wifiinsight.sh and the matching
-# "wifiinsight-version:" line in wifiinsight.asp, then push.
+# To release: bump VERSION in wifiinsight.sh and the matching "wifiinsight-version:" line in
+# wifiinsight.asp, add a "## x.y.z" section to CHANGELOG.md, then push. The release notes are
+# that section (see .github/release-notes.sh); editing CHANGELOG.md later refreshes them.
 name: Release
 
 on:
@@ -10,6 +11,8 @@ on:
     paths:
       - wifiinsight.sh
       - wifiinsight.asp
+      - CHANGELOG.md
+      - .github/release-notes.sh
       - .github/workflows/release.yml
   workflow_dispatch:
 
@@ -68,27 +71,30 @@ jobs:
             exit 1
           fi
 
-      - name: Tag and publish the release
+      - name: Changelog entry
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if ! grep -q "^## $VERSION\( \|$\)" CHANGELOG.md; then
+            echo "::warning file=CHANGELOG.md::No '## $VERSION' section; the release notes will list commit titles instead."
+          fi
+
+      - name: Tag and publish the release (or refresh its notes)
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
+          prev=$(git tag --list --sort=-v:refname | grep -vx "$VERSION" | head -1 || true)
+          sh .github/release-notes.sh "$VERSION" "$prev" > /tmp/notes.md
+          cat /tmp/notes.md
           if git rev-parse -q --verify "refs/tags/$VERSION" > /dev/null; then
-            echo "Tag $VERSION already exists, nothing to release."
+            # Already released: keep its notes in step with CHANGELOG.md
+            gh release edit "$VERSION" --notes-file /tmp/notes.md
+            echo "Release $VERSION already exists; notes refreshed."
             exit 0
           fi
-          cat > /tmp/notes.md <<EOF
-          Install or update over SSH on the router:
-
-          \`\`\`sh
-          curl -fsL --retry 3 "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${VERSION}/wifiinsight.sh" -o /tmp/wifiinsight.sh && sh /tmp/wifiinsight.sh install
-          \`\`\`
-
-          Already installed? \`/jffs/addons/wifiinsight/wifiinsight.sh update\`
-          EOF
           gh release create "$VERSION" wifiinsight.sh wifiinsight.asp \
             --target "$GITHUB_SHA" \
             --title "WiFi Insight $VERSION" \
-            --notes-file /tmp/notes.md \
-            --generate-notes
+            --notes-file /tmp/notes.md
           echo "Released $VERSION"

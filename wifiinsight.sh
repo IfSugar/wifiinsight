@@ -13,7 +13,7 @@
 #              -o /tmp/wifiinsight.sh && sh /tmp/wifiinsight.sh install
 ###############################################################################
 
-VERSION="1.0.4"
+VERSION="1.0.5"
 NAME="wifiinsight"
 TITLE="WiFi Insight"
 
@@ -1005,17 +1005,23 @@ install() {
 
 asp_matches() { [ -s "$1" ] && grep -q "wifiinsight-version: $VERSION " "$1"; }
 
-# Download $1 to $2 [quiet]. Succeeds only if a non-empty file arrived; otherwise says why.
+# Download $1 to $2 [quiet]. Up to 3 attempts; succeeds only if a non-empty file arrived,
+# otherwise says why. (A router's /tmp is shared RAM, so a write can fail now and work a moment later.)
 fetch() {
-	rm -f "$2"
-	code=$(curl -sL --retry 2 --connect-timeout 15 -w '%{http_code}' -o "$2" "$1" 2>/dev/null); rc=$?
-	if [ $rc -ne 0 ]; then why="curl error $rc"
-	elif [ "$code" != "200" ]; then why="HTTP $code"
-	elif [ ! -s "$2" ]; then why="empty response"
-	else return 0
-	fi
+	for attempt in 1 2 3; do
+		rm -f "$2" 2>/dev/null; mkdir -p "$(dirname "$2")"
+		code=$(curl -sL --retry 2 --connect-timeout 15 -w '%{http_code}' -o "$2" "$1" 2>/dev/null); rc=$?
+		if [ $rc -eq 23 ]; then why="couldn't write $2, $(df -k "$(dirname "$2")" 2>/dev/null | awk 'NR == 2 { print $4 }') KB free"
+		elif [ $rc -ne 0 ]; then why="curl error $rc"
+		elif [ "$code" != "200" ]; then why="HTTP $code"
+		elif [ ! -s "$2" ]; then why="empty response"
+		else return 0
+		fi
+		[ "$code" = "404" ] && break   # won't change on retry
+		[ $attempt -lt 3 ] && sleep 2
+	done
 	[ "$3" = quiet ] || say "  download failed ($why): $1"
-	rm -f "$2"; return 1
+	rm -f "$2" 2>/dev/null; return 1
 }
 
 # Raw URL of the newest commit on main. raw.githubusercontent.com caches files for up to
@@ -1032,7 +1038,7 @@ release_url() {
 }
 
 update() {   # [force]  fetch the latest release from GitHub and reinstall over this one
-	dl="$TMPD/update"; rm -rf "$dl"; mkdir -p "$dl" || die "Couldn't create $dl"
+	dl="$TMPD/update.$$"; rm -rf "$dl"; mkdir -p "$dl" || die "Couldn't create $dl"
 	say "Checking GitHub for updates..."
 	rel=$(release_url)
 	fetch "$rel/$NAME.sh" "$dl/$NAME.sh" || { rm -rf "$dl"; die "Couldn't download the update; nothing was changed."; }
