@@ -713,14 +713,37 @@ function renderBest(L, ch, r) {
 
 /* =================== TROUBLESHOOTING =================== */
 function renderTrouble() {
-	var s = series(['tx', 'inbss', 'nocat', 'obss', 'nopkt', 'idle', 'glitch', 'badplcp', 'goodtx', 'badtx', 'noise']);
+	var s = series(['tx', 'inbss', 'nocat', 'obss', 'nopkt', 'idle', 'doze', 'glitch', 'badplcp', 'goodtx', 'badtx', 'noise']);
 	var empty = s._n ? null : 'No samples in this range yet.';
-	var area = function (label, data, col, first) { return { label: label, data: data, borderColor: col, backgroundColor: col + 'cc', fill: first ? 'origin' : '-1', borderWidth: 1 }; };
-	$('wiAirLegend').innerHTML = legendHTML('air', [['Your TX', C.yours, 0], ['Your RX', C.rx, 0], ['Non-Wi-Fi', C.nonwifi, 0], ['Others Wi-Fi', C.others, 0], ['Unclassified', C.unclass, 0], ['Idle', C.idle, 0]]);
-	drawChart('air', 'wiAirChart', 'line', [
-		area('Your TX', s.tx, C.yours, 1), area('Your RX', s.inbss, C.rx), area('Non-Wi-Fi', s.nocat, C.nonwifi),
-		area('Others Wi-Fi', s.obss, C.others), area('Unclassified', s.nopkt, C.unclass), area('Idle', s.idle, C.idle)
-	], { R: s._R, stacked: true, yMin: 0, yMax: 110, yStep: 20, yFmt: function (v) { return v <= 100 ? v + '%' : ''; }, unit: '%', events: bandEvents(), plugins: [eventMarkers], empty: empty });
+
+	/* The driver measures each share separately and rounds each to a whole percent, so they add up
+	   to roughly 97-105%. Scale every sample to exactly 100% so the stack is flat on top. Doze
+	   (radio power save, ~0 on a router) counts as idle. The counters table keeps the raw values. */
+	var AIR = [['Your TX', 'tx', C.yours], ['Your RX', 'inbss', C.rx], ['Non-Wi-Fi', 'nocat', C.nonwifi],
+		['Others Wi-Fi', 'obss', C.others], ['Unclassified', 'nopkt', C.unclass], ['Idle', 'idle', C.idle]];
+	var air = AIR.map(function () { return []; }), visMax = 0, allOn = true;
+	AIR.forEach(function (a) { if (WI.hidden['air:' + a[0]]) allOn = false; });
+	for (var i = 0; i < s.tx.length; i++) {
+		var raw = AIR.map(function (a) { var v = s[a[1]][i].y; return v == null ? null : v; });
+		var doze = s.doze[i] && s.doze[i].y ? s.doze[i].y : 0;
+		if (raw[5] != null) raw[5] += doze;
+		var known = raw.filter(function (v) { return v != null; }), sum = known.reduce(function (t, v) { return t + v; }, 0);
+		var vis = 0;
+		raw.forEach(function (v, k) {
+			var y = (known.length && sum > 0 && v != null) ? Math.round(v * 1000 / sum) / 10 : null;
+			air[k].push({ x: s.tx[i].x, y: y });
+			if (y != null && !WI.hidden['air:' + AIR[k][0]]) vis += y;
+		});
+		if (vis > visMax) visMax = vis;
+	}
+	var yMax = allOn ? 100 : Math.min(100, Math.max(10, Math.ceil(visMax / 10) * 10));
+	$('wiAirLegend').innerHTML = legendHTML('air', AIR.map(function (a) { return [a[0], a[2], 1]; }));
+	drawChart('air', 'wiAirChart', 'line', AIR.map(function (a, k) {
+		/* fill: 'stack' fills down to the next visible layer, so hiding a series doesn't leave gaps */
+		return { label: a[0], data: air[k], borderColor: a[2], backgroundColor: a[2] + 'cc', fill: 'stack', borderWidth: 1 };
+	}), { R: s._R, stacked: true, yMin: 0, yMax: yMax, yStep: yMax === 100 ? 20 : undefined, yFmt: function (v) { return v + '%'; },
+		ttLabel: function (it) { return ' ' + it.dataset.label + ': ' + it.parsed.y.toFixed(1) + '%'; },
+		events: bandEvents(), plugins: [eventMarkers], empty: empty });
 
 	$('wiGlLegend').innerHTML = legendHTML('gl', [['Rx glitches', C.unclass, 1], ['Bad PLCP', C.plcp, 1]]);
 	drawChart('gl', 'wiGlChart', 'line', [
@@ -1043,7 +1066,7 @@ window.WiFiInsight = {
 	<!-- ============ TROUBLESHOOTING ============ -->
 	<div class="view" id="v-trouble">
 		<div class="card">
-			<div class="head"><div class="grow"><h3>Airtime breakdown</h3><div class="sub">Where the router's channel time goes, stacked. Values come from the radio and can add up to slightly over 100%.</div></div></div>
+			<div class="head"><div class="grow"><h3>Airtime breakdown</h3><div class="sub">Where the router's channel time goes, stacked and scaled to 100%. Click a name to show or hide it; raw counters are in the table below.</div></div></div>
 			<div class="legend" id="wiAirLegend" style="justify-content:flex-start;margin-bottom:6px"></div>
 			<div class="chartbox" id="wiAirChart"></div>
 		</div>

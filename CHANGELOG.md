@@ -5,6 +5,8 @@ What changed in each release of WiFi Insight. The release workflow copies a vers
 ## 1.0.7
 
 - Settings: each dropdown is sized to its text again (1.0.6 made them all one width). The even padding and the new arrow stay.
+- Troubleshooting → Airtime breakdown: click any name in the legend to show or hide it, like the other charts. Hide everything but *Your TX* to see just your transmit time. The chart rescales to what's shown.
+- Airtime breakdown adds up to exactly 100%. The radio measures and rounds each share separately, so they used to total roughly 97–105% and the top edge wobbled. Each sample is now scaled to 100%, and the raw counters table below is unchanged.
 
 ## 1.0.6
 
