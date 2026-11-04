@@ -13,6 +13,7 @@ on:
       - wifiinsight.asp
       - CHANGELOG.md
       - .github/release-notes.sh
+      - .github/tests/**
       - .github/workflows/release.yml
   workflow_dispatch:
 
@@ -53,6 +54,13 @@ jobs:
             echo "::error file=wifiinsight.sh::Router BusyBox builds can lack 'command'; use have() instead."
             exit 1
           fi
+
+      - name: Check the data files stay complete with a long history
+        # Merlin's shell runs [, printf and echo as separate programs (128 KB per argument):
+        # a day of samples must stream into the files, or the charts go empty.
+        run: |
+          sudo apt-get install -y -qq sqlite3 > /dev/null
+          bash .github/tests/large-history.sh
 
       - name: Check the page's JavaScript
         run: |

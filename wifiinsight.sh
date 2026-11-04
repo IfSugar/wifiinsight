@@ -13,7 +13,7 @@
 #              -o /tmp/wifiinsight.sh && sh /tmp/wifiinsight.sh install
 ###############################################################################
 
-VERSION="1.0.8"
+VERSION="1.0.9"
 NAME="wifiinsight"
 TITLE="WiFi Insight"
 
@@ -83,6 +83,16 @@ chart_ok() {   # the downloaded Chart.js is byte-identical to the published npm 
 }
 
 sql() { "$SQLITE" -batch -noheader -cmd ".timeout 8000" "$DB" "$@"; }
+
+# Big query results (a day of samples is ~350 KB of JSON) must never sit in a shell variable or
+# be passed as an argument. Merlin's BusyBox runs [, printf and echo as separate programs, and
+# Linux refuses any single argument over 128 KB, so they would fail. Stream them instead.
+json_out() {   # default query: print the query's JSON, or the default if it printed nothing (DB busy)
+	mkdir -p "$TMPD"; jf="$TMPD/json.$$"
+	sql "$2" > "$jf" 2>/dev/null
+	if [ -s "$jf" ]; then tr -d '\n' < "$jf"; else printf '%s' "$1"; fi
+	rm -f "$jf"
+}
 
 # Background work runs at the lowest CPU priority, so routing, Wi-Fi and the web UI always come first.
 lowprio() { renice -n 19 -p $$ >/dev/null 2>&1 || true; }
@@ -270,13 +280,18 @@ detect_radar() {
 		[ -f "$f" ] && files="$files $f"
 	done
 	[ -n "$files" ] || return
-	lines=$(grep -ih "radar detected" $files 2>/dev/null | sort -u)
-	[ -n "$lines" ] || return
-	sig=$(printf '%s' "$lines" | md5sum | cut -c1-32)
-	[ "$sig" = "$(state_get radar_sig)" ] && return
+	# The radar lines go through a file, not a variable: a long-kept log can hold more than
+	# a command argument may (see json_out).
+	mkdir -p "$TMPD"; lf="$TMPD/radar.$$"
+	grep -ih "radar detected" $files 2>/dev/null | sort -u > "$lf"
+	[ -s "$lf" ] || { rm -f "$lf"; return; }
+	sig=$(awk 'NR > 1 { printf "\n" } { printf "%s", $0 }' "$lf" | md5sum | cut -c1-32)
+	[ "$sig" = "$(state_get radar_sig)" ] && { rm -f "$lf"; return; }
 	year=$(date +%Y); nowts=$(now)
 	maps=""; for r in $(radios); do maps="$maps $(nvram get wl${r}_ifname)=$r wl$r=$r"; done
-	s=$(printf '%s\n' "$lines" | while IFS= read -r line; do
+	{
+	echo 'BEGIN;'
+	while IFS= read -r line; do
 		mon=$(printf '%s' "$line" | cut -c1-3); day=$(printf '%s' "$line" | cut -c5-6 | tr -d ' ')
 		hms=$(printf '%s' "$line" | cut -c8-15)
 		m=$(echo "JanFebMarAprMayJunJulAugSepOctNovDec" | awk -v m="$mon" '{ i = index($0, m); print (i ? (i + 2) / 3 : 0) }')
@@ -294,8 +309,11 @@ detect_radar() {
 			esac
 		done
 		ev_sql "$t" "$band" radar "" "" "$det"
-	done)
-	printf 'BEGIN;\n%s\n%s\nCOMMIT;\n' "$s" "$(state_sql radar_sig "$sig")" | sql
+	done < "$lf"
+	state_sql radar_sig "$sig"
+	echo 'COMMIT;'
+	} | sql
+	rm -f "$lf"
 }
 
 # ---- scanning ---------------------------------------------------------------
@@ -554,10 +572,6 @@ radios_json() {
 export_live() {
 	wd=$(web_dir); mkdir -p "$wd"
 	t=$(now); since=$((t - 86400)); evsince=$((t - 30 * 86400))
-	samples=$(sql "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(ts,obss,nocat,tx,inbss,idle,glitch,noise,ctl,width,center,nopkt,doze,txop,goodtx,badtx,badplcp,knoise)) AS a FROM (SELECT * FROM samples WHERE ts>=$since ORDER BY band, ts) GROUP BY band);")
-	events=$(sql "SELECT json_group_array(json_array(ts,band,tag,old,new,detail)) FROM (SELECT * FROM events WHERE ts>=$evsince ORDER BY ts DESC LIMIT 500);")
-	[ -n "$samples" ] || samples='{}'
-	[ -n "$events" ] || events='[]'
 	mkdir -p "$TMPD"; ownj=""
 	while IFS= read -r o; do ownj="$ownj${ownj:+,}\"$(js "$o")\""; done < "$(own_ssids_file)"
 	dbb=$(ls -l "$DB" 2>/dev/null | awk '{print $5}')
@@ -566,7 +580,11 @@ export_live() {
 			"$VERSION" "$t" "$SAMPLE_INTERVAL" "$SCAN_INTERVAL" "$RETAIN_DAYS"
 		printf '"data_dir":"%s","db_bytes":%s,"own_ssids":[%s],"extra_own":"%s",' \
 			"$(js "$DATA_DIR")" "$(jnum "$dbb")" "$ownj" "$(js "$EXTRA_OWN_SSIDS")"
-		printf '"radios":%s,"samples":%s,"events":%s}\n' "$(radios_json)" "$samples" "$events"
+		printf '"radios":%s,"samples":' "$(radios_json)"
+		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(ts,obss,nocat,tx,inbss,idle,glitch,noise,ctl,width,center,nopkt,doze,txop,goodtx,badtx,badplcp,knoise)) AS a FROM (SELECT * FROM samples WHERE ts>=$since ORDER BY band, ts) GROUP BY band);"
+		printf ',"events":'
+		json_out '[]' "SELECT json_group_array(json_array(ts,band,tag,old,new,detail)) FROM (SELECT * FROM events WHERE ts>=$evsince ORDER BY ts DESC LIMIT 500);"
+		printf '}\n'
 	} | write_atomic "$wd/live.htm"
 }
 
@@ -579,38 +597,41 @@ tz_off() {
 
 # Airtime averages per time bucket: [b, obss, nocat, yours, idle, max(obss+nocat), glitch, badplcp,
 # noise, nopkt, tx, inbss, goodtx, badtx]. b is the bucket start, aligned to local time.
-samples_agg() {   # days bucket-seconds
-	since=$(( $(now) - $1 * 86400 )); B=$2; off=$(tz_off)
-	sql "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(b, o, n, u, i, m, g, bp, nz, np, tx, ib, gt, bt)) AS a FROM (SELECT band, ((ts+$off)/$B)*$B-$off AS b, round(avg(obss),1) AS o, round(avg(nocat),1) AS n, round(avg(tx+inbss),1) AS u, round(avg(idle),1) AS i, max(obss+nocat) AS m, round(avg(glitch)) AS g, round(avg(badplcp)) AS bp, round(avg(noise),1) AS nz, round(avg(nopkt),1) AS np, round(avg(tx),1) AS tx, round(avg(inbss),1) AS ib, round(avg(goodtx),1) AS gt, round(avg(badtx),1) AS bt FROM samples WHERE ts>=$since GROUP BY band, b ORDER BY band, b) GROUP BY band);"
+samples_agg() {   # days bucket-seconds -> JSON on stdout ({} if the DB is busy)
+	asince=$(( $(now) - $1 * 86400 )); B=$2; aoff=$(tz_off)
+	json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(b, o, n, u, i, m, g, bp, nz, np, tx, ib, gt, bt)) AS a FROM (SELECT band, ((ts+$aoff)/$B)*$B-$aoff AS b, round(avg(obss),1) AS o, round(avg(nocat),1) AS n, round(avg(tx+inbss),1) AS u, round(avg(idle),1) AS i, max(obss+nocat) AS m, round(avg(glitch)) AS g, round(avg(badplcp)) AS bp, round(avg(noise),1) AS nz, round(avg(nopkt),1) AS np, round(avg(tx),1) AS tx, round(avg(inbss),1) AS ib, round(avg(goodtx),1) AS gt, round(avg(badtx),1) AS bt FROM samples WHERE ts>=$asince GROUP BY band, b ORDER BY band, b) GROUP BY band);"
 }
 
 export_week() {   # 7 days in 15-minute buckets
 	wd=$(web_dir); mkdir -p "$wd"; t=$(now)
-	agg=$(samples_agg 7 900); [ -n "$agg" ] || agg='{}'
-	printf '{"generated":%s,"bucket":900,"agg":%s}\n' "$t" "$agg" | write_atomic "$wd/week.htm"
+	{ printf '{"generated":%s,"bucket":900,"agg":' "$t"; samples_agg 7 900; printf '}\n'; } | write_atomic "$wd/week.htm"
 }
 
 # 30 days: airtime in 1-hour buckets, and channel scans in 6-hour buckets
 # ([b, ch, avg score, max networks, strongest, avg own, scans]) for the 30-day heatmap and channel load.
 export_month() {
 	wd=$(web_dir); mkdir -p "$wd"; t=$(now); since=$((t - 30 * 86400)); off=$(tz_off)
-	agg=$(samples_agg 30 3600); [ -n "$agg" ] || agg='{}'
-	sc=$(sql "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(b, ch, sc, ap, be, ow, n)) AS a FROM (SELECT band, ((ts+$off)/21600)*21600-$off AS b, ch, round(avg(score),1) AS sc, max(aps) AS ap, max(best) AS be, round(avg(own),1) AS ow, count(*) AS n FROM scans WHERE ts>=$since GROUP BY band, b, ch ORDER BY band, b, ch) GROUP BY band);")
-	[ -n "$sc" ] || sc='{}'
-	printf '{"generated":%s,"bucket":3600,"agg":%s,"scan_bucket":21600,"scans":%s}\n' "$t" "$agg" "$sc" | write_atomic "$wd/month.htm"
+	{
+		printf '{"generated":%s,"bucket":3600,"agg":' "$t"
+		samples_agg 30 3600
+		printf ',"scan_bucket":21600,"scans":'
+		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(b, ch, sc, ap, be, ow, n)) AS a FROM (SELECT band, ((ts+$off)/21600)*21600-$off AS b, ch, round(avg(score),1) AS sc, max(aps) AS ap, max(best) AS be, round(avg(own),1) AS ow, count(*) AS n FROM scans WHERE ts>=$since GROUP BY band, b, ch ORDER BY band, b, ch) GROUP BY band);"
+		printf '}\n'
+	} | write_atomic "$wd/month.htm"
 }
 
 export_scans() {
 	wd=$(web_dir); mkdir -p "$wd"
 	t=$(now); since=$((t - 7 * 86400))
-	scans=$(sql "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(ts,ch,score,aps,best,own)) AS a FROM (SELECT * FROM scans WHERE ts>=$since ORDER BY band, ts, ch) GROUP BY band);")
-	aps=$(sql "SELECT json_group_object(band, json(a)) FROM (SELECT x.band, json_group_array(json_object('ssid',x.ssid,'bssid',x.bssid,'rssi',x.rssi,'ctl',x.ctl,'center',x.center,'width',x.width,'util',x.util,'own',x.own,'phy',x.phy,'sec',x.sec,'snr',x.snr)) AS a FROM (SELECT p.* FROM aps p JOIN (SELECT band, max(ts) AS mt FROM aps GROUP BY band) l ON p.band=l.band AND p.ts=l.mt ORDER BY p.band, p.rssi DESC) x GROUP BY x.band);")
-	last=$(sql "SELECT json_group_object(band, mt) FROM (SELECT band, max(ts) AS mt FROM scans GROUP BY band);")
-	[ -n "$scans" ] || scans='{}'
-	[ -n "$aps" ] || aps='{}'
-	[ -n "$last" ] || last='{}'
-	printf '{"generated":%s,"scan_interval":%s,"last_scan":%s,"scans":%s,"aps":%s}\n' \
-		"$t" "$SCAN_INTERVAL" "$last" "$scans" "$aps" | write_atomic "$wd/scans.htm"
+	{
+		printf '{"generated":%s,"scan_interval":%s,"last_scan":' "$t" "$SCAN_INTERVAL"
+		json_out '{}' "SELECT json_group_object(band, mt) FROM (SELECT band, max(ts) AS mt FROM scans GROUP BY band);"
+		printf ',"scans":'
+		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(ts,ch,score,aps,best,own)) AS a FROM (SELECT * FROM scans WHERE ts>=$since ORDER BY band, ts, ch) GROUP BY band);"
+		printf ',"aps":'
+		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT x.band, json_group_array(json_object('ssid',x.ssid,'bssid',x.bssid,'rssi',x.rssi,'ctl',x.ctl,'center',x.center,'width',x.width,'util',x.util,'own',x.own,'phy',x.phy,'sec',x.sec,'snr',x.snr)) AS a FROM (SELECT p.* FROM aps p JOIN (SELECT band, max(ts) AS mt FROM aps GROUP BY band) l ON p.band=l.band AND p.ts=l.mt ORDER BY p.band, p.rssi DESC) x GROUP BY x.band);"
+		printf '}\n'
+	} | write_atomic "$wd/scans.htm"
 }
 
 export_all() { export_live; export_week; export_month; export_scans; }

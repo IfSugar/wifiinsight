@@ -2,6 +2,12 @@
 
 What changed in each release of WiFi Insight. The release workflow copies a version's section into its GitHub release notes, so write for people running the addon.
 
+## 1.0.9
+
+- **Fixed: charts went empty after about 9 hours of history.** The Insight and Troubleshooting charts and the tiles showed "No samples in this range yet", and `update` printed `[: Argument list too long`. On Merlin, the shell can hand at most 128 KB to some of the commands the script uses, and a day of samples is about 350 KB, so the data was dropped from the file the page reads. The script now writes the data files without going through that limit. Your history was never lost: once you update, the charts fill straight away.
+- Fixed the same limit for the Spectrum heatmap, which would have gone empty after about three days of scans, and for radar events in a very long syslog, which were no longer picked up.
+- Releases are now tested with a full day of samples, a week of scans and a long radar log, on a shell set up like Merlin's.
+
 ## 1.0.8
 
 - The addon no longer keeps `user1.asp` free. It takes the first free addon page slot, skips slots other addons already use, and keeps its slot across reboots and updates. The `RESERVED_PAGES` setting is gone; an old line for it in your config is ignored.
