@@ -8,7 +8,7 @@
 <link rel="shortcut icon" href="images/favicon.png"/>
 <link rel="icon" href="images/favicon.png"/>
 <title>WiFi Insight</title>
-<!-- wifiinsight-version: 1.0.3 (must match VERSION in wifiinsight.sh) -->
+<!-- wifiinsight-version: 1.0.4 (must match VERSION in wifiinsight.sh) -->
 <link rel="stylesheet" type="text/css" href="index_style.css"/>
 <link rel="stylesheet" type="text/css" href="form_style.css"/>
 <script type="text/javascript" src="/js/jquery.js"></script>
@@ -114,6 +114,8 @@
 #wi select, #wi input[type=text] { background: #1f282b; border: 1px solid var(--axis); color: var(--ink); font: inherit; padding: 6px 8px; border-radius: 6px; }
 #wi input[type=text] { width: 100%; max-width: 380px; }
 #wi .saved { color: #7fd1ad; margin-left: 10px; display: none; }
+#wi .scannote { color: var(--muted); font-size: 12px; }
+#wi .scannote.bad { color: #f2b8a2; }
 </style>
 <script type="text/javascript">
 var custom_settings = <% get_custom_settings(); %>;
@@ -806,19 +808,38 @@ function setView(v) { WI.view = v; store('view', v); try { history.replaceState(
 function setBand(b) { WI.band = b; store('band', b); WI.allEvents = false; WI.mapHover = null; render(); }
 function setRange(r) { WI.range = r; store('range', r); if (r === '7d' && !WI.week) loadAll({ week: 1 }); else render(); }
 function scanNow() {
-	var btn = $('wiScanBtn');
-	btn.disabled = true; btn.textContent = 'Scanning…';
-	var before = (WI.scans && WI.scans.last_scan && WI.scans.last_scan[WI.band]) || 0, tries = 0;
-	document.formScriptActions.action_script.value = 'start_wifiinsightscan';
-	document.formScriptActions.submit();
-	var done = function () { btn.disabled = false; btn.textContent = 'Scan now'; };
-	var poll = setInterval(function () {
-		tries++;
-		getJSON('scans.htm').then(function (d) {
-			var t = (d.last_scan && d.last_scan[WI.band]) || 0;
-			if (t > before || tries > 20) { clearInterval(poll); WI.scans = d; done(); render(); }
-		}).catch(function () { if (tries > 20) { clearInterval(poll); done(); } });
-	}, 3000);
+	/* The router writes scanstate.htm: {state: running|done|error, seq, bands: {2g: ok|busy|empty|off}}.
+	   seq goes up by one per scan, so we can tell our scan from an earlier one. */
+	var btn = $('wiScanBtn'), note = $('wiScanNote'), t0 = Date.now(), s0 = null, poll = null;
+	var say = function (msg, bad) { note.textContent = msg || ''; note.className = 'scannote' + (bad ? ' bad' : ''); };
+	var finish = function (msg, bad) {
+		if (poll) clearInterval(poll);
+		btn.disabled = false; btn.textContent = 'Scan now'; say(msg, bad);
+		if (msg && !bad) setTimeout(function () { if (note.textContent === msg) say(''); }, 8000);
+	};
+	var problems = function (bands) {
+		var why = { busy: 'radio was busy', empty: 'no networks heard', off: 'radio is off' }, out = [];
+		Object.keys(bands || {}).forEach(function (b) { if (bands[b] !== 'ok') out.push(BAND_NAME[b] + ': ' + (why[bands[b]] || bands[b])); });
+		return out.length ? out.join(', ') + ' (kept the previous scan)' : '';
+	};
+	btn.disabled = true; btn.textContent = 'Scanning…'; say('About 15 seconds');
+	getJSON('scanstate.htm').then(function (s) { s0 = s; }, function () { s0 = { seq: -1, state: 'none' }; }).then(function () {
+		document.formScriptActions.action_script.value = 'start_wifiinsightscan';
+		document.formScriptActions.submit();
+		poll = setInterval(function () {
+			var waited = Date.now() - t0;
+			getJSON('scanstate.htm').then(function (s) {
+				var ours = s.seq !== s0.seq || s0.state === 'running';   // a scan that was already running counts too
+				if (!ours || (s.state !== 'running' && s.seq === s0.seq && s0.state !== 'running')) {
+					if (waited > 15000) finish('The router didn\'t start the scan. Check that WiFi Insight is installed (wifiinsight.sh status).', true);
+					return;
+				}
+				if (s.state === 'running') { if (waited > 90000) finish('The scan is taking longer than expected. Results will appear when it finishes.', true); return; }
+				if (s.state === 'error') { finish(s.msg || 'The scan failed.', true); return; }
+				loadAll({ scans: 1 }).then(function () { var p = problems(s.bands); finish(p || 'Scan complete', !!p); });
+			}, function () { if (waited > 15000) finish('The router didn\'t start the scan.', true); });
+		}, 2000);
+	});
 }
 function boot() {
 	var hash = (location.hash || '').replace('#', '');
@@ -897,7 +918,7 @@ window.WiFiInsight = {
 <div id="TopBanner"></div>
 <div id="Loading" class="popup_bg"></div>
 <iframe name="hidden_frame" id="hidden_frame" src="" width="0" height="0" frameborder="0"></iframe>
-<form method="post" name="form" action="start_apply.asp" target="hidden_frame">
+<form method="post" name="form" action="/start_apply.htm" target="hidden_frame">
 <input type="hidden" name="current_page" value=""/>
 <input type="hidden" name="next_page" value=""/>
 <input type="hidden" name="group_id" value=""/>
@@ -936,7 +957,8 @@ window.WiFiInsight = {
 		<div class="seg" id="wiBands"></div>
 		<div class="seg" id="wiRanges"></div>
 		<div class="grow"></div>
-		<button type="button" class="btn" id="wiScanBtn" onclick="WiFiInsight.scanNow()" title="Scans every channel now. Wi-Fi may pause for about a second.">Scan now</button>
+		<span class="scannote" id="wiScanNote"></span>
+		<button type="button" class="btn" id="wiScanBtn" onclick="WiFiInsight.scanNow()" title="Scans every channel on both radios now (about 15 seconds). Wi-Fi may pause for about a second on each radio.">Scan now</button>
 	</div>
 
 	<!-- ============ INSIGHT ============ -->
@@ -1092,7 +1114,7 @@ window.WiFiInsight = {
 </tr>
 </table>
 </form>
-<form method="post" name="formScriptActions" action="/start_apply.asp" target="hidden_frame">
+<form method="post" name="formScriptActions" action="/start_apply.htm" target="hidden_frame">
 <input type="hidden" name="productid" value="<% nvram_get("productid"); %>"/>
 <input type="hidden" name="current_page" value=""/>
 <input type="hidden" name="next_page" value=""/>

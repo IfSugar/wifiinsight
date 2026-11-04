@@ -13,7 +13,7 @@
 #              -o /tmp/wifiinsight.sh && sh /tmp/wifiinsight.sh install
 ###############################################################################
 
-VERSION="1.0.3"
+VERSION="1.0.4"
 NAME="wifiinsight"
 TITLE="WiFi Insight"
 
@@ -452,8 +452,23 @@ parse_scan() {   # ts band "channels" ownfile
 	}'
 }
 
+# The web page follows a scan through scanstate.htm: state running|done|error, a sequence number
+# that goes up by one per scan, and each radio's result (ok, busy, empty, off).
+scan_state() {   # state [bands-json] [message]
+	wd=$(web_dir); mkdir -p "$wd"
+	printf '{"state":"%s","seq":%s,"ts":%s,"bands":{%s},"msg":"%s"}\n' "$1" "${SCAN_SEQ:-0}" "$(now)" "$2" "$(js "$3")" \
+		| write_atomic "$wd/scanstate.htm"
+}
+scan_next_seq() {
+	mkdir -p "$TMPD"
+	SCAN_SEQ=$(( $(cat "$TMPD/scan_seq" 2>/dev/null || echo 0) + 1 )); echo "$SCAN_SEQ" > "$TMPD/scan_seq"
+}
+
 scan() {
-	ready || { say "Not ready (NTP not synced or USB storage missing)."; return 1; }
+	if ! ready; then
+		scan_next_seq; scan_state error "" "Not ready: the clock isn't synced or the USB drive isn't mounted."
+		say "Not ready (NTP not synced or USB storage missing)."; return 1
+	fi
 	lowprio
 	mkdir -p "$TMPD"
 	exec 7>"$TMPD/scan.lock"
@@ -461,24 +476,39 @@ scan() {
 	[ "$1" = "--delay" ] && sleep 8
 	trap 'rm -f "$SCAN_FLAG"' EXIT; trap 'rm -f "$SCAN_FLAG"; exit 1' INT TERM HUP
 	touch "$SCAN_FLAG"
-	ownf=$(own_ssids_file)
+	scan_next_seq; scan_state running
+	ownf=$(own_ssids_file); bands=""
 	for r in $(radios); do
 		ifc=$(nvram get wl${r}_ifname)
-		[ "$(wl -i "$ifc" isup 2>/dev/null)" = "1" ] || continue
 		hex=$(wl -i "$ifc" chanspec 2>/dev/null | sed -n 's/.*(\(0x[0-9a-fA-F]*\)).*/\1/p')
 		[ -n "$hex" ] || continue
-		band=$(band_of_hex "$hex")
-		wl -i "$ifc" scan >/dev/null 2>&1 || continue
-		sleep 6
-		res="$TMPD/scan_$band.txt"
-		wl -i "$ifc" scanresults > "$res" 2>/dev/null
-		if ! grep -q '^BSSID' "$res"; then sleep 3; wl -i "$ifc" scanresults > "$res" 2>/dev/null; fi
-		grep -q '^BSSID' "$res" || continue
-		ts=$(now)
-		parse_scan "$ts" "$band" "$(radio_channels "$ifc" "$band")" "$ownf" < "$res" | sql
+		band=$(band_of_hex "$hex"); result=ok
+		if [ "$(wl -i "$ifc" isup 2>/dev/null)" != "1" ]; then
+			result=off
+		else
+			# the radio refuses a scan while it's already scanning (Smart Connect, AiMesh): retry briefly
+			started=0
+			for try in 1 2 3; do wl -i "$ifc" scan >/dev/null 2>&1 && { started=1; break; }; sleep 2; done
+			if [ $started -eq 0 ]; then
+				result=busy
+			else
+				sleep 6
+				res="$TMPD/scan_$band.txt"
+				wl -i "$ifc" scanresults > "$res" 2>/dev/null
+				if ! grep -q '^BSSID' "$res"; then sleep 3; wl -i "$ifc" scanresults > "$res" 2>/dev/null; fi
+				if grep -q '^BSSID' "$res"; then
+					parse_scan "$(now)" "$band" "$(radio_channels "$ifc" "$band")" "$ownf" < "$res" | sql
+				else
+					result=empty
+				fi
+			fi
+		fi
+		bands="$bands${bands:+,}\"$band\":\"$result\""
+		log "scan $band ($ifc): $result"
 	done
 	rm -f "$SCAN_FLAG"
 	export_scans
+	scan_state done "$bands"
 	flock -u 7
 	log "scan complete"
 }
