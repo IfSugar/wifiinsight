@@ -12,7 +12,7 @@ It adds a **Wireless → WiFi Insight** tab with five pages:
 | **Troubleshooting** | Airtime breakdown (your TX/RX, others, non-Wi-Fi, unclassified, idle), glitch counters, transmit success vs failure, noise floor and the raw `chanim_stats` counters. |
 | **Settings** | Sample interval, neighbour scan interval, history length, and extra SSIDs to treat as yours. |
 
-Time ranges: 10 minutes, 1 hour, 12 hours, 1 day, 7 days.
+Time ranges: 10 minutes, 1 hour, 12 hours, 1 day, 7 days and 30 days. Short ranges show every sample; longer ones show averages (5 minutes for 12 hours, 10 minutes for a day, an hour for 7 days, 4 hours for 30 days), so trends stay readable.
 
 ## Screenshots
 
@@ -21,7 +21,7 @@ Time ranges: 10 minutes, 1 hour, 12 hours, 1 day, 7 days.
 <table>
 <tr>
 <td width="50%"><a href="docs/insight.webp"><img src="docs/insight.webp" alt="Insight page: live tiles, in-channel interference over a day with event markers, spectrum heatmap and channel events"></a><br><b>Insight</b>: interference on your channel, the spectrum around it, and why the channel changed</td>
-<td width="50%"><a href="docs/insight-7d.webp"><img src="docs/insight-7d.webp" alt="Insight page over 7 days on 2.4 GHz"></a><br><b>Insight, 7 days</b>: a week of history with reboots, radar and manual changes</td>
+<td width="50%"><a href="docs/insight-30d.webp"><img src="docs/insight-30d.webp" alt="Insight page over 30 days on 2.4 GHz: 4-hour averages and a heatmap with one row per day"></a><br><b>Insight, 30 days</b>: a month at a glance, in 4-hour averages with a daily heatmap</td>
 </tr>
 <tr>
 <td><a href="docs/survey.webp"><img src="docs/survey.webp" alt="Site Survey: signal map of neighbouring networks by channel, and a sortable network list"></a><br><b>Site Survey</b>: who's around you and on which channels, with your own networks and mesh node marked</td>
@@ -108,7 +108,7 @@ It only ever removes a page whose `.title` file says `WiFi Insight`, so other ad
 |---|---|
 | `/jffs/addons/wifiinsight/` | script, page, config, local Chart.js |
 | `/opt/var/lib/wifiinsight/wifiinsight.db` | history (SQLite) |
-| `/tmp/var/wwwext/wifiinsight/` | JSON files the page reads (`live.htm`, `scans.htm`, `week.htm`), rebuilt from the database |
+| `/tmp/var/wwwext/wifiinsight/` | JSON files the page reads (`live.htm`, `scans.htm`, `week.htm`, `month.htm`, `scanstate.htm`), rebuilt from the database |
 
 Cron jobs: `wifiinsight_collect` (every minute), `wifiinsight_scan` (scan interval) and `wifiinsight_prune` (04:23 daily, before a 05:00 scheduled reboot).
 
@@ -148,7 +148,7 @@ Storage is about 21 MB for 30 days of 30-second samples on two radios.
 - **JFFS (flash):** about 350 KB of addon files, written at install and when you save settings, never on a schedule. One tagged line is added to each of `/jffs/scripts/services-start` and `service-event`.
 - **Settings:** the only router setting it may change is *JFFS custom scripts and configs*, switched on if it's off.
 - **Wi-Fi:** it only reads the driver's counters, except for the neighbour scan. No wireless setting is ever changed.
-- **RAM only (gone after a reboot, recreated at boot):** the web page, the menu entry, the cron jobs and the JSON data files (about 0.8 MB). The menu is edited on a copy and swapped in only if the result is exactly the one expected line.
+- **RAM only (gone after a reboot, recreated at boot):** the web page, the menu entry, the cron jobs and the JSON data files (about 1 MB). The menu is edited on a copy and swapped in only if the result is exactly the one expected line.
 - **Load:** the per-minute job takes about 0.5 s of CPU on a 2.1 GHz x86 core with 30 days of history (expect a few times that on the router's ARM cores), at the lowest CPU priority (`nice 19`). Each scan takes the radio off-channel briefly; see *How the numbers are made*.
 
 To remove everything: `wifiinsight.sh uninstall`. If the web UI ever looks wrong, a reboot clears all RAM-side changes.

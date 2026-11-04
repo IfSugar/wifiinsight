@@ -4,6 +4,11 @@ What changed in each release of WiFi Insight. The release workflow copies a vers
 
 ## 1.0.7
 
+- **Longer ranges are readable.** 12H, 1D and 7D used to plot every 30-second sample, thousands of points, which looked like noise. They now show averages: 5 minutes for 12H, 10 minutes for 1D and an hour for 7D, about 150 points per chart. Tooltips say which average you're looking at. 10M and 1H still show every sample.
+- **New 30D range**, in 4-hour averages. The router keeps an hourly summary of the last 30 days for it, refreshed once an hour.
+- **Spectrum heatmap on 7D and 30D:** rows are grouped into 3-hour (7D) or daily (30D) averages instead of one hairline row per scan, and channel load averages use the same data.
+- On 7D and 30D, the charts leave out the daily scheduled-reboot markers so the lines stay readable. They're still listed under Channel events.
+- Averages follow your local time, so daily rows start at midnight and hourly points sit on the hour.
 - Settings: each dropdown is sized to its text again (1.0.6 made them all one width). The even padding and the new arrow stay.
 - Troubleshooting → Airtime breakdown: click any name in the legend to show or hide it, like the other charts. Hide everything but *Your TX* to see just your transmit time. The chart rescales to what's shown.
 - Airtime breakdown adds up to exactly 100%. The radio measures and rounds each share separately, so they used to total roughly 97–105% and the top edge wobbled. Each sample is now scaled to 100%, and the raw counters table below is unchanged.

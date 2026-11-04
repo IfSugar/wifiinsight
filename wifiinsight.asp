@@ -136,7 +136,22 @@ var WI = {
 	showMesh: false, showDfs: true, showActive: true, allEvents: false,
 	sortKey: 'rssi', sortDir: -1
 };
-var RANGES = { '10m': 600, '1h': 3600, '12h': 43200, '1d': 86400, '7d': 604800 };
+/* How each range is drawn. Short ranges plot every sample; longer ones plot time-bucket averages
+   (about 150 points per chart) so trends stay readable. heat: rows of the spectrum heatmap are
+   grouped into buckets of this size (0 = one row per scan). Buckets follow local time. */
+var RANGE_CFG = {
+	'10m': { secs: 600,     src: 'live',  bucket: 0,     heat: 0,     btn: '10M' },
+	'1h':  { secs: 3600,    src: 'live',  bucket: 0,     heat: 0,     btn: '1H' },
+	'12h': { secs: 43200,   src: 'live',  bucket: 300,   heat: 0,     btn: '12H' },
+	'1d':  { secs: 86400,   src: 'live',  bucket: 600,   heat: 0,     btn: '1D' },
+	'7d':  { secs: 604800,  src: 'week',  bucket: 3600,  heat: 10800, btn: '7D' },
+	'30d': { secs: 2592000, src: 'month', bucket: 14400, heat: 86400, btn: '30D' }
+};
+var RANGES = {};
+Object.keys(RANGE_CFG).forEach(function (k) { RANGES[k] = RANGE_CFG[k].secs; });
+function bucketName(b) { return b >= 86400 ? 'daily' : b >= 3600 ? (b / 3600) + '-hour' : (b / 60) + '-min'; }
+/* Start of the local-time bucket holding ts (so 1-hour and 1-day buckets follow the clock). */
+function bucketOf(ts, b) { var off = -new Date(ts * 1000).getTimezoneOffset() * 60; return Math.floor((ts + off) / b) * b - off; }
 var BAND_NAME = { '2g': '2.4 GHz', '5g': '5 GHz', '6g': '6 GHz' };
 var TAGS = {
 	initial: 'Monitoring started', restart: 'Router restarted', scheduled: 'Scheduled reboot',
@@ -206,6 +221,7 @@ function loadAll(what) {
 	/* scans and week files can be missing for a minute after a reboot: keep what we have */
 	if (!what || what.scans) jobs.push(getJSON('scans.htm').then(function (d) { WI.scans = d; }, function () {}));
 	if (!what || what.week) jobs.push(getJSON('week.htm').then(function (d) { WI.week = d; }, function () {}));
+	if (what && what.month) jobs.push(getJSON('month.htm').then(function (d) { WI.month = d; }, function () {}));
 	return Promise.all(jobs).then(function () { $('wiWarn').style.display = 'none'; render(); })
 		.catch(function () {
 			var w = $('wiWarn');
@@ -215,30 +231,68 @@ function loadAll(what) {
 }
 
 /* ---------- time series helpers ---------- */
-function rangeInfo() { var to = nowTs(); return { from: to - RANGES[WI.range], to: to, multi: WI.range === '7d' }; }
-function tickFmt(multi) {
-	return function (v) { var d = new Date(v * 1000); return multi ? DAYS[d.getDay()] + ' ' + pad(d.getHours()) + 'h' : hm(v); };
+function rangeInfo() {
+	var cfg = RANGE_CFG[WI.range], to = nowTs();
+	return { from: to - cfg.secs, to: to, multi: cfg.secs > 86400, month: cfg.secs > 604800, cfg: cfg };
 }
-/* Build {x,y} arrays for the given fields over the selected range; inserts nulls across gaps. */
+function tickFmt(R) {
+	return function (v) {
+		var d = new Date(v * 1000);
+		if (R.month) return MONS[d.getMonth()] + ' ' + d.getDate();
+		return R.multi ? DAYS[d.getDay()] + ' ' + pad(d.getHours()) + 'h' : hm(v);
+	};
+}
+function timeLabel(ts) {   // heatmap row labels
+	var d = new Date(ts * 1000), R = rangeInfo();
+	if (R.month) return MONS[d.getMonth()] + ' ' + d.getDate();
+	return R.multi ? DAYS[d.getDay()] + ' ' + pad(d.getHours()) + 'h' : hm(ts);
+}
+/* Build {x,y} arrays for the given fields over the selected range. Long ranges are averaged into
+   time buckets (RANGE_CFG); nulls are inserted across gaps so lines break instead of bridging. */
 function series(fields) {
-	var R = rangeInfo(), out = {}, last = null, rows, map, step;
+	var R = rangeInfo(), cfg = R.cfg, out = {}, rows, map, step;
 	fields.forEach(function (f) { out[f] = []; });
-	if (R.multi) { rows = (WI.week && WI.week.agg && WI.week.agg[WI.band]) || []; map = FW; step = (WI.week && WI.week.bucket) || 900; }
-	else { rows = (WI.live && WI.live.samples && WI.live.samples[WI.band]) || []; map = FL; step = (WI.live && WI.live.sample_interval) || 30; }
-	var n = 0;
-	for (var i = 0; i < rows.length; i++) {
-		var r = rows[i];
-		if (r[0] < R.from) continue;
-		if (last !== null && r[0] - last > step * 4) fields.forEach(function (f) { out[f].push({ x: last + step, y: null }); });
-		fields.forEach(function (f) {
-			var v;
-			if (f === 'yours') v = R.multi ? r[FW.yours] : (r[FL.tx] || 0) + (r[FL.inbss] || 0);
-			else v = r[map[f]];
-			out[f].push({ x: r[0], y: v == null ? null : v });
-		});
-		last = r[0]; n++;
+	if (cfg.src === 'live') {
+		rows = (WI.live && WI.live.samples && WI.live.samples[WI.band]) || []; map = FL; step = (WI.live && WI.live.sample_interval) || 30;
+	} else {
+		var src = cfg.src === 'week' ? WI.week : WI.month;
+		rows = (src && src.agg && src.agg[WI.band]) || []; map = FW; step = (src && src.bucket) || 900;
 	}
-	out._n = n; out._R = R;
+	var val = function (r, f) {
+		if (f === 'yours') return map === FW ? r[FW.yours] : (r[FL.tx] == null ? null : (r[FL.tx] || 0) + (r[FL.inbss] || 0));
+		var i = map[f]; return i === undefined || r[i] == null ? null : r[i];
+	};
+	var B = cfg.bucket > step ? cfg.bucket : 0, pts = [];
+	if (!B) {
+		for (var i = 0; i < rows.length; i++) {
+			if (rows[i][0] < R.from) continue;
+			var p = { x: rows[i][0], v: {} };
+			fields.forEach(function (f) { p.v[f] = val(rows[i], f); });
+			pts.push(p);
+		}
+	} else {
+		var cur = null, sum = {}, cnt = {};
+		var flush = function () {
+			if (cur === null) return;
+			var p = { x: cur, v: {} };
+			fields.forEach(function (f) { p.v[f] = cnt[f] ? Math.round(sum[f] / cnt[f] * 10) / 10 : null; });
+			pts.push(p);
+		};
+		for (var j = 0; j < rows.length; j++) {
+			if (rows[j][0] < R.from - B) continue;
+			var b = bucketOf(rows[j][0], B);
+			if (b !== cur) { flush(); cur = b; sum = {}; cnt = {}; }
+			fields.forEach(function (f) { var v = val(rows[j], f); if (v != null) { sum[f] = (sum[f] || 0) + v; cnt[f] = (cnt[f] || 0) + 1; } });
+		}
+		flush();
+	}
+	var gap = (B || step) * (B ? 2.5 : 4), last = null;
+	pts.forEach(function (p) {
+		if (last !== null && p.x - last > gap) fields.forEach(function (f) { out[f].push({ x: last + (B || step), y: null }); });
+		fields.forEach(function (f) { out[f].push({ x: p.x, y: p.v[f] }); });
+		last = p.x;
+	});
+	out._n = pts.length; out._R = R; out._bucket = B;
 	return out;
 }
 function latestSample() {
@@ -295,7 +349,7 @@ function drawChart(key, boxId, type, datasets, o) {
 	if (o.yFmt) scales.y.ticks.callback = o.yFmt;
 	if (o.yStep) scales.y.ticks.stepSize = o.yStep;
 	if (o.stacked) { scales.y.stacked = true; scales.x.stacked = true; }
-	if (o.R) { scales.x.min = o.R.from; scales.x.max = o.R.to; scales.x.ticks.callback = tickFmt(o.R.multi); }
+	if (o.R) { scales.x.min = o.R.from; scales.x.max = o.R.to; scales.x.ticks.callback = tickFmt(o.R); }
 	var ch = new Chart(box.firstChild, {
 		type: type,
 		data: { labels: o.labels, datasets: datasets },
@@ -311,7 +365,7 @@ function drawChart(key, boxId, type, datasets, o) {
 					padding: 9, boxWidth: 10, boxHeight: 3,
 					filter: function (it) { return it.parsed.y != null; },
 					callbacks: {
-						title: o.ttTitle || function (items) { return items.length && o.R ? when(items[0].parsed.x) + (o.R.multi ? ' (15-min average)' : '') : (items[0] ? items[0].label : ''); },
+						title: o.ttTitle || function (items) { return items.length && o.R ? when(items[0].parsed.x) + (o.bucket ? ' · ' + bucketName(o.bucket) + ' average' : '') : (items[0] ? items[0].label : ''); },
 						label: o.ttLabel || function (it) { return ' ' + it.dataset.label + ': ' + it.parsed.y + (o.unit || ''); }
 					}
 				}
@@ -333,6 +387,10 @@ function legendHTML(key, items) {   // items: [label, color, toggleable, dashed]
 	}).join('');
 }
 function toggleSeries(key, label, on) { WI.hidden[key + ':' + label] = !on; renderView(); }
+function chartEvents() {
+	var long = RANGE_CFG[WI.range].secs > 86400;
+	return bandEvents().filter(function (e) { return !(long && e[2] === 'scheduled'); });
+}
 function bandEvents() { return ((WI.live && WI.live.events) || []).filter(function (e) { return e[1] === WI.band || e[1] === 'all'; }); }
 function pctMax(sets) {
 	var m = 0;
@@ -351,7 +409,7 @@ function renderInsight() {
 		{ label: 'Others Wi-Fi', data: s.obss, borderColor: C.others },
 		{ label: 'Non-Wi-Fi', data: s.nocat, borderColor: C.nonwifi },
 		{ label: 'Your network', data: s.yours, borderColor: C.yours }
-	], { R: s._R, yMin: 0, yMax: yMax, yStep: yMax > 50 ? 20 : 10, yFmt: pctFmt, unit: '%', events: bandEvents(), plugins: [eventMarkers],
+	], { R: s._R, yMin: 0, yMax: yMax, yStep: yMax > 50 ? 20 : 10, yFmt: pctFmt, unit: '%', events: chartEvents(), bucket: s._bucket, plugins: [eventMarkers],
 		empty: s._n ? null : 'No samples in this range yet. They arrive every ' + ((WI.live && WI.live.sample_interval) || 30) + ' seconds.' });
 	renderHeat();
 	renderEvents();
@@ -384,18 +442,37 @@ function rampColor(v) {
 	return RAMP[1 + Math.min(RAMP.length - 2, Math.round(t))];
 }
 /* scans grouped by timestamp, newest first, within the range (falls back to the latest scan) */
+/* Heatmap / channel-load rows for the range: one row per scan, or (7D, 30D) one row per time
+   bucket with each channel averaged over the scans in it. 30D reads the router's 6-hour summaries. */
 function scanRows() {
-	var all = (WI.scans && WI.scans.scans && WI.scans.scans[WI.band]) || [];
-	var from = nowTs() - RANGES[WI.range], byTs = {}, order = [];
+	var R = rangeInfo(), H = R.cfg.heat, agg = R.cfg.src === 'month';
+	var all = agg ? ((WI.month && WI.month.scans && WI.month.scans[WI.band]) || [])
+		: ((WI.scans && WI.scans.scans && WI.scans.scans[WI.band]) || []);
+	var byT = {}, order = [];
 	for (var i = 0; i < all.length; i++) {
-		var r = all[i];   // ts,ch,score,aps,best,own
-		if (!byTs[r[0]]) { byTs[r[0]] = {}; order.push(r[0]); }
-		byTs[r[0]][r[1]] = r;
+		var r = all[i], n = agg ? (r[6] || 1) : 1;   // ts,ch,score,aps,best,own[,scans]
+		var t = H ? bucketOf(r[0], H) : r[0];
+		if (!byT[t]) { byT[t] = { cells: {}, src: {} }; order.push(t); }
+		var c = byT[t].cells[r[1]] || (byT[t].cells[r[1]] = [t, r[1], 0, 0, -127, 0, 0]);
+		c[2] += r[2] * n; c[5] += r[5] * n; c[6] += n;
+		if (r[3] > c[3]) c[3] = r[3];
+		if (r[4] > c[4]) c[4] = r[4];
+		byT[t].src[r[0]] = n;   // scans behind this row
 	}
+	order.forEach(function (t) {
+		Object.keys(byT[t].cells).forEach(function (k) {
+			var c = byT[t].cells[k]; c[2] = Math.round(c[2] / c[6] * 10) / 10; c[5] = Math.round(c[5] / c[6] * 10) / 10;
+		});
+	});
 	order.sort(function (a, b) { return b - a; });
-	var inRange = order.filter(function (t) { return t >= from; }), latestOnly = false;
-	if (!inRange.length && order.length) { inRange = [order[0]]; latestOnly = true; }
-	return { rows: inRange.map(function (t) { return { ts: t, cells: byTs[t] }; }), latestOnly: latestOnly };
+	var inRange = order.filter(function (t) { return t + (H || 0) > R.from; }), latestOnly = false;
+	if (!inRange.length && order.length && !agg) { inRange = [order[0]]; latestOnly = true; }
+	var scans = 0;
+	var rows = inRange.map(function (t) {
+		var n = 0; Object.keys(byT[t].src).forEach(function (k) { n += byT[t].src[k]; }); scans += n;
+		return { ts: t, cells: byT[t].cells, n: n };
+	});
+	return { rows: rows, latestOnly: latestOnly, scans: scans, bucket: H };
 }
 function noScansMsg() {
 	return (WI.scans && WI.scans.scan_interval === 0) ? 'Neighbour scans are switched off. Turn them on in Settings, or press <b>Scan now</b>.' : 'No scans yet. Press <b>Scan now</b> or wait for the next scheduled scan.';
@@ -414,7 +491,7 @@ function renderHeat() {
 		WI.heatGeo = null; return;
 	}
 	cv.style.display = 'block'; $('wiHeatEmpty').style.display = 'none';
-	var padL = WI.range === '7d' ? 56 : 46, padB = 34, padT = 4, padR = 4;
+	var padL = rangeInfo().multi ? 56 : 46, padB = 34, padT = 4, padR = 4;
 	var rowH = Math.min(20, 220 / rows.length);
 	if (rowH >= 3) rowH = Math.floor(rowH);
 	var gridH = rowH * rows.length;
@@ -432,11 +509,13 @@ function renderHeat() {
 	for (var k = 0; k < rows.length; k += lblEvery) {
 		if (padT + k * rowH + rowH / 2 > padT + gridH - 6 && k > 0) break;
 		var dt = new Date(rows[k].ts * 1000);
-		ctx.fillText(WI.range === '7d' ? DAYS[dt.getDay()] + ' ' + pad(dt.getHours()) + 'h' : hm(rows[k].ts), padL - 6, padT + k * rowH + rowH / 2);
+		ctx.fillText(timeLabel(rows[k].ts), padL - 6, padT + k * rowH + rowH / 2);
 	}
 	if (WI.showActive && r) activeBox(ctx, ch, r, padL, colW, padT, gridH);
-	WI.heatGeo = { padL: padL, padT: padT, colW: colW, rowH: rowH, rows: rows, chans: ch };
-	$('wiHeatSub').textContent = (info.latestOnly ? 'Latest scan, ' : rows.length + ' scan' + (rows.length > 1 ? 's' : '') + ' in range, newest ') + ago(nowTs() - rows[0].ts) + '. Estimated from nearby networks’ signal strength and the load they report.';
+	WI.heatGeo = { padL: padL, padT: padT, colW: colW, rowH: rowH, rows: rows, chans: ch, bucket: info.bucket };
+	$('wiHeatSub').textContent = (info.latestOnly ? 'Latest scan, ' + ago(nowTs() - rows[0].ts)
+		: info.scans + ' scan' + (info.scans > 1 ? 's' : '') + ' in range' + (info.bucket ? ', shown as ' + bucketName(info.bucket) + ' averages' : ', newest ' + ago(nowTs() - rows[0].ts)))
+		+ '. Estimated from nearby networks’ signal strength and the load they report.';
 }
 function axisChannels(ctx, ch, padL, colW, y0) {
 	ctx.fillStyle = C.tick; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
@@ -480,10 +559,11 @@ function heatHover(ev) {
 	var j = Math.floor((x - g.padL) / g.colW), i = Math.floor((y - g.padT) / g.rowH);
 	if (j < 0 || j >= g.chans.length || i < 0 || i >= g.rows.length) { tip.style.display = 'none'; return; }
 	var ch = g.chans[j], row = g.rows[i], c = row.cells[ch];
-	var h = '<b>Channel ' + ch + '</b>' + (isDfs(ch) ? ' <span class="m">DFS</span>' : '') + '<br><span class="m">' + when(row.ts) + '</span><br>';
+	var h = '<b>Channel ' + ch + '</b>' + (isDfs(ch) ? ' <span class="m">DFS</span>' : '') + '<br><span class="m">'
+		+ (g.bucket ? timeLabel(row.ts) + ', ' + bucketName(g.bucket) + ' average of ' + row.n + ' scan' + (row.n > 1 ? 's' : '') : when(row.ts)) + '</span><br>';
 	if (c) {
 		h += 'Interference estimate: <b>' + Math.round(c[2]) + '%</b><br>';
-		h += c[3] ? (c[3] + ' network' + (c[3] > 1 ? 's' : '') + ' overlapping, strongest ' + c[4] + ' dBm') : 'No other networks heard';
+		h += c[3] ? ((g.bucket ? 'Up to ' : '') + c[3] + ' network' + (c[3] > 1 ? 's' : '') + ' overlapping, strongest ' + c[4] + ' dBm') : 'No other networks heard';
 		if (c[5] > 0) h += '<br><span class="m">Your mesh adds ' + Math.round(c[5]) + '%</span>';
 	} else h += 'Not scanned';
 	tip.innerHTML = h; placeTip(tip, ev.target.parentNode, x, y);
@@ -632,10 +712,14 @@ function channelLoads() {   // average and peak estimated load per channel acros
 	var info = scanRows(), ch = chans(), avg = {}, peak = {};
 	ch.forEach(function (c) {
 		var sum = 0, n = 0, pk = 0;
-		info.rows.forEach(function (r) { var x = r.cells[c]; if (!x) return; var v = x[2] + (WI.showMesh ? x[5] : 0); v = Math.min(100, v); sum += v; n++; if (v > pk) pk = v; });
+		info.rows.forEach(function (r) {
+			var x = r.cells[c]; if (!x) return;
+			var v = Math.min(100, x[2] + (WI.showMesh ? x[5] : 0)), w = x[6] || 1;
+			sum += v * w; n += w; if (v > pk) pk = v;
+		});
 		avg[c] = n ? Math.round(sum / n * 10) / 10 : null; peak[c] = n ? Math.round(pk) : null;
 	});
-	return { avg: avg, peak: peak, n: info.rows.length, latestOnly: info.latestOnly };
+	return { avg: avg, peak: peak, n: info.scans, latestOnly: info.latestOnly };
 }
 function renderChannels() {
 	var ch = chans(), list = aps(), r = radio(), cur = r ? spanOf(r.center, r.width) : [];
@@ -728,9 +812,12 @@ function renderTrouble() {
 		var doze = s.doze[i] && s.doze[i].y ? s.doze[i].y : 0;
 		if (raw[5] != null) raw[5] += doze;
 		var known = raw.filter(function (v) { return v != null; }), sum = known.reduce(function (t, v) { return t + v; }, 0);
-		var vis = 0;
-		raw.forEach(function (v, k) {
-			var y = (known.length && sum > 0 && v != null) ? Math.round(v * 1000 / sum) / 10 : null;
+		var vis = 0, ys = raw.map(function (v) { return (known.length && sum > 0 && v != null) ? Math.round(v * 1000 / sum) / 10 : null; });
+		if (known.length === raw.length) {   // idle takes the rounding remainder, so the total is exactly 100.0
+			var rest = 100; for (var k5 = 0; k5 < 5; k5++) rest -= ys[k5];
+			ys[5] = Math.max(0, Math.round(rest * 10) / 10);
+		}
+		ys.forEach(function (y, k) {
 			air[k].push({ x: s.tx[i].x, y: y });
 			if (y != null && !WI.hidden['air:' + AIR[k][0]]) vis += y;
 		});
@@ -743,24 +830,24 @@ function renderTrouble() {
 		return { label: a[0], data: air[k], borderColor: a[2], backgroundColor: a[2] + 'cc', fill: 'stack', borderWidth: 1 };
 	}), { R: s._R, stacked: true, yMin: 0, yMax: yMax, yStep: yMax === 100 ? 20 : undefined, yFmt: function (v) { return v + '%'; },
 		ttLabel: function (it) { return ' ' + it.dataset.label + ': ' + it.parsed.y.toFixed(1) + '%'; },
-		events: bandEvents(), plugins: [eventMarkers], empty: empty });
+		events: chartEvents(), bucket: s._bucket, plugins: [eventMarkers], empty: empty });
 
 	$('wiGlLegend').innerHTML = legendHTML('gl', [['Rx glitches', C.unclass, 1], ['Bad PLCP', C.plcp, 1]]);
 	drawChart('gl', 'wiGlChart', 'line', [
 		{ label: 'Rx glitches', data: s.glitch, borderColor: C.unclass },
 		{ label: 'Bad PLCP', data: s.badplcp, borderColor: C.plcp }
-	], { R: s._R, yMin: 0, unit: '', empty: empty });
+	], { R: s._R, bucket: s._bucket, yMin: 0, unit: '', empty: empty });
 
 	$('wiTxLegend').innerHTML = legendHTML('txq', [['Successful', C.yours, 1], ['Failed', C.fail, 1, 1]]);
 	drawChart('txq', 'wiTxChart', 'line', [
 		{ label: 'Successful', data: s.goodtx, borderColor: C.yours },
 		{ label: 'Failed', data: s.badtx, borderColor: C.fail, borderDash: [5, 3] }
-	], { R: s._R, yMin: 0, yFmt: pctFmt, unit: '%', empty: empty });
+	], { R: s._R, bucket: s._bucket, yMin: 0, yFmt: pctFmt, unit: '%', empty: empty });
 
 	var nz = s.noise.filter(function (p) { return p.y != null; }).map(function (p) { return p.y; });
 	var nMin = nz.length ? Math.floor((Math.min.apply(null, nz) - 3) / 5) * 5 : -100, nMax = nz.length ? Math.ceil((Math.max.apply(null, nz) + 3) / 5) * 5 : -60;
 	drawChart('nz', 'wiNzChart', 'line', [{ label: 'Noise floor', data: s.noise, borderColor: C.ink2 }],
-		{ R: s._R, yMin: nMin, yMax: nMax, yFmt: function (v) { return v + ' dBm'; }, unit: ' dBm', empty: empty });
+		{ R: s._R, bucket: s._bucket, yMin: nMin, yMax: nMax, yFmt: function (v) { return v + ' dBm'; }, unit: ' dBm', empty: empty });
 	renderCounters();
 }
 function renderCounters() {
@@ -813,7 +900,7 @@ function render() {
 	if (bands.length && bands.indexOf(WI.band) < 0) WI.band = bands[0];
 	$('wiTabs').innerHTML = VIEWS.map(function (v) { return '<button type="button" class="' + (v[0] === WI.view ? 'on' : '') + '" onclick="WiFiInsight.setView(\'' + v[0] + '\')">' + v[1] + '</button>'; }).join('');
 	$('wiBands').innerHTML = bands.map(function (b) { return '<button type="button" class="' + (b === WI.band ? 'on' : '') + '" onclick="WiFiInsight.setBand(\'' + b + '\')">' + BAND_NAME[b] + '</button>'; }).join('');
-	$('wiRanges').innerHTML = [['10m', '10M'], ['1h', '1H'], ['12h', '12H'], ['1d', '1D'], ['7d', '7D']].map(function (x) { return '<button type="button" class="' + (x[0] === WI.range ? 'on' : '') + '" onclick="WiFiInsight.setRange(\'' + x[0] + '\')">' + x[1] + '</button>'; }).join('');
+	$('wiRanges').innerHTML = Object.keys(RANGE_CFG).map(function (k) { return [k, RANGE_CFG[k].btn]; }).map(function (x) { return '<button type="button" class="' + (x[0] === WI.range ? 'on' : '') + '" onclick="WiFiInsight.setRange(\'' + x[0] + '\')">' + x[1] + '</button>'; }).join('');
 	var timed = WI.view === 'insight' || WI.view === 'trouble' || WI.view === 'channels';
 	$('wiRanges').style.display = timed ? '' : 'none';
 	$('wiBar').style.display = WI.view === 'settings' ? 'none' : '';
@@ -835,7 +922,13 @@ function renderView() {
 }
 function setView(v) { WI.view = v; store('view', v); try { history.replaceState(null, '', '#' + v); } catch (e) {} render(); }
 function setBand(b) { WI.band = b; store('band', b); WI.allEvents = false; WI.mapHover = null; render(); }
-function setRange(r) { WI.range = r; store('range', r); if (r === '7d' && !WI.week) loadAll({ week: 1 }); else render(); }
+function setRange(r) {
+	WI.range = r; store('range', r);
+	var src = RANGE_CFG[r].src;
+	if (src === 'week' && !WI.week) loadAll({ week: 1 });
+	else if (src === 'month' && !WI.month) loadAll({ month: 1 });
+	else render();
+}
 function scanNow() {
 	/* The router writes scanstate.htm: {state: running|done|error, seq, bands: {2g: ok|busy|empty|off}}.
 	   seq goes up by one per scan, so we can tell our scan from an earlier one. */
@@ -877,6 +970,7 @@ function boot() {
 	WI.band = store('band') || WI.band;
 	WI.range = store('range') || WI.range;
 	if (!RANGES[WI.range]) WI.range = '1h';
+	if (RANGE_CFG[WI.range].src === 'month') loadAll({ month: 1 });
 	WI.showMesh = store('mesh') === '1';
 	$('wiMesh').checked = WI.showMesh; $('wiMesh2').checked = WI.showMesh;
 	$('wiHeat').addEventListener('mousemove', heatHover);
@@ -888,7 +982,7 @@ function boot() {
 	render();
 	loadAll();
 	setInterval(function () { if (WI.view !== 'settings') loadAll({ live: 1 }); }, 60000);
-	setInterval(function () { loadAll({ scans: 1, week: WI.range === '7d' ? 1 : 0 }); }, 300000);
+	setInterval(function () { var src = RANGE_CFG[WI.range].src; loadAll({ scans: 1, week: src === 'week' ? 1 : 0, month: src === 'month' ? 1 : 0 }); }, 300000);
 }
 function setMesh(on) { WI.showMesh = on; store('mesh', on ? '1' : '0'); $('wiMesh').checked = on; $('wiMesh2').checked = on; renderView(); }
 function initial() {

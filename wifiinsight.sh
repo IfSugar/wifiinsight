@@ -571,12 +571,34 @@ export_live() {
 	} | write_atomic "$wd/live.htm"
 }
 
-export_week() {
-	wd=$(web_dir); mkdir -p "$wd"
-	t=$(now); since=$((t - 7 * 86400))
-	agg=$(sql "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(b, o, n, u, i, m, g, bp, nz, np, tx, ib, gt, bt)) AS a FROM (SELECT band, (ts/900)*900 AS b, round(avg(obss),1) AS o, round(avg(nocat),1) AS n, round(avg(tx+inbss),1) AS u, round(avg(idle),1) AS i, max(obss+nocat) AS m, round(avg(glitch)) AS g, round(avg(badplcp)) AS bp, round(avg(noise),1) AS nz, round(avg(nopkt),1) AS np, round(avg(tx),1) AS tx, round(avg(inbss),1) AS ib, round(avg(goodtx),1) AS gt, round(avg(badtx),1) AS bt FROM samples WHERE ts>=$since GROUP BY band, b ORDER BY band, b) GROUP BY band);")
-	[ -n "$agg" ] || agg='{}'
+# Local UTC offset in seconds, so day/hour buckets line up with the router's clock (e.g. +0200 -> 7200).
+tz_off() {
+	z=$(date +%z 2>/dev/null); case "$z" in [+-][0-9][0-9][0-9][0-9]) ;; *) echo 0; return ;; esac
+	h=${z#?}; m=${h#??}; h=${h%??}; o=$(( (1$h - 100) * 3600 + (1$m - 100) * 60 ))
+	case "$z" in -*) echo $(( -o )) ;; *) echo "$o" ;; esac
+}
+
+# Airtime averages per time bucket: [b, obss, nocat, yours, idle, max(obss+nocat), glitch, badplcp,
+# noise, nopkt, tx, inbss, goodtx, badtx]. b is the bucket start, aligned to local time.
+samples_agg() {   # days bucket-seconds
+	since=$(( $(now) - $1 * 86400 )); B=$2; off=$(tz_off)
+	sql "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(b, o, n, u, i, m, g, bp, nz, np, tx, ib, gt, bt)) AS a FROM (SELECT band, ((ts+$off)/$B)*$B-$off AS b, round(avg(obss),1) AS o, round(avg(nocat),1) AS n, round(avg(tx+inbss),1) AS u, round(avg(idle),1) AS i, max(obss+nocat) AS m, round(avg(glitch)) AS g, round(avg(badplcp)) AS bp, round(avg(noise),1) AS nz, round(avg(nopkt),1) AS np, round(avg(tx),1) AS tx, round(avg(inbss),1) AS ib, round(avg(goodtx),1) AS gt, round(avg(badtx),1) AS bt FROM samples WHERE ts>=$since GROUP BY band, b ORDER BY band, b) GROUP BY band);"
+}
+
+export_week() {   # 7 days in 15-minute buckets
+	wd=$(web_dir); mkdir -p "$wd"; t=$(now)
+	agg=$(samples_agg 7 900); [ -n "$agg" ] || agg='{}'
 	printf '{"generated":%s,"bucket":900,"agg":%s}\n' "$t" "$agg" | write_atomic "$wd/week.htm"
+}
+
+# 30 days: airtime in 1-hour buckets, and channel scans in 6-hour buckets
+# ([b, ch, avg score, max networks, strongest, avg own, scans]) for the 30-day heatmap and channel load.
+export_month() {
+	wd=$(web_dir); mkdir -p "$wd"; t=$(now); since=$((t - 30 * 86400)); off=$(tz_off)
+	agg=$(samples_agg 30 3600); [ -n "$agg" ] || agg='{}'
+	sc=$(sql "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(b, ch, sc, ap, be, ow, n)) AS a FROM (SELECT band, ((ts+$off)/21600)*21600-$off AS b, ch, round(avg(score),1) AS sc, max(aps) AS ap, max(best) AS be, round(avg(own),1) AS ow, count(*) AS n FROM scans WHERE ts>=$since GROUP BY band, b, ch ORDER BY band, b, ch) GROUP BY band);")
+	[ -n "$sc" ] || sc='{}'
+	printf '{"generated":%s,"bucket":3600,"agg":%s,"scan_bucket":21600,"scans":%s}\n' "$t" "$agg" "$sc" | write_atomic "$wd/month.htm"
 }
 
 export_scans() {
@@ -592,7 +614,7 @@ export_scans() {
 		"$t" "$SCAN_INTERVAL" "$last" "$scans" "$aps" | write_atomic "$wd/scans.htm"
 }
 
-export_all() { export_live; export_week; export_scans; }
+export_all() { export_live; export_week; export_month; export_scans; }
 
 # ---- scheduled entry points --------------------------------------------------
 collect() {
@@ -613,6 +635,7 @@ collect() {
 	export_live
 	wd=$(web_dir)
 	if [ $(( $(date +%M | sed 's/^0//') % 15 )) -eq 0 ] || [ ! -f "$wd/week.htm" ]; then export_week; fi
+	if [ "$(date +%M)" = "05" ] || [ ! -f "$wd/month.htm" ]; then export_month; fi   # hourly
 	[ -f "$wd/scans.htm" ] || export_scans   # after a reboot, before the first scan
 	return 0
 }
