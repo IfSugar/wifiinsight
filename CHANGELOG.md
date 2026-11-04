@@ -2,6 +2,10 @@
 
 What changed in each release of WiFi Insight. The release workflow copies a version's section into its GitHub release notes, so write for people running the addon.
 
+## 1.0.8
+
+- The router check now refuses routers with two radios on the same band, such as 5 GHz-1 and 5 GHz-2 on a GT-AX11000, and routers with four radios. WiFi Insight keeps history per band, so those radios would overwrite each other's data. Support for them is planned. Dual-band routers and 2.4 + 5 + 6 GHz tri-band routers pass as before.
+
 ## 1.0.7
 
 - **Longer ranges are readable.** 12H, 1D and 7D used to plot every 30-second sample, thousands of points, which looked like noise. They now show averages: 5 minutes for 12H, 10 minutes for 1D and an hour for 7D, about 150 points per chart. Tooltips say which average you're looking at. 10M and 1H still show every sample.

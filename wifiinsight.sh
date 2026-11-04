@@ -13,7 +13,7 @@
 #              -o /tmp/wifiinsight.sh && sh /tmp/wifiinsight.sh install
 ###############################################################################
 
-VERSION="1.0.7"
+VERSION="1.0.8"
 NAME="wifiinsight"
 TITLE="WiFi Insight"
 
@@ -871,11 +871,12 @@ check_support() {
 	if ! have wl; then
 		ck_fail "No Broadcom Wi-Fi driver ('wl' not found in $PATH). Only Broadcom-based models are supported."
 	else
-		good=0; seen=0; off=0
+		good=0; seen=0; off=0; bands=""
 		for r in $(radios); do
 			ifc=$(nvram get wl${r}_ifname); seen=1
 			hex=$(wl -i "$ifc" chanspec 2>/dev/null | sed -n 's/.*(\(0x[0-9a-fA-F]*\)).*/\1/p')
 			case "$([ -n "$hex" ] && band_of_hex "$hex")" in 2g) b="2.4 GHz" ;; 5g) b="5 GHz" ;; 6g) b="6 GHz" ;; *) b="radio $r" ;; esac
+			bands="$bands|$b"
 			if [ "$(wl -i "$ifc" isup 2>/dev/null)" != "1" ]; then
 				ck_warn "$b ($ifc) is switched off. It will be monitored once it's on."
 				off=$((off + 1)); continue
@@ -890,6 +891,14 @@ check_support() {
 			else ck_ok "$b ($ifc) airtime statistics"; good=$((good + 1))
 			fi
 		done
+		# History is kept per band, so two radios on one band (5 GHz-1 + 5 GHz-2, or two 6 GHz)
+		# would overwrite each other, and only wl0-wl2 are read. Refuse those layouts for now.
+		dup=$(printf '%s\n' "$bands" | tr '|' '\n' | grep -v '^$' | sort | uniq -d | head -1)
+		if [ -n "$(nvram get wl3_ifname)" ]; then
+			ck_fail "This router has four radios. WiFi Insight supports up to three, one per band, for now."
+		elif [ -n "$dup" ]; then
+			ck_fail "This router has two $dup radios. WiFi Insight can't keep their data apart yet."
+		fi
 		if [ $seen -eq 0 ]; then ck_fail "No Wi-Fi radios found."
 		elif [ $good -eq 0 ] && [ $off -gt 0 ]; then ck_fail "No Wi-Fi radio is switched on, so support can't be checked. Turn one on and try again."
 		elif [ $good -eq 0 ]; then ck_fail "No radio provides the airtime statistics WiFi Insight is built on."
