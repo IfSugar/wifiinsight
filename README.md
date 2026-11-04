@@ -158,7 +158,7 @@ To remove everything: `wifiinsight.sh uninstall`. If the web UI ever looks wrong
 2. Add a `## x.y.z` section to [CHANGELOG.md](CHANGELOG.md) saying what changed, written for people running the addon.
 3. Push to `main`.
 
-The [Release workflow](.github/workflows/release.yml) checks that the two versions match, that the script parses in BusyBox `ash` (the router's shell), that a full day of history exports completely on a shell set up like Merlin's ([`.github/tests/large-history.sh`](.github/tests/large-history.sh)) and that the page's JavaScript is valid. It then tags the commit with the version (for example `1.0.5`) and publishes a GitHub release with both files attached. The release notes are that version's changelog section plus install instructions. Editing the changelog later refreshes the notes of the current release.
+The [Release workflow](.github/workflows/release.yml) checks that the two versions match, that the script parses in BusyBox `ash` (the router's shell), that a full day of history exports completely on a shell set up like Merlin's, with only the BusyBox commands Merlin includes ([`.github/tests/large-history.sh`](.github/tests/large-history.sh)) and that the page's JavaScript is valid. It then tags the commit with the version (for example `1.0.5`) and publishes a GitHub release with both files attached. The release notes are that version's changelog section plus install instructions. Editing the changelog later refreshes the notes of the current release.
 
 ## License
 

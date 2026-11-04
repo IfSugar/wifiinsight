@@ -56,8 +56,9 @@ jobs:
           fi
 
       - name: Check the data files stay complete with a long history
-        # Merlin's shell runs [, printf and echo as separate programs (128 KB per argument):
-        # a day of samples must stream into the files, or the charts go empty.
+        # Runs the script with only Merlin's BusyBox commands, and [, printf and echo as separate
+        # programs (128 KB per argument), like the router: a day of samples must stream into the
+        # files, or the charts go empty.
         run: |
           sudo apt-get install -y -qq sqlite3 > /dev/null
           bash .github/tests/large-history.sh

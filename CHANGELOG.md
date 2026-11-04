@@ -6,7 +6,8 @@ What changed in each release of WiFi Insight. The release workflow copies a vers
 
 - **Fixed: charts went empty after about 9 hours of history.** The Insight and Troubleshooting charts and the tiles showed "No samples in this range yet", and `update` printed `[: Argument list too long`. On Merlin, the shell can hand at most 128 KB to some of the commands the script uses, and a day of samples is about 350 KB, so the data was dropped from the file the page reads. The script now writes the data files without going through that limit. Your history was never lost: once you update, the charts fill straight away.
 - Fixed the same limit for the Spectrum heatmap, which would have gone empty after about three days of scans, and for radar events in a very long syslog, which were no longer picked up.
-- Releases are now tested with a full day of samples, a week of scans and a long radar log, on a shell set up like Merlin's.
+- The router check showed a negative number of MB free for a USB drive with more than 2 TB free, because Merlin's shell arithmetic is 32-bit. The check itself was right; only the number was wrong.
+- Releases are now tested on a shell set up like Merlin's, with only the BusyBox commands Merlin includes, using a full day of samples, a week of scans and a long radar log. A command Merlin lacks, or data that's too big for it, now fails the release instead of breaking on routers.
 
 ## 1.0.8
 

@@ -6,14 +6,19 @@
 # ~350 KB of JSON, so it must be streamed, never held in a variable and passed on (1.0.8 did,
 # and on the router its charts went empty after about 9 hours of history).
 #
-# This turns bash's built-in [, test, printf and echo off to behave the same way, fills a
-# database with a day of samples, a week of scans and a big radar log, then checks the export.
+# This turns bash's built-in [, test, printf and echo off to behave the same way, and puts only
+# the BusyBox commands Merlin has on PATH (merlin-applets.txt), so a command the router lacks
+# fails here too. It fills a database with a day of samples, a week of scans and a big radar
+# log, then checks the export.
 #
-# Usage: .github/tests/large-history.sh [path/to/wifiinsight.sh]   (needs sqlite3 and python3)
+# Usage: .github/tests/large-history.sh [path/to/wifiinsight.sh]   (needs busybox, sqlite3, python3)
 set -eu
 export TZ=UTC   # syslog times have no zone: avoid a clock change repeating an hour of test lines
 script=${1:-$(cd "$(dirname "$0")/../.." && pwd)/wifiinsight.sh}
 case "$script" in /*) ;; *) script=$PWD/$script ;; esac
+applets=$(cd "$(dirname "$0")" && pwd)/merlin-applets.txt
+bb=$(command -v busybox) || { echo "::error::large-history.sh needs busybox installed"; exit 1; }
+bash_bin=$(command -v bash)
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
 R=$t/root; D=$t/data
 mkdir -p "$R/jffs/addons/wifiinsight" "$R/www/user" "$R/tmp" "$D" "$t/bin"
@@ -26,6 +31,15 @@ case "$2" in ntp_ready) echo 1 ;; wl0_ifname) echo eth6 ;; wl1_ifname) echo eth7
 EOF
 printf '#!/bin/sh\nexit 1\n' > "$t/bin/wl"
 chmod +x "$t/bin/nvram" "$t/bin/wl"
+# Merlin's BusyBox commands, and nothing else, for the script to find.
+"$bb" --list > "$t/bb.list"
+grep -v '^#' "$applets" | while IFS= read -r a; do
+	[ -n "$a" ] || continue
+	if grep -qxF -- "$a" "$t/bb.list"; then ln -s "$bb" "$t/bin/$a"
+	elif p=$(command -v -- "$a"); then ln -s "$p" "$t/bin/$a"   # e.g. flock: Merlin has it, Debian's BusyBox doesn't
+	fi
+done
+[ -e "$t/bin/sed" ] && [ -e "$t/bin/[" ] || { echo "::error::couldn't set up Merlin's commands"; exit 1; }
 
 # The script's own schema, then a day of 30 s samples on two bands and a week of 30 min scans.
 awk '/^init_db\(\) \{/ { f = 1 } f && /^EOF$/ { exit } f && p { print } f && /<<.EOF.$/ { p = 1 }' "$script" > "$t/schema.sql"
@@ -49,7 +63,7 @@ done > "$R/tmp/syslog.log"
 [ "$(wc -c < "$R/tmp/syslog.log")" -gt 131072 ] || { echo "::error::test radar log is under 128 KB"; exit 1; }
 
 echo 'enable -n test [ printf echo' > "$t/no-builtins.sh"
-run() { WI_ROOT="$R" PATH="$t/bin:$PATH" BASH_ENV="$t/no-builtins.sh" bash "$script" "$@"; }
+run() { WI_ROOT="$R" PATH="$t/bin" BASH_ENV="$t/no-builtins.sh" "$bash_bin" "$script" "$@"; }
 run collect --once 2> "$t/err.collect" || true
 run export 2> "$t/err.export"
 

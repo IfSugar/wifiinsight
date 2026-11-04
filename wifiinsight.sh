@@ -857,6 +857,9 @@ nearest_dir() {   # $1 or its nearest existing parent; "/" if nothing on the way
 	echo "${d:-/}"
 }
 free_kb() { df -Pk "$(nearest_dir "$1")" 2>/dev/null | awk 'NR == 2 { print $4 }'; }
+# KB -> MB in awk: Merlin's shell arithmetic is 32-bit, so $((kb / 1024)) goes negative past 2 TiB free.
+# ([ -lt ] is fine: its test handles 64-bit numbers.)
+kb_to_mb() { awk -v k="${1:-0}" 'BEGIN { print int(k / 1024) }'; }
 fstype_of() {   # filesystem type of the mount holding $1 (longest matching mount point)
 	p=$(readlink -f "$(nearest_dir "$1")" 2>/dev/null)
 	awk -v p="${p:-/}" '{
@@ -954,7 +957,7 @@ check_support() {
 			ck_fail "History folder $DATA_DIR isn't on a USB drive (it would live in RAM and vanish at reboot)." ;;
 		*)
 			if [ "${kb:-0}" -lt 51200 ]; then ck_fail "Less than 50 MB free for history in $DATA_DIR."
-			else ck_ok "History storage: $DATA_DIR ($fst, $((kb / 1024)) MB free)"
+			else ck_ok "History storage: $DATA_DIR ($fst, $(kb_to_mb "$kb") MB free)"
 			fi ;;
 	esac
 
@@ -962,7 +965,7 @@ check_support() {
 	jkb=$(free_kb "$ROOT/jffs")
 	if [ ! -d "$ROOT/jffs" ]; then ck_fail "The JFFS partition isn't available."
 	elif [ "${jkb:-0}" -lt 1024 ]; then ck_fail "Less than 1 MB free on JFFS."
-	else ck_ok "JFFS space ($((jkb / 1024)) MB free)"
+	else ck_ok "JFFS space ($(kb_to_mb "$jkb") MB free)"
 	fi
 	find_webui_page
 	if [ "$am_webui_page" = none ]; then
