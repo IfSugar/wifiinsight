@@ -71,7 +71,9 @@ The installer:
 5. hooks itself into `services-start` and `service-event`
 6. mounts the page and runs a first sample and scan
 
-Open **Wireless → WiFi Insight**. The interference chart fills in over the first few minutes, and the heatmap gains a row every scan.
+Open **Wireless → WiFi Insight** (the tab after *Professional*). The interference chart fills in over the first few minutes, and the heatmap gains a row every scan.
+
+If the tab doesn't show up, reload the router page with **Ctrl+F5** (Windows) or **Cmd+Shift+R** (Mac): browsers cache the router's menu. The installer also prints a direct link to the page.
 
 **Updating:** run `/jffs/addons/wifiinsight/wifiinsight.sh update`. It checks this repo, and if there's a newer version it installs it over the old one, keeping your settings, history and page slot. `update force` reinstalls the current version.
 

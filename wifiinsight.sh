@@ -13,7 +13,7 @@
 #              -o /tmp/wifiinsight.sh && sh /tmp/wifiinsight.sh install
 ###############################################################################
 
-VERSION="1.0.0"
+VERSION="1.0.1"
 NAME="wifiinsight"
 TITLE="WiFi Insight"
 
@@ -653,16 +653,20 @@ mount_webui() {
 	sed "/tabName: \"$TITLE\"/d" "$TMP_MENUTREE" > "$new"
 	before=$(wc -l < "$new")
 	entry="{url: \"$am_webui_page\", tabName: \"$TITLE\"},"
-	for anchor in Advanced_WProfessional_Content.asp Tools_OtherSettings.asp; do
+	# Wireless -> after "Professional" (Advanced_WAdvanced_Content.asp); Merlin's Tools menu as a fallback
+	where=""
+	for a in "Advanced_WAdvanced_Content.asp:Wireless" "Tools_OtherSettings.asp:Tools"; do
+		anchor=${a%%:*}
 		if [ "$(grep -c "url: \"$anchor\"" "$new")" = "1" ]; then
-			sed -i "/url: \"$anchor\"/a $entry" "$new"; break
+			sed -i "/url: \"$anchor\"/a $entry" "$new"; where=${a#*:}; break
 		fi
 	done
-	if [ "$(grep -c "tabName: \"$TITLE\"" "$new")" = "1" ] && [ "$(wc -l < "$new")" -eq $((before + 1)) ]; then
+	if [ -n "$where" ] && [ "$(grep -c "tabName: \"$TITLE\"" "$new")" = "1" ] && [ "$(wc -l < "$new")" -eq $((before + 1)) ]; then
 		mv -f "$new" "$TMP_MENUTREE"
 		menu_remount
+		echo "$where" > "$TMPD/menu_where"
 	else
-		rm -f "$new"
+		rm -f "$new" "$TMPD/menu_where"
 		say "Couldn't add the menu entry safely, so the menu was left alone. Open http://$(nvram get lan_ipaddr)/$am_webui_page instead."
 		log "menu entry not added (unexpected menuTree.js); page at $am_webui_page"
 	fi
@@ -913,7 +917,7 @@ install() {
 		if ! asp_matches "$asp"; then   # missing, or left over from another version
 			say "Downloading the web page from GitHub..."
 			asp="$TMPD/$NAME.asp.dl"
-			{ curl -fsL --retry 2 "$RAW_URL/$NAME.asp" -o "$asp" && asp_matches "$asp"; } || {
+			{ curl -fsL --retry 2 "$RAW_URL/$NAME.asp?t=$(now)" -o "$asp" && asp_matches "$asp"; } || {
 				rm -f "$asp"; die "Couldn't get $NAME.asp $VERSION. Put it in the same folder as $NAME.sh and run install again."; }
 		fi
 		# rename into place: a running copy of the old script (e.g. during update) keeps reading its own file
@@ -948,9 +952,15 @@ install() {
 		say "Storage or NTP not ready yet - collection will start automatically."
 	fi
 	page=$(cat "$ADDON_DIR/webui_page" 2>/dev/null)
+	where=$(cat "$TMPD/menu_where" 2>/dev/null)
 	say ""
-	say "Done. Open the router UI -> Wireless -> $TITLE"
-	[ -n "$page" ] && say "or go straight to http://$(nvram get lan_ipaddr)/$page"
+	if [ -n "$where" ]; then
+		say "Done. Open the router UI -> $where -> $TITLE"
+		say "(If the tab isn't there, reload the page with Ctrl+F5 / Cmd+Shift+R: browsers cache the menu.)"
+	else
+		say "Done."
+	fi
+	[ -n "$page" ] && say "Direct link: http://$(nvram get lan_ipaddr)/$page"
 	say "The interference chart fills in over the next few minutes."
 }
 
@@ -959,7 +969,7 @@ asp_matches() { [ -s "$1" ] && grep -q "wifiinsight-version: $VERSION " "$1"; }
 update() {   # [force]  fetch the latest release from GitHub and reinstall over this one
 	dl="$TMPD/update"; rm -rf "$dl"; mkdir -p "$dl"
 	say "Checking GitHub for updates..."
-	curl -fsL --retry 2 "$RAW_URL/$NAME.sh" -o "$dl/$NAME.sh" || { rm -rf "$dl"; die "Couldn't reach GitHub."; }
+	curl -fsL --retry 2 "$RAW_URL/$NAME.sh?t=$(now)" -o "$dl/$NAME.sh" || { rm -rf "$dl"; die "Couldn't reach GitHub."; }
 	new=$(sed -n 's/^VERSION="\([0-9][0-9.]*\)".*/\1/p' "$dl/$NAME.sh" | head -1)
 	if [ -z "$new" ] || ! sh -n "$dl/$NAME.sh" 2>/dev/null; then
 		rm -rf "$dl"; die "The downloaded script looks incomplete; nothing was changed."
@@ -967,7 +977,7 @@ update() {   # [force]  fetch the latest release from GitHub and reinstall over 
 	if [ "$new" = "$VERSION" ] && [ "$1" != "force" ]; then
 		rm -rf "$dl"; say "Already up to date ($VERSION)."; return 0
 	fi
-	if ! { curl -fsL --retry 2 "$RAW_URL/$NAME.asp" -o "$dl/$NAME.asp" && grep -q "wifiinsight-version: $new " "$dl/$NAME.asp"; }; then
+	if ! { curl -fsL --retry 2 "$RAW_URL/$NAME.asp?t=$(now)" -o "$dl/$NAME.asp" && grep -q "wifiinsight-version: $new " "$dl/$NAME.asp"; }; then
 		rm -rf "$dl"; die "Couldn't download the matching web page; nothing was changed."
 	fi
 	say "Updating $VERSION -> $new (settings and history are kept)"

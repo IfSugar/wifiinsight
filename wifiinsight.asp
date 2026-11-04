@@ -8,15 +8,15 @@
 <link rel="shortcut icon" href="images/favicon.png"/>
 <link rel="icon" href="images/favicon.png"/>
 <title>WiFi Insight</title>
-<!-- wifiinsight-version: 1.0.0 (must match VERSION in wifiinsight.sh) -->
+<!-- wifiinsight-version: 1.0.1 (must match VERSION in wifiinsight.sh) -->
 <link rel="stylesheet" type="text/css" href="index_style.css"/>
 <link rel="stylesheet" type="text/css" href="form_style.css"/>
+<script type="text/javascript" src="/js/jquery.js"></script>
 <script type="text/javascript" src="/state.js"></script>
 <script type="text/javascript" src="/general.js"></script>
 <script type="text/javascript" src="/popup.js"></script>
 <script type="text/javascript" src="/help.js"></script>
 <script type="text/javascript" src="/validator.js"></script>
-<script type="text/javascript" src="/ext/wifiinsight/chart.umd.min.js"></script>
 <style>
 #wi {
 	--surface: #2b3539;
@@ -117,6 +117,9 @@
 </style>
 <script type="text/javascript">
 var custom_settings = <% get_custom_settings(); %>;
+/* Everything below is private, so nothing clashes with the firmware's globals (jQuery's $, store, ...).
+   Only initial() (called by <body onload>) and the WiFiInsight object (used by the page's buttons) are global. */
+(function () {
 var WI = {
 	base: '/ext/wifiinsight/',
 	live: null, week: null, scans: null,
@@ -318,7 +321,7 @@ function legendHTML(key, items) {   // items: [label, color, toggleable, dashed]
 		var sw = '<span class="sw' + (it[3] ? ' dash' : '') + '" style="background:' + it[1] + '"></span>';
 		if (!it[2]) return '<span class="li">' + sw + esc(it[0]) + '</span>';
 		var on = !WI.hidden[key + ':' + it[0]];
-		return '<label><input type="checkbox"' + (on ? ' checked' : '') + ' onchange="toggleSeries(\'' + key + '\',\'' + it[0] + '\',this.checked)"/>' + sw + esc(it[0]) + '</label>';
+		return '<label><input type="checkbox"' + (on ? ' checked' : '') + ' onchange="WiFiInsight.toggleSeries(\'' + key + '\',\'' + it[0] + '\',this.checked)"/>' + sw + esc(it[0]) + '</label>';
 	}).join('');
 }
 function toggleSeries(key, label, on) { WI.hidden[key + ':' + label] = !on; renderView(); }
@@ -488,7 +491,7 @@ function renderEvents() {
 		h += '<tr><td>' + when(e[0]) + '</td><td><span class="tag ' + esc(e[2]) + '">' + esc(TAGS[e[2]] || e[2]) + '</span>' + (e[1] === 'all' ? ' <span style="color:var(--muted)">all bands</span>' : '') + '</td><td>' + change + '</td></tr>';
 	});
 	h += '</table>';
-	if (evs.length > 10) h += '<button type="button" class="more" onclick="WI.allEvents=!WI.allEvents;renderEvents()">' + (WI.allEvents ? 'Show fewer' : 'Show all ' + evs.length + ' events') + '</button>';
+	if (evs.length > 10) h += '<button type="button" class="more" onclick="WiFiInsight.toggleEvents()">' + (WI.allEvents ? 'Show fewer' : 'Show all ' + evs.length + ' events') + '</button>';
 	$('wiEvents').innerHTML = h;
 }
 
@@ -602,7 +605,7 @@ function renderApTable(list) {
 		if (typeof x === 'string') return d * x.localeCompare(y);
 		return d * ((x == null ? -999 : x) - (y == null ? -999 : y));
 	});
-	var col = function (key, label, cls) { return '<th class="sort' + (cls ? ' ' + cls : '') + '" onclick="sortBy(\'' + key + '\')">' + label + (k === key ? (d > 0 ? ' ▲' : ' ▼') : '') + '</th>'; };
+	var col = function (key, label, cls) { return '<th class="sort' + (cls ? ' ' + cls : '') + '" onclick="WiFiInsight.sortBy(\'' + key + '\')">' + label + (k === key ? (d > 0 ? ' ▲' : ' ▼') : '') + '</th>'; };
 	var h = '<table class="t"><tr>' + col('ssid', 'Network') + col('bssid', 'BSSID') + col('ctl', 'Ch', 'num') + col('width', 'Width', 'num') + col('phy', 'Standard') + col('sec', 'Security') + col('rssi', 'Signal') + col('util', 'Load', 'num') + '</tr>';
 	list.forEach(function (a) {
 		var pct = Math.max(4, Math.min(100, (a.rssi + 95) / 55 * 100));
@@ -777,9 +780,9 @@ var VIEWS = [['insight', 'Insight'], ['survey', 'Site Survey'], ['channels', 'Ch
 function render() {
 	var bands = ((WI.live && WI.live.radios) || []).map(function (r) { return r.band; });
 	if (bands.length && bands.indexOf(WI.band) < 0) WI.band = bands[0];
-	$('wiTabs').innerHTML = VIEWS.map(function (v) { return '<button type="button" class="' + (v[0] === WI.view ? 'on' : '') + '" onclick="setView(\'' + v[0] + '\')">' + v[1] + '</button>'; }).join('');
-	$('wiBands').innerHTML = bands.map(function (b) { return '<button type="button" class="' + (b === WI.band ? 'on' : '') + '" onclick="setBand(\'' + b + '\')">' + BAND_NAME[b] + '</button>'; }).join('');
-	$('wiRanges').innerHTML = [['10m', '10M'], ['1h', '1H'], ['12h', '12H'], ['1d', '1D'], ['7d', '7D']].map(function (x) { return '<button type="button" class="' + (x[0] === WI.range ? 'on' : '') + '" onclick="setRange(\'' + x[0] + '\')">' + x[1] + '</button>'; }).join('');
+	$('wiTabs').innerHTML = VIEWS.map(function (v) { return '<button type="button" class="' + (v[0] === WI.view ? 'on' : '') + '" onclick="WiFiInsight.setView(\'' + v[0] + '\')">' + v[1] + '</button>'; }).join('');
+	$('wiBands').innerHTML = bands.map(function (b) { return '<button type="button" class="' + (b === WI.band ? 'on' : '') + '" onclick="WiFiInsight.setBand(\'' + b + '\')">' + BAND_NAME[b] + '</button>'; }).join('');
+	$('wiRanges').innerHTML = [['10m', '10M'], ['1h', '1H'], ['12h', '12H'], ['1d', '1D'], ['7d', '7D']].map(function (x) { return '<button type="button" class="' + (x[0] === WI.range ? 'on' : '') + '" onclick="WiFiInsight.setRange(\'' + x[0] + '\')">' + x[1] + '</button>'; }).join('');
 	var timed = WI.view === 'insight' || WI.view === 'trouble' || WI.view === 'channels';
 	$('wiRanges').style.display = timed ? '' : 'none';
 	$('wiBar').style.display = WI.view === 'settings' ? 'none' : '';
@@ -839,20 +842,55 @@ function boot() {
 }
 function setMesh(on) { WI.showMesh = on; store('mesh', on ? '1' : '0'); $('wiMesh').checked = on; $('wiMesh2').checked = on; renderView(); }
 function initial() {
-	if (typeof show_menu === 'function') show_menu();
+	/* The firmware draws its menu here. If that ever fails, still show our page. */
+	try { if (typeof show_menu === 'function') show_menu(); }
+	catch (e) { if (window.console) console.error('WiFi Insight: show_menu() failed', e); }
 	var page = window.location.pathname.substring(1);
 	document.form.current_page.value = page; document.form.next_page.value = page;
 	document.formScriptActions.current_page.value = page; document.formScriptActions.next_page.value = page;
-	if (typeof Chart === 'undefined') {
-		var s = document.createElement('script');
-		s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.6.1/dist/chart.umd.min.js';
-		s.integrity = 'sha384-Emf5ZVIUiarAdhkgtqK+5/Z5qIvM6QoVrS+qAVtfyZVuD5lIHrac0me485+Antp0';
-		s.crossOrigin = 'anonymous';
-		s.onload = function () { renderView(); };
-		document.head.appendChild(s);
-	}
+	loadChart(function () { renderView(); });
 	boot();
 }
+
+/* Chart.js is a UMD bundle: when RequireJS is on the page (the firmware loads it), it registers
+   itself as an anonymous AMD module instead of setting window.Chart, and RequireJS throws
+   "Mismatched anonymous define()". So fetch the code and run it with `define` hidden for that one
+   synchronous step. The local copy is checked at install; the CDN copy is checked by SRI. */
+function loadChart(done) {
+	if (typeof Chart !== 'undefined') { done(); return; }
+	var sources = [
+		['/ext/wifiinsight/chart.umd.min.js', null],
+		['https://cdn.jsdelivr.net/npm/chart.js@4.6.1/dist/chart.umd.min.js', 'sha384-Emf5ZVIUiarAdhkgtqK+5/Z5qIvM6QoVrS+qAVtfyZVuD5lIHrac0me485+Antp0']
+	];
+	(function next(i) {
+		if (i >= sources.length) {
+			var w = $('wiWarn');
+			if (w) { w.innerHTML = 'Couldn\'t load the chart library. Run <code>/jffs/addons/wifiinsight/wifiinsight.sh install</code> again over SSH.'; w.style.display = 'block'; }
+			return;
+		}
+		var opts = sources[i][1] ? { integrity: sources[i][1], mode: 'cors' } : { cache: 'no-cache', credentials: 'same-origin' };
+		fetch(sources[i][0], opts)
+			.then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+			.then(function (code) {
+				var amd = window.define;
+				window.define = undefined;
+				try { (0, eval)(code); } finally { window.define = amd; }
+				if (typeof Chart === 'undefined') throw new Error('Chart.js did not load');
+				done();
+			})
+			.catch(function () { next(i + 1); });
+	})(0);
+}
+
+window.initial = initial;
+window.WiFiInsight = {
+	setView: setView, setBand: setBand, setRange: setRange, scanNow: scanNow, setMesh: setMesh,
+	saveSettings: saveSettings, sortBy: sortBy, toggleSeries: toggleSeries,
+	toggleEvents: function () { WI.allEvents = !WI.allEvents; renderEvents(); },
+	heatOption: function (key, on) { WI[key] = on; renderHeat(); },
+	state: WI
+};
+})();
 </script>
 </head>
 <body onload="initial();" class="bg">
@@ -898,7 +936,7 @@ function initial() {
 		<div class="seg" id="wiBands"></div>
 		<div class="seg" id="wiRanges"></div>
 		<div class="grow"></div>
-		<button type="button" class="btn" id="wiScanBtn" onclick="scanNow()" title="Scans every channel now. Wi-Fi may pause for about a second.">Scan now</button>
+		<button type="button" class="btn" id="wiScanBtn" onclick="WiFiInsight.scanNow()" title="Scans every channel now. Wi-Fi may pause for about a second.">Scan now</button>
 	</div>
 
 	<!-- ============ INSIGHT ============ -->
@@ -915,9 +953,9 @@ function initial() {
 			<div class="head">
 				<div class="grow"><h3>Spectrum</h3><div class="sub" id="wiHeatSub"></div></div>
 				<div class="legend">
-					<label><input type="checkbox" checked onchange="WI.showActive=this.checked;renderHeat()"/>Active channel</label>
-					<label><input type="checkbox" checked onchange="WI.showDfs=this.checked;renderHeat()"/>DFS</label>
-					<label><input type="checkbox" id="wiMesh" onchange="setMesh(this.checked)"/>Include my mesh</label>
+					<label><input type="checkbox" checked onchange="WiFiInsight.heatOption('showActive',this.checked)"/>Active channel</label>
+					<label><input type="checkbox" checked onchange="WiFiInsight.heatOption('showDfs',this.checked)"/>DFS</label>
+					<label><input type="checkbox" id="wiMesh" onchange="WiFiInsight.setMesh(this.checked)"/>Include my mesh</label>
 				</div>
 			</div>
 			<div class="rel">
@@ -964,7 +1002,7 @@ function initial() {
 		<div class="card">
 			<div class="head">
 				<div class="grow"><h3>Estimated load per channel</h3><div class="sub" id="wiLoadSub"></div></div>
-				<div class="legend"><label><input type="checkbox" id="wiMesh2" onchange="setMesh(this.checked)"/>Include my mesh</label></div>
+				<div class="legend"><label><input type="checkbox" id="wiMesh2" onchange="WiFiInsight.setMesh(this.checked)"/>Include my mesh</label></div>
 			</div>
 			<div class="chartbox sm" id="wiLoadChart"></div>
 		</div>
@@ -1024,7 +1062,7 @@ function initial() {
 				<div class="lbl">Storage</div>
 				<div style="padding-top:6px" id="setStorage"></div>
 				<div></div>
-				<div><button type="button" class="btn primary" id="setSave" onclick="saveSettings()">Save</button><span class="saved" id="setSaved">Saved</span></div>
+				<div><button type="button" class="btn primary" id="setSave" onclick="WiFiInsight.saveSettings()">Save</button><span class="saved" id="setSaved">Saved</span></div>
 			</div>
 		</div>
 		<div class="card">
