@@ -4,6 +4,7 @@ What changed in each release of WiFi Insight. The release workflow copies a vers
 
 ## 1.0.8
 
+- The addon no longer keeps `user1.asp` free. It takes the first free addon page slot, skips slots other addons already use, and keeps its slot across reboots and updates. The `RESERVED_PAGES` setting is gone; an old line for it in your config is ignored.
 - The router check now refuses routers with two radios on the same band, such as 5 GHz-1 and 5 GHz-2 on a GT-AX11000, and routers with four radios. WiFi Insight keeps history per band, so those radios would overwrite each other's data. Support for them is planned. Dual-band routers and 2.4 + 5 + 6 GHz tri-band routers pass as before.
 
 ## 1.0.7

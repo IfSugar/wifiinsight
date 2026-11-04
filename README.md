@@ -81,9 +81,9 @@ If the tab doesn't show up, reload the router page with **Ctrl+F5** (Windows) or
 
 ## Web UI slot
 
-Merlin gives addons 20 page slots (`user1.asp` … `user20.asp`). WiFi Insight **never uses `user1.asp`** and picks the first free slot after that. It keeps the same slot across reboots when that slot is still free.
+Merlin gives addons 20 page slots (`user1.asp` … `user20.asp`). WiFi Insight takes the first free one and keeps the same slot across reboots and updates.
 
-It only ever removes a page whose `.title` file says `WiFi Insight`, so other addons' pages are never touched. To reserve more slots, edit `RESERVED_PAGES` in `/jffs/addons/wifiinsight/config`, for example `RESERVED_PAGES="user1.asp user3.asp"`, then run `wifiinsight.sh startup`.
+It only ever removes a page whose `.title` file says `WiFi Insight`, so other addons' pages are never touched.
 
 ## How the numbers are made
 
@@ -135,7 +135,6 @@ SAMPLE_INTERVAL=30         # 30 or 60 seconds
 SCAN_INTERVAL=30           # minutes, 0 = off (15, 30, 60, 120, 180, 360 from the UI)
 RETAIN_DAYS=30             # samples and scans; events are kept for a year
 EXTRA_OWN_SSIDS=""         # extra SSIDs to treat as yours, separated by |
-RESERVED_PAGES="user1.asp" # web UI slots this addon must never use
 DATA_DIR="/opt/var/lib/wifiinsight"
 SQLITE="/opt/bin/sqlite3"
 ```

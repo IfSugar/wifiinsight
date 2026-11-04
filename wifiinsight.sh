@@ -46,7 +46,6 @@ SAMPLE_INTERVAL=30      # seconds between interference samples: 30 or 60
 SCAN_INTERVAL=30        # minutes between neighbour scans (0 = never)
 RETAIN_DAYS=30          # history kept for samples and scans
 EXTRA_OWN_SSIDS=""      # extra SSIDs to treat as yours, separated by |
-RESERVED_PAGES="user1.asp"  # web UI slots this addon must never use (space-separated)
 DATA_DIR="/opt/var/lib/$NAME"
 SQLITE="/opt/bin/sqlite3"
 [ -f "$CONF" ] && . "$CONF"
@@ -661,25 +660,22 @@ menu_remount() {
 }
 
 is_ours() { [ "$(cat "$WWW_USER/${1%.asp}.title" 2>/dev/null)" = "$TITLE" ]; }
-is_reserved() { case " $RESERVED_PAGES " in *" $1 "*) return 0 ;; esac; return 1; }
 
 # Pick a page slot: keep our previous slot if it's still free (stable URL), otherwise the
-# first free userN.asp that isn't reserved. Slots are identified as ours by their .title file.
+# first free userN.asp. Slots are identified as ours by their .title file; taken slots are skipped.
 find_webui_page() {
 	am_webui_page=none
 	prev=$(cat "$ADDON_DIR/webui_page" 2>/dev/null)
-	if [ -n "$prev" ] && ! is_reserved "$prev" && { [ ! -f "$WWW_USER/$prev" ] || is_ours "$prev"; }; then
+	if [ -n "$prev" ] && { [ ! -f "$WWW_USER/$prev" ] || is_ours "$prev"; }; then
 		am_webui_page=$prev; return
 	fi
 	i=1
 	while [ $i -le 20 ]; do
 		p="user$i.asp"
-		if ! is_reserved "$p"; then
-			if [ -f "$WWW_USER/$p" ]; then
-				is_ours "$p" && { am_webui_page=$p; return; }
-			elif [ "$am_webui_page" = none ]; then
-				am_webui_page=$p
-			fi
+		if [ -f "$WWW_USER/$p" ]; then
+			is_ours "$p" && { am_webui_page=$p; return; }
+		elif [ "$am_webui_page" = none ]; then
+			am_webui_page=$p
 		fi
 		i=$((i + 1))
 	done
@@ -821,7 +817,6 @@ SAMPLE_INTERVAL=$SAMPLE_INTERVAL      # seconds between interference samples (30
 SCAN_INTERVAL=$SCAN_INTERVAL        # minutes between neighbour scans, 0 = off
 RETAIN_DAYS=$RETAIN_DAYS          # days of history to keep
 EXTRA_OWN_SSIDS="$EXTRA_OWN_SSIDS"     # extra SSIDs to treat as yours, separated by |
-RESERVED_PAGES="$RESERVED_PAGES"   # web UI slots never to use, space-separated (e.g. "user1.asp user3.asp")
 DATA_DIR="$DATA_DIR"
 SQLITE="$SQLITE"
 EOF
@@ -950,9 +945,9 @@ check_support() {
 	fi
 	find_webui_page
 	if [ "$am_webui_page" = none ]; then
-		ck_fail "No free addon page slot (all 20 are used or reserved: $RESERVED_PAGES)."
+		ck_fail "No free addon page slot (all 20 are used by other addons)."
 	else
-		ck_ok "Addon page slot: $am_webui_page (never $RESERVED_PAGES)"
+		ck_ok "Addon page slot: $am_webui_page"
 	fi
 
 	# Not blockers
