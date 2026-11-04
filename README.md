@@ -1,0 +1,156 @@
+# WiFi Insight for Asuswrt-Merlin
+
+A WiFi Insight-style dashboard for Broadcom-based Asuswrt-Merlin routers, plus modern versions of the old WiFi Radar views. Written for the RT-AX86U on 3004.388.x; other Broadcom models whose driver answers `wl chanim_stats` should work too.
+
+It adds a **Wireless → WiFi Insight** tab with five pages:
+
+| Page | What it shows |
+|---|---|
+| **Insight** | Live tiles (channel, interference, others Wi-Fi, non-Wi-Fi, idle, noise), in-channel interference over time with event markers, a spectrum heatmap of every channel, and a channel event log (manual changes, radar, bandwidth changes, reboots). |
+| **Site Survey** | A signal map (each network drawn across the channels it occupies, by signal strength) and a sortable list with BSSID, channel, width, Wi-Fi standard, security, signal and the load each network reports. |
+| **Channel Statistics** | Networks per channel, estimated load per channel over the selected range, and the quietest channel for each width (with and without DFS) next to what you're using now. |
+| **Troubleshooting** | Airtime breakdown (your TX/RX, others, non-Wi-Fi, unclassified, idle), glitch counters, transmit success vs failure, noise floor and the raw `chanim_stats` counters. |
+| **Settings** | Sample interval, neighbour scan interval, history length, and extra SSIDs to treat as yours. |
+
+Time ranges: 10 minutes, 1 hour, 12 hours, 1 day, 7 days.
+
+## Screenshots
+
+![WiFi Insight: Insight, Site Survey, Channel Statistics and Troubleshooting pages](docs/demo.webp)
+
+<table>
+<tr>
+<td width="50%"><a href="docs/insight.webp"><img src="docs/insight.webp" alt="Insight page: live tiles, in-channel interference over a day with event markers, spectrum heatmap and channel events"></a><br><b>Insight</b>: interference on your channel, the spectrum around it, and why the channel changed</td>
+<td width="50%"><a href="docs/insight-7d.webp"><img src="docs/insight-7d.webp" alt="Insight page over 7 days on 2.4 GHz"></a><br><b>Insight, 7 days</b>: a week of history with reboots, radar and manual changes</td>
+</tr>
+<tr>
+<td><a href="docs/survey.webp"><img src="docs/survey.webp" alt="Site Survey: signal map of neighbouring networks by channel, and a sortable network list"></a><br><b>Site Survey</b>: who's around you and on which channels, with your own networks and mesh node marked</td>
+<td><a href="docs/channels.webp"><img src="docs/channels.webp" alt="Channel Statistics: networks and estimated load per channel, plus the quietest channel for each width"></a><br><b>Channel Statistics</b>: load per channel and the quietest channel for each width</td>
+</tr>
+<tr>
+<td><a href="docs/troubleshooting.webp"><img src="docs/troubleshooting.webp" alt="Troubleshooting: airtime breakdown, glitches, transmit success and noise floor"></a><br><b>Troubleshooting</b>: airtime breakdown, glitches, transmit quality and noise floor</td>
+<td><a href="docs/settings.webp"><img src="docs/settings.webp" alt="Settings: sample interval, scan interval, history length and extra SSIDs to treat as yours"></a><br><b>Settings</b>: sampling, scan schedule, history length and your own SSIDs</td>
+</tr>
+</table>
+
+<sub>Screenshots use made-up sample data.</sub>
+
+## Requirements
+
+- Asuswrt-Merlin with **JFFS custom scripts and configs** enabled (the installer turns it on if needed)
+- Entware on a USB drive, with `sqlite3-cli` installed (`opkg install sqlite3-cli`)
+- A Broadcom radio that answers `wl chanim_stats` (the installer checks)
+
+## Install
+
+Over SSH on the router:
+
+```sh
+curl -fsL --retry 3 "https://raw.githubusercontent.com/IfSugar/wifiinsight/main/wifiinsight.sh" -o /tmp/wifiinsight.sh && sh /tmp/wifiinsight.sh install
+```
+
+<details>
+<summary>Without internet access on the router</summary>
+
+Download `wifiinsight.sh` and `wifiinsight.asp` from this repo, copy both to the router (use your router's IP and SSH username), then run the installer:
+
+```sh
+scp -O wifiinsight.sh wifiinsight.asp admin@192.168.50.1:/tmp/
+ssh admin@192.168.50.1 'sh /tmp/wifiinsight.sh install'
+```
+
+The page then loads Chart.js from the jsDelivr CDN, because the router can't download it.
+</details>
+
+The installer:
+
+1. checks the requirements
+2. copies the addon to `/jffs/addons/wifiinsight/`, downloading the web page from this repo if it isn't next to the script
+3. creates the database in `/opt/var/lib/wifiinsight/` on the USB drive
+4. downloads Chart.js once and checks it against the official release's SHA-256, so the page works without internet
+5. hooks itself into `services-start` and `service-event`
+6. mounts the page and runs a first sample and scan
+
+Open **Wireless → WiFi Insight**. The interference chart fills in over the first few minutes, and the heatmap gains a row every scan.
+
+**Updating:** run `/jffs/addons/wifiinsight/wifiinsight.sh update`. It checks this repo, and if there's a newer version it installs it over the old one, keeping your settings, history and page slot. `update force` reinstalls the current version.
+
+**amtm:** WiFi Insight isn't in amtm's built-in list, but you can launch it from amtm by adding `/jffs/addons/wifiinsight/wifiinsight.sh` as a personal script, with `status` as the argument.
+
+## Web UI slot
+
+Merlin gives addons 20 page slots (`user1.asp` … `user20.asp`). WiFi Insight **never uses `user1.asp`** and picks the first free slot after that. It keeps the same slot across reboots when that slot is still free.
+
+It only ever removes a page whose `.title` file says `WiFi Insight`, so other addons' pages are never touched. To reserve more slots, edit `RESERVED_PAGES` in `/jffs/addons/wifiinsight/config`, for example `RESERVED_PAGES="user1.asp user3.asp"`, then run `wifiinsight.sh startup`.
+
+## How the numbers are made
+
+- **Interference chart and Troubleshooting** come straight from the driver (`wl chanim_stats`), sampled every 30 s. These are percentages of airtime on the router's own channel:
+  - `obss` is other networks (shown as Others Wi-Fi)
+  - `nocat` is non-Wi-Fi energy
+  - `tx` and `inbss` are your own traffic
+
+  Reading these counters doesn't disturb Wi-Fi.
+- **Spectrum, Channel Statistics and Site Survey** come from neighbour scans (`wl scan`), every 30 minutes by default. A radio can only measure its own channel continuously, so the other channels are estimated from the networks heard on them. Each network contributes according to how much it overlaps the channel, how strong its signal is, and the load it advertises (QBSS). Networks with your SSIDs, including your AiMesh node, are listed as yours and kept out of the estimate. Tick **Include my mesh** to add them back. Each scan takes the radio off-channel briefly, so expect a hiccup of about a second.
+- **Channel events** are detected by comparing the channel and width on every sample:
+  - a changed setting in nvram → *Manually configured*
+  - a radar line in syslog within 10 minutes → *Regulatory (RADAR)*
+  - the same primary channel with a different width → *Adaptive bandwidth*
+  - acsd running → *Optimized automatically*
+
+  Reboots are spotted when the uptime counter resets, and a reboot within 15 minutes of your reboot schedule is labelled *Scheduled reboot*.
+
+## Files
+
+| Path | Contents |
+|---|---|
+| `/jffs/addons/wifiinsight/` | script, page, config, local Chart.js |
+| `/opt/var/lib/wifiinsight/wifiinsight.db` | history (SQLite) |
+| `/tmp/var/wwwext/wifiinsight/` | JSON files the page reads (`live.htm`, `scans.htm`, `week.htm`), rebuilt from the database |
+
+Cron jobs: `wifiinsight_collect` (every minute), `wifiinsight_scan` (scan interval) and `wifiinsight_prune` (04:23 daily, before a 05:00 scheduled reboot).
+
+## Commands
+
+```sh
+/jffs/addons/wifiinsight/wifiinsight.sh check       # can this router run it? (changes nothing)
+/jffs/addons/wifiinsight/wifiinsight.sh status      # what's running, sample counts, recent events
+/jffs/addons/wifiinsight/wifiinsight.sh scan        # scan now
+/jffs/addons/wifiinsight/wifiinsight.sh debug       # raw driver output, useful for bug reports
+/jffs/addons/wifiinsight/wifiinsight.sh startup     # re-apply config, cron and the web page
+/jffs/addons/wifiinsight/wifiinsight.sh update      # install the latest version from GitHub
+/jffs/addons/wifiinsight/wifiinsight.sh version     # print the installed version
+/jffs/addons/wifiinsight/wifiinsight.sh uninstall   # remove everything
+/jffs/addons/wifiinsight/wifiinsight.sh uninstall --keep-data   # remove, keep history
+```
+
+## Config (`/jffs/addons/wifiinsight/config`)
+
+The Settings page writes this file for you. You can also edit it and then run `wifiinsight.sh startup`.
+
+```sh
+SAMPLE_INTERVAL=30         # 30 or 60 seconds
+SCAN_INTERVAL=30           # minutes, 0 = off (15, 30, 60, 120, 180, 360 from the UI)
+RETAIN_DAYS=30             # samples and scans; events are kept for a year
+EXTRA_OWN_SSIDS=""         # extra SSIDs to treat as yours, separated by |
+RESERVED_PAGES="user1.asp" # web UI slots this addon must never use
+DATA_DIR="/opt/var/lib/wifiinsight"
+SQLITE="/opt/bin/sqlite3"
+```
+
+Storage is about 21 MB for 30 days of 30-second samples on two radios.
+
+## What it changes on your router
+
+- **Nothing until the checks pass.** `install` first verifies the firmware, the Addons API, the Broadcom driver's airtime statistics, Entware with `sqlite3`, that history will live on a USB drive (not RAM or flash), JFFS space and a free page slot. If anything fails it stops without changing anything. Run `wifiinsight.sh check` to see the checklist on its own.
+- **JFFS (flash):** about 350 KB of addon files, written at install and when you save settings, never on a schedule. One tagged line is added to each of `/jffs/scripts/services-start` and `service-event`.
+- **Settings:** the only router setting it may change is *JFFS custom scripts and configs*, switched on if it's off.
+- **Wi-Fi:** it only reads the driver's counters, except for the neighbour scan. No wireless setting is ever changed.
+- **RAM only (gone after a reboot, recreated at boot):** the web page, the menu entry, the cron jobs and the JSON data files (about 0.8 MB). The menu is edited on a copy and swapped in only if the result is exactly the one expected line.
+- **Load:** the per-minute job takes about 0.5 s of CPU on a 2.1 GHz x86 core with 30 days of history (expect a few times that on the router's ARM cores), at the lowest CPU priority (`nice 19`). Each scan takes the radio off-channel briefly; see *How the numbers are made*.
+
+To remove everything: `wifiinsight.sh uninstall`. If the web UI ever looks wrong, a reboot clears all RAM-side changes.
+
+## License
+
+[MIT](LICENSE)
