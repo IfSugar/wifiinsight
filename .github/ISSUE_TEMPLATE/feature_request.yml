@@ -1,0 +1,86 @@
+name: ✨ Feature request
+description: Suggest a new feature or an improvement for WiFi Insight
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What's your idea?
+      description: A clear description of the feature you'd like to see.
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does it solve?
+      description: What are you trying to find out or do, and what makes it hard today?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part?
+      options:
+        - Insight (tiles, interference chart, spectrum heatmap, channel events)
+        - Site Survey
+        - Channel Statistics
+        - Troubleshooting
+        - Settings
+        - Support for more routers
+        - Install, update or amtm
+        - Something new
+    validations:
+      required: true
+
+  - type: dropdown
+    id: original
+    attributes:
+      label: Do ASUS's WiFi Insight or the old WiFi Radar have it?
+      description: WiFi Insight brings the dashboard from ASUS's newest routers, and the WiFi Radar views Merlin removed in 3004.388.8, to Merlin.
+      options:
+        - No, it's new
+        - Yes, ASUS's WiFi Insight has it
+        - Yes, the old WiFi Radar had it
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else?
+      description: Mockups, screenshots from other tools, how it could work, alternatives you've considered.
+
+  - type: dropdown
+    id: contribution
+    attributes:
+      label: Want to help?
+      options:
+        - "Yes, I'd like to build it"
+        - "I can test it on my router and give feedback"
+        - "Just sharing the idea"
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ### Want to build it?
+        After submitting, comment with how you would build it and wait for a maintainer to agree and assign the issue
+        to you before opening a pull request. Some ideas don't fit the project's rules. WiFi Insight never changes a
+        Wi-Fi setting, runs no server and opens no ports, keeps history on the USB drive (never on JFFS on a schedule),
+        and only uses the BusyBox commands Merlin includes
+        ([`.github/tests/merlin-applets.txt`](https://github.com/IfSugar/wifiinsight/blob/main/.github/tests/merlin-applets.txt)).
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Before submitting
+      options:
+        - label: I've searched the existing issues and this hasn't been requested yet.
+          required: true
+        - label: If I build this, I'll wait for a maintainer to agree and assign it before opening a pull request.
+          required: true

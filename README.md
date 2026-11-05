@@ -152,6 +152,12 @@ Storage is about 21 MB for 30 days of 30-second samples on two radios.
 
 To remove everything: `wifiinsight.sh uninstall`. If the web UI ever looks wrong, a reboot clears all RAM-side changes.
 
+## Issues and security
+
+Found a bug, have an idea, or run WiFi Insight on another router? [Open an issue](https://github.com/IfSugar/wifiinsight/issues/new/choose). The forms ask for the output of `check`, `status` and `debug`, which never include network names, MAC addresses or IP addresses. The **Router report** form works without installing anything, and it's how support for more models gets added.
+
+Please report security problems privately: see the [security policy](.github/SECURITY.md).
+
 ## Releasing
 
 1. Bump `VERSION` in `wifiinsight.sh` and the matching `wifiinsight-version:` line in `wifiinsight.asp`.

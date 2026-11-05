@@ -1,0 +1,173 @@
+name: 🧪 Install or setup problem
+description: The router check fails, install or update stops, or the WiFi Insight tab doesn't appear
+title: "[Setup] "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The router check (`wifiinsight.sh check`) says what's missing, and most setup problems have one of a few
+        causes. Please check these first: it's often the quickest fix.
+
+        **The check fails**
+        - **Entware or sqlite3:** amtm → `ep` installs Entware on a USB drive. Then run `opkg update && opkg install sqlite3-cli`.
+        - **History storage:** the USB drive must be mounted, with 50 MB free (ext4 is best). History is never kept in
+          RAM (lost at reboot) or on JFFS (flash wear).
+        - **No free addon page slot:** Merlin allows 20 addon pages, and other addons use them all. Removing one you
+          don't use frees a slot.
+        - **Two radios on one band, or four radios** (GT-AX11000, GT-AX11000 Pro, ZenWiFi Pro XT12, GT-AXE16000,
+          GT-BE98 Pro): expected for now; support is planned. Please share your router's details with the
+          [📡 Router report](https://github.com/IfSugar/wifiinsight/issues/new?template=router_report.yml) form instead.
+        - **Shell tools (BusyBox) or airtime statistics:** your firmware lacks something WiFi Insight uses. Please report
+          it here with the check output.
+
+        **Install or update stops**
+        - **A download fails** (curl error or HTTP code): the router has to reach `raw.githubusercontent.com`,
+          `api.github.com` and `cdn.jsdelivr.net`. Ad blockers on the router (Diversion, AdGuard Home) or a VPN client
+          can block them. Run the command again first: it retries each download.
+        - **JFFS custom scripts:** the installer turns them on. If it couldn't, enable *Administration → System → Enable
+          JFFS custom scripts and configs* and reboot.
+
+        **No tab, or an empty page**
+        - **No WiFi Insight tab under Wireless:** reload with **Ctrl+F5** / **Cmd+Shift+R** (browsers cache the menu),
+          or open the direct link the installer printed (`http://<router>/userN.asp`). After a reboot, the tab comes
+          back within a minute of the USB drive mounting. `wifiinsight.sh startup` adds it again.
+        - **The page opens, but the charts stay empty:** samples start once the router's clock has synced and the USB
+          drive is mounted. `wifiinsight.sh status` should say *Ready: yes* and show new samples every 30 seconds.
+
+        > [!CAUTION]
+        > **Never paste router passwords, your WAN IP address or DDNS name.** The commands this form asks for don't
+        > print network names, MAC addresses or IP addresses.
+
+  - type: dropdown
+    id: stage
+    attributes:
+      label: What doesn't work?
+      options:
+        - The router check fails
+        - Install stops with an error
+        - "`update` fails"
+        - The WiFi Insight tab doesn't appear under Wireless
+        - The tab disappears after a reboot or firmware update
+        - The page doesn't open, or looks broken
+        - The charts stay empty
+        - Uninstall leaves something behind
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happens?
+      description: What you did, and what you saw.
+    validations:
+      required: true
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you tried?
+      description: Which of the checks above, rebooting, running the command again, another browser, …
+
+  - type: markdown
+    attributes:
+      value: |
+        ## Your router
+
+  - type: input
+    id: model
+    attributes:
+      label: Router model
+      placeholder: "RT-AX86U"
+    validations:
+      required: true
+
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware version
+      description: At the top of every router page.
+      placeholder: "3004.388.12_2"
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: WiFi Insight version
+      description: "`wifiinsight.sh version`, or \"not installed\"."
+      placeholder: "1.0.9"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: how
+    attributes:
+      label: How did you install it?
+      options:
+        - The curl command from the README
+        - The install command from a release page
+        - Copied the files to the router (scp), without internet on the router
+        - Not installed yet
+    validations:
+      required: true
+
+  - type: input
+    id: addons
+    attributes:
+      label: Other addons
+      description: amtm, or scMerlin's Sitemap, lists them.
+      placeholder: "Diversion, Skynet, scMerlin, connmon, spdMerlin, YazFi"
+
+  - type: markdown
+    attributes:
+      value: |
+        ## What the router says
+
+  - type: textarea
+    id: check
+    attributes:
+      label: Output of the router check
+      description: "`/jffs/addons/wifiinsight/wifiinsight.sh check`, or `sh /tmp/wifiinsight.sh check` if it isn't installed."
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Output of the command that failed
+      description: Everything the install, update or other command printed.
+      render: shell
+
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of `/jffs/addons/wifiinsight/wifiinsight.sh status` (if installed)
+      render: shell
+
+  - type: textarea
+    id: browser-console
+    attributes:
+      label: Browser console errors (page problems)
+      description: Developer tools (F12, or ⌥⌘I on macOS) → Console, reload the page and copy the red errors.
+      render: text
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: For example of the Wireless menu, or the page.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Before submitting
+      options:
+        - label: I went through the checks at the top of this form.
+          required: true
+        - label: I've searched the existing issues and this hasn't been reported yet.
+          required: true
+        - label: I removed passwords, my WAN IP address and DDNS name from everything I pasted.
+          required: true

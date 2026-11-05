@@ -1,0 +1,106 @@
+name: 📡 Router report
+description: Tell us how WiFi Insight works on your model, or share your router's details so support can be added
+title: "[Router] "
+labels: ["router support"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        WiFi Insight is tested on an RT-AX86U. Every report from another model helps: it fills in the
+        [supported routers](https://github.com/IfSugar/wifiinsight#readme) list, and for routers the check refuses
+        for now (two radios on one band, or four radios), your router's details are what's needed to add support.
+
+        **You don't need to install anything to share the details.** Download the script and run its read-only
+        commands:
+        ```sh
+        curl -fsL --retry 3 "https://raw.githubusercontent.com/IfSugar/wifiinsight/main/wifiinsight.sh" -o /tmp/wifiinsight.sh
+        sh /tmp/wifiinsight.sh check
+        sh /tmp/wifiinsight.sh debug
+        ```
+        Neither command changes anything, and neither prints network names, MAC addresses or IP addresses.
+
+  - type: input
+    id: model
+    attributes:
+      label: Router model
+      placeholder: "GT-AX11000"
+    validations:
+      required: true
+
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware version
+      placeholder: "3004.388.12_2"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: result
+    attributes:
+      label: How does it work?
+      options:
+        - It works, and every page fills in
+        - It works, with problems (describe them below)
+        - The check refuses it
+        - Not installed, sharing the details so support can be added
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: WiFi Insight version
+      description: "`wifiinsight.sh version`, or \"not installed\"."
+      placeholder: "1.0.9"
+    validations:
+      required: true
+
+  - type: textarea
+    id: check
+    attributes:
+      label: Output of `check`
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: debug
+    attributes:
+      label: Output of `debug`
+      description: The model, firmware and each radio's band, channel and airtime counters.
+      render: shell
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: tried
+    attributes:
+      label: What did you try? (if installed)
+      options:
+        - label: The Insight charts and tiles fill in on every band
+        - label: The spectrum heatmap fills in after a scan, and Scan now finishes
+        - label: Site Survey lists nearby networks, with my own networks and mesh nodes marked
+        - label: Channel events appear after changing a channel
+        - label: The 6 GHz band shows up and fills in (tri-band routers)
+        - label: Settings save
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else?
+      description: Problems you noticed, AiMesh nodes, operation mode, anything unusual about the model (a V2 or regional variant, for example).
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: On Site Survey, crop or blur network names and MAC addresses.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Before submitting
+      options:
+        - label: I removed passwords, my WAN IP address and DDNS name, and cropped or blurred network names and MAC addresses in screenshots.
+          required: true

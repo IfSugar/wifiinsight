@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "📖 Read me: install, commands and how the numbers are made"
+    url: https://github.com/IfSugar/wifiinsight#readme
+    about: "Requirements, installing and updating, what each page shows, and how interference and channel load are measured"
+  - name: "🔒 Report a security problem privately"
+    url: https://github.com/IfSugar/wifiinsight/security/policy
+    about: "Please don't open a public issue for security problems"
+  - name: "🧰 Asuswrt-Merlin, amtm, Entware or another addon"
+    url: https://www.snbforums.com/forums/asuswrt-merlin-addons.60/
+    about: "Questions about the firmware, amtm, Entware or other addons belong on the SNBForums Asuswrt-Merlin AddOns forum"
