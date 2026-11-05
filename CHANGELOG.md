@@ -2,6 +2,12 @@
 
 What changed in each release of WiFi Insight. The release workflow copies a version's section into its GitHub release notes, so write for people running the addon.
 
+## 1.0.11
+
+- **Wi-Fi 7 routers:** the router check passes on the RT-BE88U, and should on the other Wi-Fi 7 models. Their newer driver reports airtime statistics in a different layout (`version: 4`, a `chspec` header, channels such as `36/160` instead of hex codes, and an extra `busy` column), which WiFi Insight now reads alongside the older one. Before, the check refused them with "No radio provides the airtime statistics". Thanks to the RT-BE88U owner who sent the output!
+- `update` and the install command now get the **latest release** instead of the newest code on GitHub, so unreleased changes never reach your router. `update` also won't replace a newer version with an older release unless you use `update force`.
+- The install command in the README now downloads from the latest release: `https://github.com/IfSugar/wifiinsight/releases/latest/download/wifiinsight.sh`.
+
 ## 1.0.10
 
 - `wifiinsight.sh debug` is now a complete report for bug reports and router reports. It starts with the WiFi Insight version, router model, firmware, BusyBox and sqlite3 versions and Smart Connect, and covers every radio, including a fourth one, with its band type and driver version. It still prints no network names, MAC addresses or IP addresses, and works without installing (`sh /tmp/wifiinsight.sh debug`).

@@ -1,118 +1,89 @@
-# On every push to main: check the addon, then tag and publish a GitHub release
-# named after VERSION in wifiinsight.sh (e.g. 1.0.3) if that tag doesn't exist yet.
-# To release: bump VERSION in wifiinsight.sh and the matching "wifiinsight-version:" line in
-# wifiinsight.asp, add a "## x.y.z" section to CHANGELOG.md, then push. The release notes are
-# that section (see .github/release-notes.sh); editing CHANGELOG.md later refreshes them.
+# Publishes a release only when a version tag (e.g. 1.0.11) is pushed, or created with
+# GitHub's "Draft a new release" page. Merging to main never releases.
+#
+# The tag must match VERSION in wifiinsight.sh and the page's "wifiinsight-version:" line,
+# and point at a commit on main. The checks run again first. The notes are the version's
+# CHANGELOG.md section (see .github/release-notes.sh), plus install instructions.
+#
+# Separately, when CHANGELOG.md changes on main, every existing release's notes are
+# refreshed to match it (this never creates a tag or a release).
 name: Release
 
 on:
   push:
+    tags: ['[0-9]+.[0-9]+.[0-9]+']
     branches: [main]
-    paths:
-      - wifiinsight.sh
-      - wifiinsight.asp
+    paths:   # only filters the branch pushes; tag pushes always run
       - CHANGELOG.md
       - .github/release-notes.sh
-      - .github/tests/**
-      - .github/workflows/release.yml
-  workflow_dispatch:
-
-permissions:
-  contents: write
 
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
+  checks:
+    if: startsWith(github.ref, 'refs/tags/')
+    uses: ./.github/workflows/checks.yml
+
   release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: checks
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 0 # need existing tags
+          fetch-depth: 0 # need the other tags and main
 
-      - name: Read and match versions
-        id: version
+      - name: The tag matches the version and is on main
         run: |
           sh_ver=$(sed -n 's/^VERSION="\([0-9][0-9.]*\)".*/\1/p' wifiinsight.sh | head -1)
           asp_ver=$(sed -n 's/.*wifiinsight-version: \([0-9][0-9.]*\) .*/\1/p' wifiinsight.asp | head -1)
-          echo "wifiinsight.sh: $sh_ver   wifiinsight.asp: $asp_ver"
-          if [ -z "$sh_ver" ]; then echo "::error file=wifiinsight.sh::No VERSION=\"x.y.z\" line"; exit 1; fi
-          if [ "$sh_ver" != "$asp_ver" ]; then
-            echo "::error file=wifiinsight.asp::Page is version '$asp_ver' but the script is '$sh_ver'. The installer needs them to match."
+          if [ "$TAG" != "$sh_ver" ] || [ "$TAG" != "$asp_ver" ]; then
+            echo "::error::Tag $TAG doesn't match the files (wifiinsight.sh: $sh_ver, wifiinsight.asp: $asp_ver). Bump VERSION in both, merge, then tag again."
             exit 1
           fi
-          echo "version=$sh_ver" >> "$GITHUB_OUTPUT"
-
-      - name: Check the script runs on a router shell
-        run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq busybox > /dev/null
-          busybox ash -n wifiinsight.sh   # the router's shell
-          sh -n wifiinsight.sh            # dash, a strict POSIX shell
-          if grep -n 'command -v' wifiinsight.sh; then
-            echo "::error file=wifiinsight.sh::Router BusyBox builds can lack 'command'; use have() instead."
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag $TAG points at a commit that isn't on main. Merge the pull request first, then tag main."
             exit 1
           fi
 
-      - name: Check the data files stay complete with a long history
-        # Runs the script with only Merlin's BusyBox commands, and [, printf and echo as separate
-        # programs (128 KB per argument), like the router: a day of samples must stream into the
-        # files, or the charts go empty.
+      - name: Publish the release
         run: |
-          sudo apt-get install -y -qq sqlite3 > /dev/null
-          bash .github/tests/large-history.sh
-
-      - name: Check the page's JavaScript
-        run: |
-          python3 - <<'EOF'
-          import re
-          page = open('wifiinsight.asp', encoding='utf-8').read()
-          js = '\n'.join(re.findall(r'<script type="text/javascript">(.*?)</script>', page, re.S))
-          js = re.sub(r'<%.*?%>', '{}', js)   # router template tags
-          open('/tmp/page.js', 'w', encoding='utf-8').write(js)
-          EOF
-          node --check /tmp/page.js
-          # The page code must stay inside its private (function () { ... })(); scope:
-          # a global $ or store() replaces the firmware's and breaks the router's menu.
-          if ! grep -q '^(function () {$' wifiinsight.asp || ! grep -q '^})();$' wifiinsight.asp; then
-            echo "::error file=wifiinsight.asp::Page code must stay wrapped in (function () { ... })(); so it can't clash with the firmware's globals."
-            exit 1
-          fi
-
-      - name: Changelog entry
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          if ! grep -q "^## $VERSION\( \|$\)" CHANGELOG.md; then
-            echo "::warning file=CHANGELOG.md::No '## $VERSION' section; the release notes will list commit titles instead."
-          fi
-
-      - name: Tag and publish the release (or refresh its notes)
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          prev=$(git tag --list --sort=-v:refname | grep -vx "$VERSION" | head -1 || true)
-          sh .github/release-notes.sh "$VERSION" "$prev" > /tmp/notes.md
+          prev=$(git tag --list --sort=-v:refname | awk -v v="$TAG" 'f { print; exit } $0 == v { f = 1 }')
+          sh .github/release-notes.sh "$TAG" "$prev" > /tmp/notes.md
           cat /tmp/notes.md
-          if git rev-parse -q --verify "refs/tags/$VERSION" > /dev/null; then
-            # Already released: keep its notes in step with CHANGELOG.md
-            gh release edit "$VERSION" --notes-file /tmp/notes.md
-            echo "Release $VERSION already exists; notes refreshed."
-            exit 0
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # Created on GitHub's release page: fill in the notes and attach the files.
+            gh release upload "$TAG" wifiinsight.sh wifiinsight.asp --clobber
+            gh release edit "$TAG" --title "WiFi Insight $TAG" --notes-file /tmp/notes.md
+            echo "Completed release $TAG"
+          else
+            gh release create "$TAG" wifiinsight.sh wifiinsight.asp --verify-tag \
+              --title "WiFi Insight $TAG" --notes-file /tmp/notes.md
+            echo "Released $TAG"
           fi
-          gh release create "$VERSION" wifiinsight.sh wifiinsight.asp \
-            --target "$GITHUB_SHA" \
-            --title "WiFi Insight $VERSION" \
-            --notes-file /tmp/notes.md
-          echo "Released $VERSION"
+
+  sync-notes:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Sync every release's notes with CHANGELOG.md
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          git fetch --tags --force --quiet
           tags=$(git tag --list --sort=-v:refname)
           for t in $tags; do
             grep -q "^## $t\( \|$\)" CHANGELOG.md || continue

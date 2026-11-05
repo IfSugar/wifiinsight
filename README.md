@@ -46,7 +46,7 @@ Time ranges: 10 minutes, 1 hour, 12 hours, 1 day, 7 days and 30 days. Short rang
 Over SSH on the router:
 
 ```sh
-curl -fsL --retry 3 "https://raw.githubusercontent.com/IfSugar/wifiinsight/main/wifiinsight.sh" -o /tmp/wifiinsight.sh && sh /tmp/wifiinsight.sh install
+curl -fsL --retry 3 "https://github.com/IfSugar/wifiinsight/releases/latest/download/wifiinsight.sh" -o /tmp/wifiinsight.sh && sh /tmp/wifiinsight.sh install
 ```
 
 <details>
@@ -75,7 +75,7 @@ Open **Wireless → WiFi Insight** (the tab after *Professional*). The interfere
 
 If the tab doesn't show up, reload the router page with **Ctrl+F5** (Windows) or **Cmd+Shift+R** (Mac): browsers cache the router's menu. The installer also prints a direct link to the page.
 
-**Updating:** run `/jffs/addons/wifiinsight/wifiinsight.sh update`. It asks GitHub for the newest commit, and if that's a newer version it installs it over the old one, keeping your settings, history and page slot. `update force` reinstalls the current version. Every version is also published under [Releases](https://github.com/IfSugar/wifiinsight/releases), with an install command pinned to that version.
+**Updating:** run `/jffs/addons/wifiinsight/wifiinsight.sh update`. It asks GitHub for the latest release, and if that's a newer version it installs it over the old one, keeping your settings, history and page slot. `update force` reinstalls the latest release. Only published releases are installed, never unreleased work. Every version is listed under [Releases](https://github.com/IfSugar/wifiinsight/releases), with an install command pinned to that version.
 
 **amtm:** WiFi Insight isn't in amtm's built-in list, but you can launch it from amtm by adding `/jffs/addons/wifiinsight/wifiinsight.sh` as a personal script, with `status` as the argument.
 
@@ -160,11 +160,15 @@ Please report security problems privately: see the [security policy](.github/SEC
 
 ## Releasing
 
-1. Bump `VERSION` in `wifiinsight.sh` and the matching `wifiinsight-version:` line in `wifiinsight.asp`.
-2. Add a `## x.y.z` section to [CHANGELOG.md](CHANGELOG.md) saying what changed, written for people running the addon.
-3. Push to `main`.
+Changes go in through pull requests. The [Checks workflow](.github/workflows/checks.yml) runs on every pull request and push: the script and page versions match, the script parses in BusyBox `ash` (the router's shell), both layouts of the driver's airtime statistics parse ([`.github/tests/chanim-formats.sh`](.github/tests/chanim-formats.sh)), a full day of history exports completely on a shell set up like Merlin's, with only the BusyBox commands Merlin includes ([`.github/tests/large-history.sh`](.github/tests/large-history.sh)), and the page's JavaScript is valid. Merging never releases anything.
 
-The [Release workflow](.github/workflows/release.yml) checks that the two versions match, that the script parses in BusyBox `ash` (the router's shell), that a full day of history exports completely on a shell set up like Merlin's, with only the BusyBox commands Merlin includes ([`.github/tests/large-history.sh`](.github/tests/large-history.sh)) and that the page's JavaScript is valid. It then tags the commit with the version (for example `1.0.5`) and publishes a GitHub release with both files attached. The release notes are that version's changelog section plus install instructions. Editing the changelog later refreshes the notes of the current release.
+To release:
+
+1. In the pull request, bump `VERSION` in `wifiinsight.sh` and the matching `wifiinsight-version:` line in `wifiinsight.asp`, and add a `## x.y.z` section to [CHANGELOG.md](CHANGELOG.md) saying what changed, written for people running the addon.
+2. Merge it.
+3. Tag `main` with the version, either with `git tag 1.0.11 origin/main && git push origin 1.0.11`, or on GitHub under **Releases → Draft a new release**: type the version as a new tag, target `main`, and publish (leave the notes empty).
+
+The [Release workflow](.github/workflows/release.yml) then checks that the tag matches both files and is on `main`, runs the checks again, and publishes the release with both files attached and that version's changelog section as notes. `update` on routers and the install command only ever install the latest release. Editing the changelog later refreshes the notes of existing releases.
 
 ## License
 
