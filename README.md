@@ -118,7 +118,7 @@ Cron jobs: `wifiinsight_collect` (every minute), `wifiinsight_scan` (scan interv
 /jffs/addons/wifiinsight/wifiinsight.sh check       # can this router run it? (changes nothing)
 /jffs/addons/wifiinsight/wifiinsight.sh status      # what's running, sample counts, recent events
 /jffs/addons/wifiinsight/wifiinsight.sh scan        # scan now
-/jffs/addons/wifiinsight/wifiinsight.sh debug       # raw driver output, useful for bug reports
+/jffs/addons/wifiinsight/wifiinsight.sh debug       # router, firmware and driver details for issues (no network names or addresses)
 /jffs/addons/wifiinsight/wifiinsight.sh startup     # re-apply config, cron and the web page
 /jffs/addons/wifiinsight/wifiinsight.sh update      # install the latest version from GitHub
 /jffs/addons/wifiinsight/wifiinsight.sh version     # print the installed version

@@ -2,6 +2,11 @@
 
 What changed in each release of WiFi Insight. The release workflow copies a version's section into its GitHub release notes, so write for people running the addon.
 
+## 1.0.10
+
+- `wifiinsight.sh debug` is now a complete report for bug reports and router reports. It starts with the WiFi Insight version, router model, firmware, BusyBox and sqlite3 versions and Smart Connect, and covers every radio, including a fourth one, with its band type and driver version. It still prints no network names, MAC addresses or IP addresses, and works without installing (`sh /tmp/wifiinsight.sh debug`).
+- New issue forms for bug reports, install or setup problems, router reports and feature requests, plus a security policy for reporting problems privately.
+
 ## 1.0.9
 
 - **Fixed: charts went empty after about 9 hours of history.** The Insight and Troubleshooting charts and the tiles showed "No samples in this range yet", and `update` printed `[: Argument list too long`. On Merlin, the shell can hand at most 128 KB to some of the commands the script uses, and a day of samples is about 350 KB, so the data was dropped from the file the page reads. The script now writes the data files without going through that limit. Your history was never lost: once you update, the charts fill straight away.

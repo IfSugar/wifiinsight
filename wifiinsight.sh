@@ -13,7 +13,7 @@
 #              -o /tmp/wifiinsight.sh && sh /tmp/wifiinsight.sh install
 ###############################################################################
 
-VERSION="1.0.9"
+VERSION="1.0.10"
 NAME="wifiinsight"
 TITLE="WiFi Insight"
 
@@ -874,9 +874,7 @@ check_support() {
 
 	# Firmware: Asuswrt-Merlin with the Addons API (custom pages, settings, service events)
 	if [ "$(uname -o 2>/dev/null)" = "ASUSWRT-Merlin" ]; then
-		fw=$(nvram get buildno); ext=$(nvram get extendno); fv=$(nvram get firmver | tr -d .)
-		[ -n "$ext" ] && fw="${fw}_$ext"; [ -n "$fv" ] && fw="$fv.$fw"
-		ck_ok "Asuswrt-Merlin $fw"
+		ck_ok "Asuswrt-Merlin $(fw_version)"
 	else
 		ck_fail "Not Asuswrt-Merlin firmware. Stock ASUS firmware can't run addons."
 	fi
@@ -1141,15 +1139,29 @@ status() {
 	fi
 }
 
+fw_version() {   # e.g. 3004.388.12_2
+	fw=$(nvram get buildno); ext=$(nvram get extendno); fv=$(nvram get firmver | tr -d .)
+	[ -n "$ext" ] && fw="${fw}_$ext"; [ -n "$fv" ] && fw="$fv.$fw"
+	echo "$fw"
+}
+
+# Everything a bug report or router report needs, and nothing personal: no network names, no MAC
+# addresses, no IP addresses. Works without installing (sh /tmp/wifiinsight.sh debug).
 debug() {
-	for r in $(radios); do
+	say "$TITLE $VERSION"
+	say "Router:      $(nvram get productid) $(nvram get odmpid)  firmware $(fw_version)  $(uname -m)"
+	say "BusyBox:     $(busybox 2>/dev/null | head -1 | cut -d' ' -f2)   sqlite3: $("$SQLITE" --version 2>/dev/null | cut -d' ' -f1)"
+	say "Smart Connect: $(nvram get smart_connect_x)   wl_ifnames: $(nvram get wl_ifnames)"
+	say "acsd: $(pidof acsd2 acsd || echo 'not running')"
+	for r in 0 1 2 3; do
 		ifc=$(nvram get wl${r}_ifname)
-		say "===== wl$r ($ifc) ====="
+		[ -n "$ifc" ] || continue
+		say "===== wl$r ($ifc)  nband=$(nvram get wl${r}_nband) nband_type=$(nvram get wl${r}_nband_type) ====="
+		wl -i "$ifc" ver 2>/dev/null | sed -n '2p'
 		wl -i "$ifc" isup; wl -i "$ifc" chanspec; wl -i "$ifc" noise
 		wl -i "$ifc" chanim_stats; wl -i "$ifc" dfs_status; wl -i "$ifc" channels
 		say "nvram chanspec=$(nvram get wl${r}_chanspec) bw=$(nvram get wl${r}_bw)"
 	done
-	say "acsd: $(pidof acsd2 acsd || echo 'not running')"
 }
 
 case "$1" in
