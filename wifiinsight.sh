@@ -904,20 +904,28 @@ check_support() {
 		good=0; seen=0; off=0; bands=""
 		for r in $(radios); do
 			ifc=$(nvram get wl${r}_ifname); seen=1
-			hex=$(wl -i "$ifc" chanspec 2>/dev/null | sed -n 's/.*(\(0x[0-9a-fA-F]*\)).*/\1/p')
+			cl=$(wl -i "$ifc" chanspec 2>/dev/null); cs=${cl%% *}
+			hex=$(printf '%s\n' "$cl" | sed -n 's/.*(\(0x[0-9a-fA-F]*\)).*/\1/p')
 			case "$([ -n "$hex" ] && band_of_hex "$hex")" in 2g) b="2.4 GHz" ;; 5g) b="5 GHz" ;; 6g) b="6 GHz" ;; *) b="radio $r" ;; esac
 			bands="$bands|$b"
 			if [ "$(wl -i "$ifc" isup 2>/dev/null)" != "1" ]; then
 				ck_warn "$b ($ifc) is switched off. It will be monitored once it's on."
 				off=$((off + 1)); continue
 			fi
-			hdr=$(wl -i "$ifc" chanim_stats 2>/dev/null | grep -E '^(chanspec|chspec)[[:space:]]' | head -1)
+			out=$(wl -i "$ifc" chanim_stats 2>&1)
+			hdr=$(printf '%s\n' "$out" | grep -E '^(chanspec|chspec)[[:space:]]' | head -1)
 			missing=""
 			for col in tx inbss obss nocat idle; do
 				case " $(printf '%s' "$hdr" | tr -s ' \t' '  ') " in *" $col "*) ;; *) missing="$missing $col" ;; esac
 			done
-			if [ -z "$hdr" ]; then ck_warn "$b ($ifc) doesn't report airtime statistics (wl chanim_stats)."
+			if [ -z "$hdr" ]; then
+				said=$(printf '%s\n' "$out" | grep -v '^version' | grep -v '^$' | head -1 | cut -c1-60)
+				ck_warn "$b ($ifc) doesn't report airtime statistics (wl chanim_stats${said:+ said: $said})."
 			elif [ -n "$missing" ]; then ck_warn "$b ($ifc) airtime statistics lack:$missing"
+			# Read a row exactly as sampling will, so a layout it can't read is caught here,
+			# not by charts that stay empty after installing.
+			elif ! printf '%s\n' "$out" | parse_chanim "$cs" "$hex" > /dev/null; then
+				ck_warn "$b ($ifc) reports airtime statistics in a layout WiFi Insight can't read yet. Please report it with the output of 'debug'."
 			else ck_ok "$b ($ifc) airtime statistics"; good=$((good + 1))
 			fi
 		done
