@@ -2,6 +2,13 @@
 
 What changed in each release of WiFi Insight. The release workflow copies a version's section into its GitHub release notes, so write for people running the addon.
 
+## 1.0.11
+
+- **Routers on Merlin 3006.102** (the GT-AX6000, RT-AX86U Pro, RT-AX88U Pro and the Wi-Fi 7 models): their newer driver prints airtime statistics in a newer layout (`version: 4`, channels such as `100/80` instead of hex codes, an extra `busy` column, and on Wi-Fi 7 models a `chspec` header). On the RT-BE88U the router check refused it ("No radio provides the airtime statistics"); on the GT-AX6000 the check passed, but no samples were recorded, so the charts stayed empty. WiFi Insight now reads every layout. Thanks to the RT-BE88U and GT-AX6000 owners who sent their output!
+- The router check now reads a row of airtime statistics exactly as sampling does, so a layout WiFi Insight can't read is reported at install instead of showing up as empty charts. When the driver answers with an error, the check quotes it.
+- `update` and the install command now get the **latest release** instead of the newest code on GitHub, so unreleased changes never reach your router. `update` also won't replace a newer version with an older release unless you use `update force`.
+- The install command in the README now downloads from the latest release: `https://github.com/IfSugar/wifiinsight/releases/latest/download/wifiinsight.sh`.
+
 ## 1.0.10
 
 - `wifiinsight.sh debug` is now a complete report for bug reports and router reports. It starts with the WiFi Insight version, router model, firmware, BusyBox and sqlite3 versions and Smart Connect, and covers every radio, including a fourth one, with its band type and driver version. It still prints no network names, MAC addresses or IP addresses, and works without installing (`sh /tmp/wifiinsight.sh debug`).

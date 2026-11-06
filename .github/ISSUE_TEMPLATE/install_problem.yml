@@ -22,8 +22,8 @@ body:
           it here with the check output.
 
         **Install or update stops**
-        - **A download fails** (curl error or HTTP code): the router has to reach `raw.githubusercontent.com`,
-          `api.github.com` and `cdn.jsdelivr.net`. Ad blockers on the router (Diversion, AdGuard Home) or a VPN client
+        - **A download fails** (curl error or HTTP code): the router has to reach `github.com`,
+          `api.github.com`, GitHub's download hosts (`*.githubusercontent.com`) and `cdn.jsdelivr.net`. Ad blockers on the router (Diversion, AdGuard Home) or a VPN client
           can block them. Run the command again first: it retries each download.
         - **JFFS custom scripts:** the installer turns them on. If it couldn't, enable *Administration → System → Enable
           JFFS custom scripts and configs* and reboot.

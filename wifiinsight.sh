@@ -9,11 +9,11 @@
 #  Usage: wifiinsight.sh install | update [force] | uninstall [--keep-data] |
 #                        status | startup | collect | scan | export | prune | debug
 #
-#  Install:  curl -fsL --retry 3 https://raw.githubusercontent.com/IfSugar/wifiinsight/main/wifiinsight.sh \
+#  Install:  curl -fsL --retry 3 https://github.com/IfSugar/wifiinsight/releases/latest/download/wifiinsight.sh \
 #              -o /tmp/wifiinsight.sh && sh /tmp/wifiinsight.sh install
 ###############################################################################
 
-VERSION="1.0.10"
+VERSION="1.0.11"
 NAME="wifiinsight"
 TITLE="WiFi Insight"
 
@@ -162,13 +162,26 @@ EOF
 }
 
 # ---- sampling ---------------------------------------------------------------
-# Print: hex tx inbss obss nocat nopkt doze txop goodtx badtx glitch badplcp
+# Print: chanspec tx inbss obss nocat nopkt doze txop goodtx badtx glitch badplcp
 #        knoise idle timestamp   (columns located by header name)
+# Two layouts exist. Wi-Fi 6 drivers ("version: 3"): a "chanspec" header and hex chanspecs
+# (0x1006). Wi-Fi 7 drivers ("version: 4"): a "chspec" header, readable chanspecs (6, 36/160),
+# "timestamps", and an extra "busy" column. Prefers the row for the radio's current chanspec
+# ($1 readable, $2 hex) when there are several; otherwise the last one.
 parse_chanim() {
-	awk '
-	$1 == "chanspec" { for (i = 1; i <= NF; i++) col[$i] = i; hdr = 1; next }
-	hdr && $1 ~ /^0x/ { line = $0 }
+	awk -v cs="$1" -v hex="$2" '
+	$1 == "chanspec" || $1 == "chspec" {
+		for (i = 1; i <= NF; i++) col[$i] = i
+		col["chanspec"] = 1
+		if (!("timestamp" in col) && ("timestamps" in col)) col["timestamp"] = col["timestamps"]
+		ncol = NF; hdr = 1; next
+	}
+	hdr && NF >= ncol - 1 && $1 !~ /^(version|state)/ {
+		line = $0
+		if ((cs != "" && $1 == cs) || (hex != "" && tolower($1) == tolower(hex))) cur = $0
+	}
 	END {
+		if (cur != "") line = cur
 		if (line == "") exit 1
 		sub(/^[ \t]+/, "", line)
 		split(line, v, /[ \t]+/)
@@ -193,7 +206,7 @@ sample_all() {
 		cs=${csl%% *}
 		hex=$(printf '%s' "$csl" | sed -n 's/.*(\(0x[0-9a-fA-F]*\)).*/\1/p')
 		[ -n "$hex" ] || continue
-		p=$(wl -i "$ifc" chanim_stats 2>/dev/null | parse_chanim) || continue
+		p=$(wl -i "$ifc" chanim_stats 2>/dev/null | parse_chanim "$cs" "$hex") || continue
 		set -- $p
 		[ $# -ge 15 ] || continue
 		shift   # drop chanim's own chanspec; use the live one
@@ -891,20 +904,28 @@ check_support() {
 		good=0; seen=0; off=0; bands=""
 		for r in $(radios); do
 			ifc=$(nvram get wl${r}_ifname); seen=1
-			hex=$(wl -i "$ifc" chanspec 2>/dev/null | sed -n 's/.*(\(0x[0-9a-fA-F]*\)).*/\1/p')
+			cl=$(wl -i "$ifc" chanspec 2>/dev/null); cs=${cl%% *}
+			hex=$(printf '%s\n' "$cl" | sed -n 's/.*(\(0x[0-9a-fA-F]*\)).*/\1/p')
 			case "$([ -n "$hex" ] && band_of_hex "$hex")" in 2g) b="2.4 GHz" ;; 5g) b="5 GHz" ;; 6g) b="6 GHz" ;; *) b="radio $r" ;; esac
 			bands="$bands|$b"
 			if [ "$(wl -i "$ifc" isup 2>/dev/null)" != "1" ]; then
 				ck_warn "$b ($ifc) is switched off. It will be monitored once it's on."
 				off=$((off + 1)); continue
 			fi
-			hdr=$(wl -i "$ifc" chanim_stats 2>/dev/null | grep '^chanspec' | head -1)
+			out=$(wl -i "$ifc" chanim_stats 2>&1)
+			hdr=$(printf '%s\n' "$out" | grep -E '^(chanspec|chspec)[[:space:]]' | head -1)
 			missing=""
 			for col in tx inbss obss nocat idle; do
 				case " $(printf '%s' "$hdr" | tr -s ' \t' '  ') " in *" $col "*) ;; *) missing="$missing $col" ;; esac
 			done
-			if [ -z "$hdr" ]; then ck_warn "$b ($ifc) doesn't report airtime statistics (wl chanim_stats)."
+			if [ -z "$hdr" ]; then
+				said=$(printf '%s\n' "$out" | grep -v '^version' | grep -v '^$' | head -1 | cut -c1-60)
+				ck_warn "$b ($ifc) doesn't report airtime statistics (wl chanim_stats${said:+ said: $said})."
 			elif [ -n "$missing" ]; then ck_warn "$b ($ifc) airtime statistics lack:$missing"
+			# Read a row exactly as sampling will, so a layout it can't read is caught here,
+			# not by charts that stay empty after installing.
+			elif ! printf '%s\n' "$out" | parse_chanim "$cs" "$hex" > /dev/null; then
+				ck_warn "$b ($ifc) reports airtime statistics in a layout WiFi Insight can't read yet. Please report it with the output of 'debug'."
 			else ck_ok "$b ($ifc) airtime statistics"; good=$((good + 1))
 			fi
 		done
@@ -998,10 +1019,10 @@ install() {
 		if ! asp_matches "$asp"; then   # missing, or left over from another version
 			say "Downloading the web page from GitHub..."
 			asp="$TMPD/$NAME.asp.dl"; got=0
-			# 1) the release tag for this exact version (tags never change), 2) main, 3) the newest commit
+			# 1) the release tag for this exact version (tags never change), 2) main, 3) the latest release
 			if [ -n "$WI_RAW_URL" ]; then bases="$RAW_URL"; else bases="$RAW_BASE/$VERSION $RAW_URL"; fi
 			for base in $bases release; do
-				[ "$base" = release ] && base=$(release_url)
+				[ "$base" = release ] && { base=$(release_url); [ -n "$base" ] || continue; }
 				if fetch "$base/$NAME.asp" "$asp" quiet; then
 					asp_matches "$asp" && { got=1; break; }
 				fi
@@ -1073,23 +1094,35 @@ fetch() {
 	rm -f "$2" 2>/dev/null; return 1
 }
 
-# Raw URL of the newest commit on main. raw.githubusercontent.com caches files for up to
-# 5 minutes and ignores query strings, but a commit-pinned URL is always exact and fresh,
-# and keeps the script and the page from the same commit. Falls back to main.
+# The newest published release's version (its tag), so update and install only ever get a
+# released version, never work merged to main but not yet released. Asks GitHub's API first,
+# then github.com's releases/latest redirect (no API rate limit). Prints nothing if both fail.
+latest_tag() {
+	t=$(curl -fsL --retry 2 --connect-timeout 15 -H 'Accept: application/vnd.github+json' \
+		"https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
+		| sed -n 's/.*"tag_name": *"\([0-9][0-9.]*\)".*/\1/p' | head -1)
+	[ -n "$t" ] || t=$(curl -fsI --retry 2 --connect-timeout 15 -o /dev/null -w '%{redirect_url}' \
+		"https://github.com/$REPO/releases/latest" 2>/dev/null \
+		| sed -n 's#.*/releases/tag/\([0-9][0-9.]*\)$#\1#p')
+	echo "$t"
+}
+# Raw URL of the files in the newest release (a tag: the script and the page always match).
 release_url() {
 	[ -n "$WI_RAW_URL" ] && { echo "$RAW_URL"; return; }
-	sha=$(curl -fsS --retry 2 --connect-timeout 15 -H 'Accept: application/vnd.github.sha' \
-		"https://api.github.com/repos/$REPO/commits/main" 2>/dev/null | cut -c1-40 | head -1)
-	case "$sha" in
-		*[!0-9a-f]*|'') echo "$RAW_URL" ;;
-		*) if [ ${#sha} -eq 40 ]; then echo "$RAW_BASE/$sha"; else echo "$RAW_URL"; fi ;;
-	esac
+	t=$(latest_tag); [ -n "$t" ] && echo "$RAW_BASE/$t"
+}
+# True if version $1 is newer than $2 (1.0.10 > 1.0.9).
+ver_gt() {
+	awk -v a="$1" -v b="$2" 'BEGIN { n = split(a, x, "."); m = split(b, y, "."); if (m > n) n = m
+		for (i = 1; i <= n; i++) { if (x[i] + 0 > y[i] + 0) exit 0; if (x[i] + 0 < y[i] + 0) exit 1 }
+		exit 1 }'
 }
 
 update() {   # [force]  fetch the latest release from GitHub and reinstall over this one
 	dl="$TMPD/update.$$"; rm -rf "$dl"; mkdir -p "$dl" || die "Couldn't create $dl"
 	say "Checking GitHub for updates..."
 	rel=$(release_url)
+	[ -n "$rel" ] || { rm -rf "$dl"; die "Couldn't find the latest release on GitHub (no connection to github.com?); nothing was changed."; }
 	fetch "$rel/$NAME.sh" "$dl/$NAME.sh" || { rm -rf "$dl"; die "Couldn't download the update; nothing was changed."; }
 	new=$(sed -n 's/^VERSION="\([0-9][0-9.]*\)".*/\1/p' "$dl/$NAME.sh" | head -1)
 	if [ -z "$new" ] || ! sh -n "$dl/$NAME.sh" 2>/dev/null; then
@@ -1097,6 +1130,9 @@ update() {   # [force]  fetch the latest release from GitHub and reinstall over 
 	fi
 	if [ "$new" = "$VERSION" ] && [ "$1" != "force" ]; then
 		rm -rf "$dl"; say "Already up to date ($VERSION)."; return 0
+	fi
+	if ver_gt "$VERSION" "$new" && [ "$1" != "force" ]; then
+		rm -rf "$dl"; say "This is $VERSION, newer than the latest release ($new). Nothing was changed; 'update force' installs $new."; return 0
 	fi
 	if ! fetch "$rel/$NAME.asp" "$dl/$NAME.asp" || ! grep -q "wifiinsight-version: $new " "$dl/$NAME.asp"; then
 		rm -rf "$dl"; die "Couldn't download the matching web page; nothing was changed."

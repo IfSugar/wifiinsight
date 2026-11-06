@@ -13,7 +13,7 @@ body:
         **You don't need to install anything to share the details.** Download the script and run its read-only
         commands:
         ```sh
-        curl -fsL --retry 3 "https://raw.githubusercontent.com/IfSugar/wifiinsight/main/wifiinsight.sh" -o /tmp/wifiinsight.sh
+        curl -fsL --retry 3 "https://github.com/IfSugar/wifiinsight/releases/latest/download/wifiinsight.sh" -o /tmp/wifiinsight.sh
         sh /tmp/wifiinsight.sh check
         sh /tmp/wifiinsight.sh debug
         ```
