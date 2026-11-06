@@ -39,7 +39,7 @@ body:
     id: original
     attributes:
       label: Do ASUS's WiFi Insight or the old WiFi Radar have it?
-      description: WiFi Insight brings the dashboard from ASUS's newest routers, and the WiFi Radar views Merlin removed in 3004.388.8, to Merlin.
+      description: WiFi Insight brings the dashboard from ASUS's newest routers to Merlin, with views like the old WiFi Radar's (rebuilt from scratch; Merlin removed WiFi Radar itself in 3004.388.8).
       options:
         - No, it's new
         - Yes, ASUS's WiFi Insight has it
