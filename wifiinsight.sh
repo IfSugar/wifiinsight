@@ -13,7 +13,7 @@
 #              -o /tmp/wifiinsight.sh && sh /tmp/wifiinsight.sh install
 ###############################################################################
 
-VERSION="1.0.11"
+VERSION="1.1.0"
 NAME="wifiinsight"
 TITLE="WiFi Insight"
 
@@ -46,10 +46,21 @@ SAMPLE_INTERVAL=30      # seconds between interference samples: 30 or 60
 SCAN_INTERVAL=30        # minutes between neighbour scans (0 = never)
 RETAIN_DAYS=30          # history kept for samples and scans
 EXTRA_OWN_SSIDS=""      # extra SSIDs to treat as yours, separated by |
+COLLECTION=on           # on, paused (no scheduled scans) or off (no samples or scans)
+QUIET=""                # quiet hours, no scheduled scans: see quiet_at() below
 DATA_DIR="/opt/var/lib/$NAME"
 SQLITE="/opt/bin/sqlite3"
 [ -f "$CONF" ] && . "$CONF"
 DB="$DATA_DIR/$NAME.db"
+case "$COLLECTION" in on|paused|off) ;; *) COLLECTION=on ;; esac
+case "$QUIET" in *[A-F]*) QUIET=$(printf '%s' "$QUIET" | tr ABCDEF abcdef) ;; esac
+QUIET_BAD=""
+case "${#QUIET}:$QUIET" in
+	0:) ;;
+	84:*[!0-9a-f]*) QUIET_BAD=1; QUIET="" ;;
+	84:*) case "$QUIET" in *[!0]*) ;; *) QUIET="" ;; esac ;;   # all zeros: none
+	*) QUIET_BAD=1; QUIET="" ;;
+esac
 
 # ---- helpers ---------------------------------------------------------------
 log() { logger -t "$NAME" "$*" 2>/dev/null; }
@@ -494,7 +505,11 @@ scan_next_seq() {
 	SCAN_SEQ=$(( $(cat "$TMPD/scan_seq" 2>/dev/null || echo 0) + 1 )); echo "$SCAN_SEQ" > "$TMPD/scan_seq"
 }
 
-scan() {
+scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in quiet hours
+	if [ "$1" = "--delay" ]; then
+		[ "$COLLECTION" = on ] || return 0
+		if quiet_now; then log "scheduled scan skipped: quiet hours"; return 0; fi
+	fi
 	if ! ready; then
 		scan_next_seq; scan_state error "" "Not ready: the clock isn't synced or the USB drive isn't mounted."
 		say "Not ready (NTP not synced or USB storage missing)."; return 1
@@ -550,6 +565,62 @@ scanning() {
 	[ $(( $(now) - ft )) -lt 300 ]
 }
 
+# ---- quiet hours ----------------------------------------------------------------
+# QUIET marks the half hours of the week with no scheduled scans: 336 bits, Monday 00:00-00:30
+# first and Sunday 23:30-24:00 last, four to a hex digit, most significant bit first. So each
+# day is 12 digits, and each digit is 2 hours. Times are the router's local time. Empty = none.
+quiet_at() {   # weekday (0 = Sunday, as date +%w) hour minute -> true if that half hour is quiet
+	[ -n "$QUIET" ] || return 1
+	awk -v q="$QUIET" -v w="$1" -v h="${2#0}" -v m="${3#0}" 'BEGIN {
+		s = ((w + 6) % 7) * 48 + h * 2 + (m >= 30)
+		d = index("0123456789abcdef", substr(q, int(s / 4) + 1, 1)) - 1
+		exit (int(d / substr("8421", s % 4 + 1, 1)) % 2) ? 0 : 1
+	}'
+}
+quiet_now() { set -- $(date '+%w %H %M'); quiet_at "$1" "$2" "$3"; }
+
+quiet_text() {   # e.g. "Mon-Fri 18:00-24:00; Sat-Sun 09:00-12:00, 18:00-24:00"
+	[ -n "$QUIET" ] || { say none; return 0; }
+	awk -v q="$QUIET" 'function hm(s) { return sprintf("%02d:%02d", int(s / 2), s % 2 * 30) }
+	BEGIN {
+		split("Mon Tue Wed Thu Fri Sat Sun", D, " ")
+		for (d = 0; d < 7; d++) {
+			r = ""; st = -1
+			for (s = 0; s <= 48; s++) {
+				on = 0
+				if (s < 48) {
+					i = d * 48 + s
+					x = index("0123456789abcdef", substr(q, int(i / 4) + 1, 1)) - 1
+					on = int(x / substr("8421", i % 4 + 1, 1)) % 2
+				}
+				if (on && st < 0) st = s
+				if (!on && st >= 0) { r = r (r == "" ? "" : ", ") hm(st) "-" hm(s); st = -1 }
+			}
+			R[d] = r
+		}
+		out = ""; d = 0
+		while (d < 7) {
+			e = d
+			while (e < 6 && R[e + 1] == R[d]) e++
+			if (R[d] != "") out = out (out == "" ? "" : "; ") (e > d ? D[d + 1] "-" D[e + 1] : D[d + 1]) " " R[d]
+			d = e + 1
+		}
+		print (out == "" ? "none" : out)
+	}'
+}
+
+collection_text() {
+	case "$COLLECTION" in
+		off)    say "off: no samples or scheduled scans (Scan now still works)" ;;
+		paused) say "scans paused: samples every $SAMPLE_INTERVAL s, no scheduled scans (Scan now still works)" ;;
+		*)      if [ "$SCAN_INTERVAL" -gt 0 ] 2>/dev/null; then
+				say "on: samples every $SAMPLE_INTERVAL s, neighbour scans every $SCAN_INTERVAL min$( [ -n "$QUIET" ] && printf ' outside quiet hours')"
+			else
+				say "on: samples every $SAMPLE_INTERVAL s, neighbour scans off"
+			fi ;;
+	esac
+}
+
 # ---- export (JSON files read by the web page) -------------------------------
 # httpd runs .htm/.js files through its <% %> / <# #> template engine, so no '<' may reach
 # the page raw. In this JSON '<' can only occur inside strings (SSIDs), where < is identical.
@@ -593,6 +664,7 @@ export_live() {
 			"$VERSION" "$t" "$SAMPLE_INTERVAL" "$SCAN_INTERVAL" "$RETAIN_DAYS"
 		printf '"data_dir":"%s","db_bytes":%s,"own_ssids":[%s],"extra_own":"%s",' \
 			"$(js "$DATA_DIR")" "$(jnum "$dbb")" "$ownj" "$(js "$EXTRA_OWN_SSIDS")"
+		printf '"collection":"%s","quiet":"%s","tz_off":%s,' "$COLLECTION" "$QUIET" "$(tz_off)"
 		printf '"radios":%s,"samples":' "$(radios_json)"
 		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(ts,obss,nocat,tx,inbss,idle,glitch,noise,ctl,width,center,nopkt,doze,txop,goodtx,badtx,badplcp,knoise)) AS a FROM (SELECT * FROM samples WHERE ts>=$since ORDER BY band, ts) GROUP BY band);"
 		printf ',"events":'
@@ -651,6 +723,7 @@ export_all() { export_live; export_week; export_month; export_scans; }
 
 # ---- scheduled entry points --------------------------------------------------
 collect() {
+	[ "$COLLECTION" = off ] && return 0   # return, not exit: install calls this too
 	ready || exit 0
 	lowprio
 	mkdir -p "$TMPD"
@@ -775,9 +848,13 @@ web_assets() {
 	[ -f "$ADDON_DIR/chart.umd.min.js" ] && cp -f "$ADDON_DIR/chart.umd.min.js" "$wd/chart.umd.min.js"
 }
 
+# Collection on: sample, scan and prune. Scans paused: no scan job. Off: no jobs at all, so
+# history stays exactly as it was until collection is switched back on.
+# Quiet hours don't change the jobs: a scheduled scan checks them when it starts.
 cron_add() {
+	if [ "$COLLECTION" = off ]; then cron_del; return 0; fi
 	cru a "${NAME}_collect" "* * * * * $SCRIPT collect"
-	if [ "$SCAN_INTERVAL" -gt 0 ] 2>/dev/null; then
+	if [ "$COLLECTION" = on ] && [ "$SCAN_INTERVAL" -gt 0 ] 2>/dev/null; then
 		if [ "$SCAN_INTERVAL" -ge 60 ]; then
 			cru a "${NAME}_scan" "7 */$((SCAN_INTERVAL / 60)) * * * $SCRIPT scan --delay"
 		else
@@ -827,10 +904,16 @@ apply_settings() {   # values saved from the web page via Merlin's custom settin
 	v=$(am_settings_get ${NAME}_retain); case "$v" in 7|14|30|60|90|180) RETAIN_DAYS=$v ;; esac
 	v=$(am_settings_get ${NAME}_ownssids)
 	EXTRA_OWN_SSIDS=$(printf '%s' "$v" | tr -d '"$`\\')
+	v=$(am_settings_get ${NAME}_mode); case "$v" in on|paused|off) COLLECTION=$v ;; esac
+	v=$(am_settings_get ${NAME}_quiet)   # exactly 84 hex digits, or it's left unchanged
+	case "${#v}:$v" in
+		84:*[!0-9a-f]*) ;;
+		84:*) case "$v" in *[!0]*) QUIET=$v ;; *) QUIET="" ;; esac ;;
+	esac
 	write_conf
 	cron_add
 	ready && export_all
-	log "settings updated: sample=$SAMPLE_INTERVAL scan=$SCAN_INTERVAL retain=$RETAIN_DAYS"
+	log "settings updated: collection=$COLLECTION sample=$SAMPLE_INTERVAL scan=$SCAN_INTERVAL retain=$RETAIN_DAYS quiet=$(quiet_text)"
 }
 
 service_event() {   # action service
@@ -851,6 +934,10 @@ SAMPLE_INTERVAL=$SAMPLE_INTERVAL      # seconds between interference samples (30
 SCAN_INTERVAL=$SCAN_INTERVAL        # minutes between neighbour scans, 0 = off
 RETAIN_DAYS=$RETAIN_DAYS          # days of history to keep
 EXTRA_OWN_SSIDS="$EXTRA_OWN_SSIDS"     # extra SSIDs to treat as yours, separated by |
+COLLECTION=$COLLECTION          # on, paused (no scheduled scans) or off (no samples or scans)
+# Quiet hours (no scheduled scans): one bit per half hour, Monday 00:00 first, 12 hex digits
+# a day, 84 in all; easiest to set on the Settings page. Empty = none.
+QUIET="$QUIET"
 DATA_DIR="$DATA_DIR"
 SQLITE="$SQLITE"
 EOF
@@ -1036,7 +1123,7 @@ install() {
 		[ -f "$src/chart.umd.min.js" ] && cp -f "$src/chart.umd.min.js" "$ADDON_DIR/"
 	fi
 	chmod 755 "$SCRIPT"
-	[ -f "$CONF" ] || write_conf
+	grep -q '^COLLECTION=' "$CONF" 2>/dev/null || write_conf   # new, or from before 1.1.0: add the new settings
 	. "$CONF"; DB="$DATA_DIR/$NAME.db"
 	mkdir -p "$DATA_DIR" || die "Couldn't create $DATA_DIR"
 	init_db || die "Couldn't create the database in $DATA_DIR"
@@ -1165,6 +1252,8 @@ status() {
 	say "Data:        $DB ($( [ -f "$DB" ] && du -h "$DB" | cut -f1 || echo missing))"
 	say "Web page:    $(cat "$ADDON_DIR/webui_page" 2>/dev/null || echo 'not mounted')"
 	say "Ready:       $(ready && echo yes || echo 'no (NTP or storage)')"
+	say "Collection:  $(collection_text)"
+	say "Quiet hours: $(quiet_text)$(quiet_now && printf ' (quiet now)')$( [ -n "$QUIET_BAD" ] && printf ' (the QUIET line in the config is invalid, so it is ignored)')"
 	say "Cron:";  cru l 2>/dev/null | grep "$NAME" | sed 's/^/  /'
 	if [ -f "$DB" ]; then
 		t=$(now)
@@ -1189,6 +1278,8 @@ debug() {
 	say "BusyBox:     $(busybox 2>/dev/null | head -1 | cut -d' ' -f2)   sqlite3: $("$SQLITE" --version 2>/dev/null | cut -d' ' -f1)"
 	say "Smart Connect: $(nvram get smart_connect_x)   wl_ifnames: $(nvram get wl_ifnames)"
 	say "acsd: $(pidof acsd2 acsd || echo 'not running')"
+	say "Collection: $(collection_text)"
+	say "Quiet hours: $(quiet_text)"
 	for r in 0 1 2 3; do
 		ifc=$(nvram get wl${r}_ifname)
 		[ -n "$ifc" ] || continue

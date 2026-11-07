@@ -15,7 +15,7 @@ It adds a **Wireless → WiFi Insight** tab with five pages:
 | **Site Survey** | A signal map (each network drawn across the channels it occupies, by signal strength) and a sortable list with BSSID, channel, width, Wi-Fi standard, security, signal and the load each network reports. |
 | **Channel Statistics** | Networks per channel, estimated load per channel over the selected range, and the quietest channel for each width (with and without DFS) next to what you're using now. |
 | **Troubleshooting** | Airtime breakdown (your TX/RX, others, non-Wi-Fi, unclassified, idle), glitch counters, transmit success vs failure, noise floor and the raw `chanim_stats` counters. |
-| **Settings** | Sample interval, neighbour scan interval, history length, and extra SSIDs to treat as yours. |
+| **Settings** | Collection (on, scans paused or off), sample interval, neighbour scan interval, history length, extra SSIDs to treat as yours, and quiet hours: the half hours of the week with no scheduled scans. |
 
 Time ranges: 10 minutes, 1 hour, 12 hours, 1 day, 7 days and 30 days. Short ranges show every sample; longer ones show averages (5 minutes for 12 hours, 10 minutes for a day, an hour for 7 days, 4 hours for 30 days), so trends stay readable.
 
@@ -34,7 +34,7 @@ Time ranges: 10 minutes, 1 hour, 12 hours, 1 day, 7 days and 30 days. Short rang
 </tr>
 <tr>
 <td><a href="docs/troubleshooting.webp"><img src="docs/troubleshooting.webp" alt="Troubleshooting: airtime breakdown, glitches, transmit success and noise floor"></a><br><b>Troubleshooting</b>: airtime breakdown, glitches, transmit quality and noise floor</td>
-<td><a href="docs/settings.webp"><img src="docs/settings.webp" alt="Settings: sample interval, scan interval, history length and extra SSIDs to treat as yours"></a><br><b>Settings</b>: sampling, scan schedule, history length and your own SSIDs</td>
+<td><a href="docs/settings.webp"><img src="docs/settings.webp" alt="Settings: collection, sample interval, scan interval, history length, extra SSIDs to treat as yours, and a week grid of quiet hours"></a><br><b>Settings</b>: collection, scan schedule, history, your own SSIDs and quiet hours</td>
 </tr>
 </table>
 
@@ -98,7 +98,7 @@ It only ever removes a page whose `.title` file says `WiFi Insight`, so other ad
   - `tx` and `inbss` are your own traffic
 
   Reading these counters doesn't disturb Wi-Fi.
-- **Spectrum, Channel Statistics and Site Survey** come from neighbour scans (`wl scan`), every 30 minutes by default. A radio can only measure its own channel continuously, so the other channels are estimated from the networks heard on them. Each network contributes according to how much it overlaps the channel, how strong its signal is, and the load it advertises (QBSS). Networks with your SSIDs, including your AiMesh node, are listed as yours and kept out of the estimate. Tick **Include my mesh** to add them back. Each scan takes the radio off-channel briefly, so expect a hiccup of about a second.
+- **Spectrum, Channel Statistics and Site Survey** come from neighbour scans (`wl scan`), every 30 minutes by default, except during the quiet hours you set. A radio can only measure its own channel continuously, so the other channels are estimated from the networks heard on them. Each network contributes according to how much it overlaps the channel, how strong its signal is, and the load it advertises (QBSS). Networks with your SSIDs, including your AiMesh node, are listed as yours and kept out of the estimate. Tick **Include my mesh** to add them back. Each scan takes the radio off-channel briefly, so expect a hiccup of about a second.
 - **Channel events** are detected by comparing the channel and width on every sample:
   - a changed setting in nvram → *Manually configured*
   - a radar line in syslog within 10 minutes → *Regulatory (RADAR)*
@@ -115,14 +115,14 @@ It only ever removes a page whose `.title` file says `WiFi Insight`, so other ad
 | `/opt/var/lib/wifiinsight/wifiinsight.db` | history (SQLite) |
 | `/tmp/var/wwwext/wifiinsight/` | JSON files the page reads (`live.htm`, `scans.htm`, `week.htm`, `month.htm`, `scanstate.htm`), rebuilt from the database |
 
-Cron jobs: `wifiinsight_collect` (every minute), `wifiinsight_scan` (scan interval) and `wifiinsight_prune` (04:23 daily, before a 05:00 scheduled reboot).
+Cron jobs: `wifiinsight_collect` (every minute), `wifiinsight_scan` (scan interval) and `wifiinsight_prune` (04:23 daily, before a 05:00 scheduled reboot). A scheduled scan that starts in quiet hours does nothing. With *Scans paused* there's no scan job, and with collection *Off* there are no jobs at all.
 
 ## Commands
 
 ```sh
 /jffs/addons/wifiinsight/wifiinsight.sh check       # can this router run it? (changes nothing)
-/jffs/addons/wifiinsight/wifiinsight.sh status      # what's running, sample counts, recent events
-/jffs/addons/wifiinsight/wifiinsight.sh scan        # scan now
+/jffs/addons/wifiinsight/wifiinsight.sh status      # what's running, quiet hours, sample counts, recent events
+/jffs/addons/wifiinsight/wifiinsight.sh scan        # scan now (even in quiet hours)
 /jffs/addons/wifiinsight/wifiinsight.sh debug       # router, firmware and driver details for issues (no network names or addresses)
 /jffs/addons/wifiinsight/wifiinsight.sh startup     # re-apply config, cron and the web page
 /jffs/addons/wifiinsight/wifiinsight.sh update      # install the latest version from GitHub
@@ -140,9 +140,13 @@ SAMPLE_INTERVAL=30         # 30 or 60 seconds
 SCAN_INTERVAL=30           # minutes, 0 = off (15, 30, 60, 120, 180, 360 from the UI)
 RETAIN_DAYS=30             # samples and scans; events are kept for a year
 EXTRA_OWN_SSIDS=""         # extra SSIDs to treat as yours, separated by |
+COLLECTION=on              # on, paused (no scheduled scans) or off (no samples or scans)
+QUIET=""                   # quiet hours, no scheduled scans (below); empty = none
 DATA_DIR="/opt/var/lib/wifiinsight"
 SQLITE="/opt/bin/sqlite3"
 ```
+
+`QUIET` is easiest to set on the Settings page. In the file it's 84 hex digits, one bit per half hour of the week, starting Monday 00:00 in the router's local time: 12 digits a day, each digit covering 2 hours (8 is its first half hour, 4 the second, 2 the third, 1 the fourth). For example, `000000000fff` repeated seven times is 18:00–24:00 every day. A value that isn't exactly 84 hex digits is ignored, and `status` says so.
 
 Storage is about 21 MB for 30 days of 30-second samples on two radios.
 
