@@ -53,6 +53,9 @@ jobs:
         # cron jobs for each mode, and scheduled scans must skip quiet hours.
         run: bash .github/tests/quiet-hours.sh
 
+      - name: Check scans wait for the driver (slow 5 GHz scans on 3006.102)
+        run: bash .github/tests/scan-wait.sh
+
       - name: Check the page's JavaScript
         run: |
           python3 - <<'EOF'
