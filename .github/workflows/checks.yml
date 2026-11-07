@@ -48,6 +48,11 @@ jobs:
         # files, or the charts go empty.
         run: bash .github/tests/large-history.sh
 
+      - name: Check quiet hours and the collection switch
+        # The page and the script must read the quiet hours the same way, saving must set the
+        # cron jobs for each mode, and scheduled scans must skip quiet hours.
+        run: bash .github/tests/quiet-hours.sh
+
       - name: Check the page's JavaScript
         run: |
           python3 - <<'EOF'
