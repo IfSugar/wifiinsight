@@ -2,6 +2,16 @@
 
 What changed in each release of WiFi Insight. The release workflow copies a version's section into its GitHub release notes, so write for people running the addon.
 
+## 1.1.0
+
+- **Quiet hours.** Settings → Quiet hours: mark the half hours of the week when the router shouldn't run its scheduled neighbour scans, so there's no Wi-Fi hiccup while you're gaming, streaming or on a call. Click or drag on the week grid, or start from a preset (evenings, work hours, weekends). Sampling carries on, since it doesn't touch Wi-Fi, and Scan now still works. Times are the router's local time. Thanks to jksmurf for the idea!
+- **Collection: On, Scans paused or Off.** *Scans paused* keeps sampling but runs no scheduled scans until you switch back. *Off* stops sampling and scanning without uninstalling: the page, settings and history stay as they are.
+- Insight shows when it's quiet ("Quiet until 20:00" next to Scan now, a note at the top and a marked row on the spectrum), and when scans are paused or collection is off.
+- **5 GHz scans on routers with Merlin 3006.102** (GT-AX6000, RT-BE88U and other Wi-Fi 7 models): the Spectrum, Site Survey and Channel Statistics stayed empty on 5 GHz while 2.4 GHz worked. WiFi Insight gave each scan 9 seconds, and a 5 GHz scan on these drivers can take longer. It now waits for the driver to finish: up to 20 seconds on 2.4 GHz and 45 seconds on 5 and 6 GHz, and up to 20 seconds more when the radio is busy with another scan. Thanks to ColDen and AvalonOC for the reports!
+- When a band's scan fails, Scan now says why, quoting the driver (for example: 5 GHz: no results, wl said "Not Ready" for 45 s), and so do the syslog and `wifiinsight.sh scan`, which now prints each band's result.
+- `status` and `debug` show the collection mode and the quiet hours, and `status` says when it's quiet now.
+- The config file has two new settings, `COLLECTION` and `QUIET`, added with their defaults when you update. See the README.
+
 ## 1.0.11
 
 - **Routers on Merlin 3006.102** (the GT-AX6000, RT-AX86U Pro, RT-AX88U Pro and the Wi-Fi 7 models): their newer driver prints airtime statistics in a newer layout (`version: 4`, channels such as `100/80` instead of hex codes, an extra `busy` column, and on Wi-Fi 7 models a `chspec` header). On the RT-BE88U the router check refused it ("No radio provides the airtime statistics"); on the GT-AX6000 the check passed, but no samples were recorded, so the charts stayed empty. WiFi Insight now reads every layout. Thanks to the RT-BE88U and GT-AX6000 owners who sent their output!
