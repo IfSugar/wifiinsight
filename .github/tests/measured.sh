@@ -120,6 +120,7 @@ case "\$3" in
 	scan) : ;;
 	scanresults) printf 'SSID: "Neighbour"\nMode: Managed\tRSSI: -60 dBm\tChannel: %s\nBSSID: 02:00:00:00:00:01\tCapability: ESS\n' "\$( [ "\$ifc" = eth6 ] && echo 6 || echo 36)" ;;
 	chanim_stats) [ "\$4" = all ] && [ -f "\$F/chanim_\$ifc" ] && cat "\$F/chanim_\$ifc" ;;
+	country) [ -f "\$F/country" ] && cat "\$F/country" || { echo "wl: Unsupported" >&2; exit 1; } ;;
 	*) exit 1 ;;
 esac
 EOF
@@ -145,6 +146,14 @@ assert len(row[140]) == 6, row[140]                            # channel 140 was
 assert len(row[36]) == 12
 EOF
 expect "live.htm: channels measured in each band's last scan" '{"2g": 3, "5g": 11}' "$(live_measured)"
+# the radio's country, so the page can mark the weather-radar channels (120-128) with the right rules
+live_country() { run export > /dev/null 2>&1 || true; python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); print(d["country"] + "|" + d["territory"])' "$R/www/user/wifiinsight/live.htm" 2>&1; }
+expect "live.htm: no country when wl doesn't say" "|" "$(live_country)"
+printf 'E0 (E0/887) EUROPE\n' > "$F/country"
+expect "live.htm: the country code from wl country (EU radio)" "E0|" "$(live_country)"
+printf 'wl: some error\n' > "$F/country"
+expect "live.htm: an error from wl isn't a country" "|" "$(live_country)"
+rm -f "$F/country"
 python3 - "$R/www/user/wifiinsight/month.htm" <<'EOF' && ok "month.htm: measured averages and how many readings" || bad "month.htm measured values"
 import json, sys
 d = json.load(open(sys.argv[1]))

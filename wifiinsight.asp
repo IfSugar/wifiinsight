@@ -240,6 +240,49 @@ function spanOf(center, width) {
 	return out;
 }
 function isDfs(ch) { return WI.band === '5g' && ch >= 52 && ch <= 144; }
+/* Weather radar: 5600-5650 MHz (channels 120, 124, 128, and any wider block that includes one) is shared with
+   weather radars. Countries where Wi-Fi may use it, by the radar rules they follow, from the Linux wireless
+   regulatory database (wireless-regdb), plus every EU/EEA country. ETSI rules: a 10-minute radar check on
+   these channels instead of 1. Canada allowed them in July 2025 (RSS-247 Issue 4). Elsewhere: no marks. */
+var WX_ETSI = 'E0 EU UK AD AF AI AL AN AT AW BA BE BG BL BT BY CH CY CZ DE DK EE ES ET FI FR GB GF GL GP GR HK HR HU IE IL IS IT KH KN KZ LC LI LS LT LU LV MC MD ME MF MK MQ MR MT MW NL NO NZ OM PF PL PM PT QA RE RO RS SA SE SI SK SR TD TG TR UA VC WF WS YT ZA ZW'.split(' ');
+var WX_OTHER = 'AE AR AS BF BM BR BS CF CI CO CR CU CX DZ EC FM GD GH GU HN HT JM JP KR KY LB LK MH MN MO MP MU MX MY NI PA PE PG PH PW PY RW SG SN TC TH TT TW UG VI VN VU'.split(' ');
+var WX_DFS = 'Before using a DFS channel the router listens for radar for 1 minute';
+var WX = {
+	etsi: WX_DFS + ', or 10 minutes on the weather-radar channels 120–128.',
+	us: WX_DFS + '. 120–128 are shared with airport weather radars.',
+	ca: WX_DFS + '. Canada has allowed the weather-radar channels 120–128 only since 2025.',
+	other: WX_DFS + '. 120–128 are shared with weather radars.'
+};
+function wxRegion() {   /* from the radio's country code, else ASUS's territory code: 'etsi', 'us', 'ca', 'other' or '' */
+	var L = WI.live || {}, c = L.country || (L.territory || '').slice(0, 2);
+	return WX_ETSI.indexOf(c) >= 0 ? 'etsi' : ['US', 'Q1', 'Q2', 'PR'].indexOf(c) >= 0 ? 'us' : c === 'CA' ? 'ca' : WX_OTHER.indexOf(c) >= 0 ? 'other' : '';
+}
+function isWx(ch) { return WI.band === '5g' && (ch === 120 || ch === 124 || ch === 128) && !!wxRegion(); }
+function chanTags(ch) { return isWx(ch) ? 'DFS, weather radar' : isDfs(ch) ? 'DFS' : ''; }
+/* The DFS bracket under a channel axis, with the weather-radar channels as a heavier part of it.
+   xr(c) gives a channel's [left, right] in pixels. */
+function dfsBracket(ctx, ch, xr, y) {
+	ctx.strokeStyle = 'rgba(147,169,177,0.6)'; ctx.lineWidth = 1; ctx.setLineDash([]);
+	ctx.fillStyle = C.tick; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+	var runs = [], cur = null;
+	ch.forEach(function (c) {
+		if (!isDfs(c)) { cur = null; return; }
+		if (!cur) { cur = { a: c, b: c, wa: null, wb: null }; runs.push(cur); } else cur.b = c;
+		if (isWx(c)) { if (cur.wa == null) cur.wa = c; cur.wb = c; }
+	});
+	runs.forEach(function (run) {
+		var x1 = xr(run.a)[0] + 2, x2 = xr(run.b)[1] - 2, lx = (x1 + x2) / 2, ly = y + 1;
+		ctx.beginPath(); ctx.moveTo(x1, y - 3); ctx.lineTo(x1, y); ctx.lineTo(x2, y); ctx.lineTo(x2, y - 3); ctx.stroke();
+		if (run.wa != null) {
+			var w1 = xr(run.wa)[0] + 2, w2 = xr(run.wb)[1] - 2;
+			ctx.fillStyle = 'rgba(147,169,177,0.9)'; ctx.fillRect(w1, y - 1, w2 - w1, 3); ctx.fillStyle = C.tick;
+			ctx.fillText(ctx.measureText('Weather radar').width < w2 - w1 ? 'Weather radar' : 'Weather', (w1 + w2) / 2, y + 3);
+			lx = (w1 - x1 >= x2 - w2) ? (x1 + w1) / 2 : (w2 + x2) / 2; ly = y + 3;   /* "DFS" on the wider side, level with it */
+			if (Math.abs(w1 - x1) < 30 && Math.abs(x2 - w2) < 30) return;
+		}
+		ctx.fillText('DFS', lx, ly);
+	});
+}
 function freq(ch) {
 	if (WI.band === '2g') return ch === 14 ? 2484 : 2407 + 5 * ch;
 	if (WI.band === '6g') return 5950 + 5 * ch;
@@ -611,14 +654,7 @@ function axisChannels(ctx, ch, padL, colW, y0) {
 	var every = colW < 22 ? 2 : 1;
 	ch.forEach(function (c, j) { if (j % every === 0) ctx.fillText(c, padL + (j + 0.5) * colW, y0 + 5); });
 	if (!WI.showDfs || WI.band !== '5g') return;
-	ctx.strokeStyle = 'rgba(147,169,177,0.6)'; ctx.lineWidth = 1; ctx.setLineDash([]);
-	var runs = [], cur = null;
-	ch.forEach(function (c, j) { if (isDfs(c)) { if (!cur) { cur = { a: j, b: j }; runs.push(cur); } else cur.b = j; } else cur = null; });
-	runs.forEach(function (run) {
-		var x1 = padL + run.a * colW + 2, x2 = padL + (run.b + 1) * colW - 2, y = y0 + 22;
-		ctx.beginPath(); ctx.moveTo(x1, y - 3); ctx.lineTo(x1, y); ctx.lineTo(x2, y); ctx.lineTo(x2, y - 3); ctx.stroke();
-		ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillText('DFS', (x1 + x2) / 2, y + 1);
-	});
+	dfsBracket(ctx, ch, function (c) { var j = ch.indexOf(c); return [padL + j * colW, padL + (j + 1) * colW]; }, y0 + 22);
 }
 function activeBox(ctx, ch, r, padL, colW, top, h) {
 	var sp = spanOf(r.center, r.width).filter(function (c) { return ch.indexOf(c) >= 0; });
@@ -648,7 +684,7 @@ function heatHover(ev) {
 	var j = Math.floor((x - g.padL) / g.colW), i = Math.floor((y - g.padT) / g.rowH);
 	if (j < 0 || j >= g.chans.length || i < 0 || i >= g.rows.length) { tip.style.display = 'none'; return; }
 	var ch = g.chans[j], row = g.rows[i], c = row.cells[ch];
-	var h = '<b>Channel ' + ch + '</b>' + (isDfs(ch) ? ' <span class="m">DFS</span>' : '') + '<br><span class="m">'
+	var h = '<b>Channel ' + ch + '</b>' + (isDfs(ch) ? ' <span class="m">' + chanTags(ch) + '</span>' : '') + '<br><span class="m">'
 		+ (g.bucket ? timeLabel(row.ts) + ', ' + bucketName(g.bucket) + ' average of ' + row.n + ' scan' + (row.n > 1 ? 's' : '') : when(row.ts)) + '</span><br>';
 	var nets = function (c) { return c[3] ? ((g.bucket ? 'Up to ' : '') + c[3] + ' network' + (c[3] > 1 ? 's' : '') + ' overlapping, strongest ' + c[4] + ' dBm') : 'No other networks heard'; };
 	if (c && g.src === 'measured' && c[12]) {
@@ -744,16 +780,7 @@ function renderSignalMap(list) {
 	ctx.fillStyle = C.tick; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
 	var y0 = g.padT + g.gh, every = (g.slot && g.slot < 22) ? 2 : 1;
 	g.ch.forEach(function (c, j) { if (j % every === 0) ctx.fillText(c, g.xCh(c), y0 + 6); });
-	if (WI.band === '5g') {
-		ctx.strokeStyle = 'rgba(147,169,177,0.6)'; ctx.lineWidth = 1;
-		var runs = [], cur = null;
-		g.ch.forEach(function (c, j) { if (isDfs(c)) { if (!cur) { cur = { a: c, b: c }; runs.push(cur); } else cur.b = c; } else cur = null; });
-		runs.forEach(function (run) {
-			var x1 = g.xCh(run.a) - g.slot / 2 + 2, x2 = g.xCh(run.b) + g.slot / 2 - 2, yy = y0 + 23;
-			ctx.beginPath(); ctx.moveTo(x1, yy - 3); ctx.lineTo(x1, yy); ctx.lineTo(x2, yy); ctx.lineTo(x2, yy - 3); ctx.stroke();
-			ctx.fillText('DFS', (x1 + x2) / 2, yy + 1);
-		});
-	}
+	if (WI.band === '5g') dfsBracket(ctx, g.ch, function (c) { return [g.xCh(c) - g.slot / 2, g.xCh(c) + g.slot / 2]; }, y0 + 23);
 	WI.mapShapes = shapes; WI.mapGeo = g;
 }
 function drawShape(ctx, s, hot) {
@@ -775,7 +802,7 @@ function mapHover(ev) {
 	if (!hit) { tip.style.display = 'none'; return; }
 	var a = hit.a;
 	tip.innerHTML = '<b>' + (a.ssid ? esc(a.ssid) : '(hidden)') + '</b>' + (a.own ? ' <span class="m">your network</span>' : '') + '<br><span class="m">' + esc(a.bssid) + '</span><br>' +
-		'Channel ' + a.ctl + ' · ' + a.width + ' MHz' + (isDfs(a.ctl) ? ' · DFS' : '') + '<br>Signal <b>' + a.rssi + ' dBm</b>' + (a.snr >= 0 ? ' · SNR ' + a.snr + ' dB' : '') + '<br>' +
+		'Channel ' + a.ctl + ' · ' + a.width + ' MHz' + (isDfs(a.ctl) ? ' · ' + chanTags(a.ctl) : '') + '<br>Signal <b>' + a.rssi + ' dBm</b>' + (a.snr >= 0 ? ' · SNR ' + a.snr + ' dB' : '') + '<br>' +
 		(PHY[a.phy] || '') + (a.sec ? ' · ' + esc(a.sec) : '') + (a.util >= 0 ? '<br>Reports ' + a.util + '% channel load' : '');
 	placeTip(tip, ev.target.parentNode, x, y);
 }
@@ -792,7 +819,7 @@ function renderApTable(list) {
 	list.forEach(function (a) {
 		var pct = Math.max(4, Math.min(100, (a.rssi + 95) / 55 * 100));
 		h += '<tr><td>' + (a.ssid ? esc(a.ssid) : '<span style="color:var(--muted)">(hidden)</span>') + (a.own ? '<span class="pill">Yours</span>' : '') + '</td>' +
-			'<td class="mono">' + esc(a.bssid) + '</td><td class="num">' + a.ctl + (isDfs(a.ctl) ? '<span class="pill dfs">DFS</span>' : '') + '</td><td class="num">' + a.width + '</td>' +
+			'<td class="mono">' + esc(a.bssid) + '</td><td class="num">' + a.ctl + (isDfs(a.ctl) ? '<span class="pill dfs">' + (isWx(a.ctl) ? 'DFS · weather radar' : 'DFS') + '</span>' : '') + '</td><td class="num">' + a.width + '</td>' +
 			'<td>' + esc(PHY[a.phy] || '–') + '</td><td>' + esc(a.sec || '–') + '</td>' +
 			'<td style="white-space:nowrap"><span class="sig"><i style="width:' + pct + '%"></i></span>' + a.rssi + ' dBm</td>' +
 			'<td class="num">' + (a.util >= 0 ? a.util + '%' : '<span style="color:var(--muted)">–</span>') + '</td></tr>';
@@ -838,7 +865,7 @@ function renderChannels() {
 		Object.assign({ label: 'Other networks', data: others, backgroundColor: C.others }, barBase),
 		Object.assign({ label: 'Yours', data: mine, backgroundColor: C.yours }, barBase)
 	], { labels: labels, x: xCat, stacked: true, yMin: 0, yStep: 1, plugins: [curBand(ch.map(function (c, i) { return cur.indexOf(c) >= 0 ? i : -1; }).filter(function (i) { return i >= 0; }))], yFmt: function (v) { return Number.isInteger(v) ? v : ''; },
-		ttTitle: function (it) { return 'Channel ' + it[0].label + (isDfs(+it[0].label) ? ' (DFS)' : ''); } });
+		ttTitle: function (it) { return 'Channel ' + it[0].label + (isDfs(+it[0].label) ? ' (' + chanTags(+it[0].label) + ')' : ''); } });
 
 	var L = channelLoads(), meas = L.src === 'measured';
 	$('wiLoadSrc').innerHTML = srcControls(L.info, L.src, 'wiMeshLbl2');
@@ -850,7 +877,7 @@ function renderChannels() {
 	var data = ch.map(function (c) { return L.avg[c]; });
 	var maxV = Math.max.apply(null, data.map(function (v) { return v || 0; }));
 	var curIdx = ch.map(function (c, i) { return cur.indexOf(c) >= 0 ? i : -1; }).filter(function (i) { return i >= 0; });
-	var title = function (it) { return 'Channel ' + it[0].label + (isDfs(+it[0].label) ? ' (DFS)' : '') + (cur.indexOf(+it[0].label) >= 0 ? ' · in use' : ''); };
+	var title = function (it) { return 'Channel ' + it[0].label + (isDfs(+it[0].label) ? ' (' + chanTags(+it[0].label) + ')' : '') + (cur.indexOf(+it[0].label) >= 0 ? ' · in use' : ''); };
 	var bar = { borderSkipped: 'bottom', categoryPercentage: 0.72, barPercentage: 0.9 };
 	var yMax = Math.min(100, Math.max(20, Math.ceil((maxV + 5) / 10) * 10));
 	if (meas) {   /* stacked: the measured parts that are switched on */
@@ -913,7 +940,7 @@ function renderBest(L, ch, r) {
 		if (!cands.length) return;
 		var scored = cands.map(function (b) {
 			var s = b.reduce(function (t, c) { return t + L.avg[c]; }, 0) / b.length, pk = Math.max.apply(null, b.map(function (c) { return L.peak[c]; }));
-			return { b: b, s: Math.round(s * 10) / 10, pk: pk, dfs: b.some(isDfs) };
+			return { b: b, s: Math.round(s * 10) / 10, pk: pk, dfs: b.some(isDfs), wx: b.some(isWx) };
 		}).sort(function (a, b) { return a.s - b.s || a.pk - b.pk || (a.dfs - b.dfs); });
 		var best = scored[0], nonDfs = scored.filter(function (x) { return !x.dfs; })[0];
 		var curBlk = null;
@@ -922,14 +949,19 @@ function renderBest(L, ch, r) {
 	});
 	if (!rows.length) { $('wiBest').innerHTML = ''; return; }
 	var name = function (x) { return x.b.length > 1 ? x.b[0] + '–' + x.b[x.b.length - 1] : String(x.b[0]); };
-	var lh = L.src === 'measured' ? 'Load' : 'Est. load';
+	var lh = L.src === 'measured' ? 'Load' : 'Est. load', reg = wxRegion(), anyWx = false, anyDfs = false;
+	var tag = function (x) {   /* DFS, or DFS · weather radar with what that means here */
+		if (x.wx) { anyWx = anyDfs = true; return '<span class="pill dfs" title="' + esc(WX[reg]) + '">DFS · weather radar</span>'; }
+		if (x.dfs) { anyDfs = true; return '<span class="pill dfs" title="' + WX_DFS + '.">DFS</span>'; }
+		return '';
+	};
 	var h = '<table class="t"><tr><th style="width:80px">Width</th><th>Quietest channel</th><th class="num">' + lh + '</th><th>Quietest without DFS</th><th class="num">' + lh + '</th><th>Your current</th></tr>';
 	rows.forEach(function (x) {
-		h += '<tr><td>' + x.w + ' MHz</td><td>' + name(x.best) + (x.best.dfs ? '<span class="pill dfs">DFS</span>' : '') + '</td><td class="num">' + x.best.s + '%</td>' +
+		h += '<tr><td>' + x.w + ' MHz</td><td>' + name(x.best) + tag(x.best) + '</td><td class="num">' + x.best.s + '%</td>' +
 			'<td>' + (x.nonDfs ? name(x.nonDfs) : '<span style="color:var(--muted)">–</span>') + '</td><td class="num">' + (x.nonDfs ? x.nonDfs.s + '%' : '') + '</td>' +
-			'<td>' + (x.cur ? name(x.cur) + ' · ' + x.cur.s + '%<span class="pill cur">in use</span>' : '<span style="color:var(--muted)">–</span>') + '</td></tr>';
+			'<td>' + (x.cur ? name(x.cur) + ' · ' + x.cur.s + '%' + (x.cur.wx ? tag(x.cur) : '') + '<span class="pill cur">in use</span>' : '<span style="color:var(--muted)">–</span>') + '</td></tr>';
 	});
-	$('wiBest').innerHTML = h + '</table>';
+	$('wiBest').innerHTML = h + '</table>' + (anyDfs ? '<div class="sub" style="margin:8px 8px 0">' + esc(anyWx ? WX[reg] : WX_DFS + '.') + '</div>' : '');
 }
 
 /* =================== TROUBLESHOOTING =================== */

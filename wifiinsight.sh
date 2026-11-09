@@ -732,6 +732,16 @@ write_atomic() {   # file content-from-stdin
 	if sed 's/</\\u003c/g' > "$tmp"; then mv -f "$tmp" "$1"; else rm -f "$tmp"; return 1; fi
 }
 
+# The radio's regulatory country (wl country: "E0 (E0/887) ...", "US (US/0) ...") and ASUS's territory
+# code ("EU/01"), so the page can mark the weather-radar channels with the rules that apply there.
+country_code() {
+	for r in $(radios); do
+		cc=$(wl -i "$(nvram get wl${r}_ifname)" country 2>/dev/null | awk 'NR == 1 { print $1 }')
+		case "$cc" in [A-Z0-9#][A-Z0-9]) printf '%s' "$cc"; return ;; esac
+	done
+}
+territory_code() { t=$(nvram get territory_code); case "$t" in [A-Z][A-Z]/*|[A-Z][A-Z]) printf '%s' "$t" ;; esac; }
+
 radios_json() {
 	first=1; printf '['
 	for r in $(radios); do
@@ -770,7 +780,7 @@ export_live() {
 		printf '"data_dir":"%s","db_bytes":%s,"own_ssids":[%s],"extra_own":"%s",' \
 			"$(js "$DATA_DIR")" "$(jnum "$dbb")" "$ownj" "$(js "$EXTRA_OWN_SSIDS")"
 		printf '"collection":"%s","quiet":"%s","tz_off":%s,"build":"%s",' "$COLLECTION" "$QUIET" "$(tz_off)" "$(js "$( [ -f "$BUILD_FILE" ] && awk '$1 == "dev" { print $2 "@" $3 }' "$BUILD_FILE")")"
-		printf '"measured":{%s},"radios":%s,"samples":' "$mj" "$(radios_json)"
+		printf '"measured":{%s},"country":"%s","territory":"%s","radios":%s,"samples":' "$mj" "$(js "$(country_code)")" "$(js "$(territory_code)")" "$(radios_json)"
 		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(ts,obss,nocat,tx,inbss,idle,glitch,noise,ctl,width,center,nopkt,doze,txop,goodtx,badtx,badplcp,knoise)) AS a FROM (SELECT * FROM samples WHERE ts>=$since ORDER BY band, ts) GROUP BY band);"
 		printf ',"events":'
 		json_out '[]' "SELECT json_group_array(json_array(ts,band,tag,old,new,detail)) FROM (SELECT * FROM events WHERE ts>=$evsince ORDER BY ts DESC LIMIT 500);"
@@ -1437,7 +1447,7 @@ debug() {
 	say "$TITLE $VERSION$(b=$(build_text); [ -n "$b" ] && printf ' (%s)' "$b")"
 	say "Router:      $(nvram get productid) $(nvram get odmpid)  firmware $(fw_version)  $(uname -m)"
 	say "BusyBox:     $(busybox 2>/dev/null | head -1 | cut -d' ' -f2)   sqlite3: $("$SQLITE" --version 2>/dev/null | cut -d' ' -f1)"
-	say "Smart Connect: $(nvram get smart_connect_x)   wl_ifnames: $(nvram get wl_ifnames)"
+	say "Smart Connect: $(nvram get smart_connect_x)   wl_ifnames: $(nvram get wl_ifnames)   country: $(country_code)  territory: $(territory_code)"
 	say "acsd: $(pidof acsd2 acsd || echo 'not running')"
 	say "Collection: $(collection_text)"
 	say "Quiet hours: $(quiet_text)"
