@@ -605,8 +605,10 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 			msql="$TMPD/chanim_$band.sql"
 			wl -i "$ifc" chanim_stats all 2>/dev/null | parse_chanim_all "$sts" "$band" > "$msql"
 			mc=$(grep -c '^INSERT' "$msql")
-			if [ "$mc" -gt 0 ] 2>/dev/null && sql < "$msql"; then detail="$detail, $mc channels measured"; fi
+			if [ "$mc" -gt 0 ] 2>/dev/null && sql < "$msql"; then detail="$detail, $mc channels measured"; else mc=0; fi
 			rm -f "$msql"
+			# the page says "starts with the next scan" until a scan has run with this version
+			[ "$(cat "$DATA_DIR/measured_$band" 2>/dev/null)" = "$mc" ] || echo "$mc" > "$DATA_DIR/measured_$band"
 		fi
 		bands="$bands${bands:+,}\"$band\":\"$result\""
 		notes="$notes${notes:+,}\"$band\":\"$(js "$detail")\""
@@ -759,13 +761,15 @@ export_live() {
 	mkdir -p "$TMPD"; ownj=""
 	while IFS= read -r o; do ownj="$ownj${ownj:+,}\"$(js "$o")\""; done < "$(own_ssids_file)"
 	dbb=$(ls -l "$DB" 2>/dev/null | awk '{print $5}')
+	mj=""   # channels measured in each band's last scan; none yet: no scan since this version
+	for f in "$DATA_DIR"/measured_*; do [ -f "$f" ] && mj="$mj${mj:+,}\"${f##*/measured_}\":$(jnum "$(cat "$f")")"; done
 	{
 		printf '{"version":"%s","generated":%s,"sample_interval":%s,"scan_interval":%s,"retain_days":%s,' \
 			"$VERSION" "$t" "$SAMPLE_INTERVAL" "$SCAN_INTERVAL" "$RETAIN_DAYS"
 		printf '"data_dir":"%s","db_bytes":%s,"own_ssids":[%s],"extra_own":"%s",' \
 			"$(js "$DATA_DIR")" "$(jnum "$dbb")" "$ownj" "$(js "$EXTRA_OWN_SSIDS")"
 		printf '"collection":"%s","quiet":"%s","tz_off":%s,' "$COLLECTION" "$QUIET" "$(tz_off)"
-		printf '"radios":%s,"samples":' "$(radios_json)"
+		printf '"measured":{%s},"radios":%s,"samples":' "$mj" "$(radios_json)"
 		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(ts,obss,nocat,tx,inbss,idle,glitch,noise,ctl,width,center,nopkt,doze,txop,goodtx,badtx,badplcp,knoise)) AS a FROM (SELECT * FROM samples WHERE ts>=$since ORDER BY band, ts) GROUP BY band);"
 		printf ',"events":'
 		json_out '[]' "SELECT json_group_array(json_array(ts,band,tag,old,new,detail)) FROM (SELECT * FROM events WHERE ts>=$evsince ORDER BY ts DESC LIMIT 500);"
