@@ -7,7 +7,7 @@
 #  Pages: Insight, Site Survey, Channel Statistics, Troubleshooting, Settings
 #
 #  Usage: wifiinsight.sh                    (a menu, when run in a terminal: amtm opens this)
-#         wifiinsight.sh install | update [force] | uninstall [--keep-data] | status | scan |
+#         wifiinsight.sh install | update [force | dev [branch]] | uninstall [--keep-data] | status | scan |
 #                        collection [on|paused|off] | debug | amtmupdate [check] |
 #                        startup | collect | export | prune
 #
@@ -25,6 +25,7 @@ ADDON_DIR="$ROOT/jffs/addons/$NAME"
 SCRIPT="$ADDON_DIR/$NAME.sh"
 PAGE_SRC="$ADDON_DIR/$NAME.asp"
 CONF="$ADDON_DIR/config"
+BUILD_FILE="$ADDON_DIR/build"   # "dev <branch> <commit> <installed>" for a development version; none for a release
 SCRIPTS_DIR="$ROOT/jffs/scripts"
 HELPER="$ROOT/usr/sbin/helper.sh"
 WWW_USER="$ROOT/www/user"
@@ -764,7 +765,7 @@ export_live() {
 			"$VERSION" "$t" "$SAMPLE_INTERVAL" "$SCAN_INTERVAL" "$RETAIN_DAYS"
 		printf '"data_dir":"%s","db_bytes":%s,"own_ssids":[%s],"extra_own":"%s",' \
 			"$(js "$DATA_DIR")" "$(jnum "$dbb")" "$ownj" "$(js "$EXTRA_OWN_SSIDS")"
-		printf '"collection":"%s","quiet":"%s","tz_off":%s,' "$COLLECTION" "$QUIET" "$(tz_off)"
+		printf '"collection":"%s","quiet":"%s","tz_off":%s,"build":"%s",' "$COLLECTION" "$QUIET" "$(tz_off)" "$(js "$( [ -f "$BUILD_FILE" ] && awk '$1 == "dev" { print $2 "@" $3 }' "$BUILD_FILE")")"
 		printf '"radios":%s,"samples":' "$(radios_json)"
 		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(ts,obss,nocat,tx,inbss,idle,glitch,noise,ctl,width,center,nopkt,doze,txop,goodtx,badtx,badplcp,knoise)) AS a FROM (SELECT * FROM samples WHERE ts>=$since ORDER BY band, ts) GROUP BY band);"
 		printf ',"events":'
@@ -1226,6 +1227,8 @@ install() {
 		[ -f "$src/chart.umd.min.js" ] && cp -f "$src/chart.umd.min.js" "$ADDON_DIR/"
 	fi
 	chmod 755 "$SCRIPT"
+	# A development version says so (update_dev sets WI_BUILD); anything else installed is a release.
+	if [ -n "$WI_BUILD" ]; then printf '%s\n' "$WI_BUILD" > "$BUILD_FILE"; else rm -f "$BUILD_FILE"; fi
 	grep -q '^AMTM_UPDATE=' "$CONF" 2>/dev/null || write_conf   # new, or from before 1.2.0: add the new settings
 	. "$CONF"; DB="$DATA_DIR/$NAME.db"
 	mkdir -p "$DATA_DIR" || die "Couldn't create $DATA_DIR"
@@ -1322,11 +1325,13 @@ update() {   # [force]  fetch the latest release from GitHub and reinstall over 
 	if [ -z "$new" ] || ! sh -n "$dl/$NAME.sh" 2>/dev/null; then
 		rm -rf "$dl"; die "The downloaded script looks incomplete; nothing was changed."
 	fi
-	if [ "$new" = "$VERSION" ] && [ "$1" != "force" ]; then
+	if [ "$new" = "$VERSION" ] && [ "$1" != "force" ] && [ ! -f "$BUILD_FILE" ]; then
 		rm -rf "$dl"; say "Already up to date ($VERSION)."; return 0
 	fi
 	if ver_gt "$VERSION" "$new" && [ "$1" != "force" ]; then
-		rm -rf "$dl"; say "This is $VERSION, newer than the latest release ($new). Nothing was changed; 'update force' installs $new."; return 0
+		rm -rf "$dl"
+		say "This is $VERSION$( [ -f "$BUILD_FILE" ] && printf ' (a development version)'), newer than the latest release ($new). Nothing was changed; 'update force' installs $new."
+		return 0
 	fi
 	if ! fetch "$rel/$NAME.asp" "$dl/$NAME.asp" || ! grep -q "wifiinsight-version: $new " "$dl/$NAME.asp"; then
 		rm -rf "$dl"; die "Couldn't download the matching web page; nothing was changed."
@@ -1334,6 +1339,50 @@ update() {   # [force]  fetch the latest release from GitHub and reinstall over 
 	say "Updating $VERSION -> $new (settings and history are kept)"
 	sh "$dl/$NAME.sh" install; rc=$?
 	rm -rf "$dl"
+	[ $rc -eq 0 ] && rm -f "$BUILD_FILE"   # a release now, whatever that release's installer knows
+	return $rc
+}
+
+# Development versions: the newest code on a GitHub branch (main by default), to try changes before
+# they're released. The files come from the branch's current commit, so the script and the page
+# always match. Unreleased code can be broken; plain 'update' goes back to the latest release.
+build_text() {   # "" for a release; "development version: main @ 1a2b3c4, installed 2026-11-09 23:30"
+	[ -f "$BUILD_FILE" ] || return 0
+	read -r kind br sha when < "$BUILD_FILE"
+	[ "$kind" = dev ] && printf 'development version: %s @ %s, installed %s' "$br" "$sha" "$when"
+}
+update_dev() {   # [branch]
+	br=${1:-main}
+	case "$br" in ''|[-./]*|*..*|*//*|*[!A-Za-z0-9._/-]*) die "'$br' isn't a branch name; nothing was changed." ;; esac
+	dl="$TMPD/update.$$"; rm -rf "$dl"; mkdir -p "$dl" || die "Couldn't create $dl"
+	say "Looking up the newest commit on $br..."
+	sha=$(curl -fsL --retry 2 --connect-timeout 15 -H 'Accept: application/vnd.github.sha' \
+		"https://api.github.com/repos/$REPO/commits/$br" 2>/dev/null | head -1 | cut -c1-40)
+	case "$sha" in
+		*[!0-9a-f]*|'') sha=""; ref=$br
+			say "  (GitHub didn't say which commit, so the files may be up to 5 minutes old)" ;;
+		*) ref=$sha ;;
+	esac
+	if ! fetch "$RAW_BASE/$ref/$NAME.sh" "$dl/$NAME.sh" quiet; then
+		rm -rf "$dl"; die "Couldn't download $NAME.sh from the branch '$br' (no such branch, or no connection to GitHub); nothing was changed."
+	fi
+	new=$(sed -n 's/^VERSION="\([0-9][0-9.]*\)".*/\1/p' "$dl/$NAME.sh" | head -1)
+	if [ -z "$new" ] || ! sh -n "$dl/$NAME.sh" 2>/dev/null; then
+		rm -rf "$dl"; die "The script on '$br' looks incomplete; nothing was changed."
+	fi
+	if ! fetch "$RAW_BASE/$ref/$NAME.asp" "$dl/$NAME.asp" quiet || ! grep -q "wifiinsight-version: $new " "$dl/$NAME.asp"; then
+		rm -rf "$dl"; die "Couldn't download the matching web page from '$br'; nothing was changed."
+	fi
+	short=$(printf '%s' "${sha:-unknown}" | cut -c1-7)
+	say "Installing the development version of $br ($new, commit $short). Settings and history are kept;"
+	say "'$SCRIPT update' goes back to the latest release."
+	b="dev $br $short $(date '+%Y-%m-%d %H:%M')"
+	WI_BUILD="$b" sh "$dl/$NAME.sh" install; rc=$?
+	rm -rf "$dl"
+	if [ $rc -eq 0 ]; then
+		printf '%s\n' "$b" > "$BUILD_FILE"   # also when that branch's installer predates WI_BUILD
+		log "development version installed: $br @ $short ($new)"
+	fi
 	return $rc
 }
 
@@ -1355,7 +1404,7 @@ uninstall() {
 }
 
 status() {
-	say "$TITLE $VERSION"
+	say "$TITLE $VERSION$(b=$(build_text); [ -n "$b" ] && printf ' (%s)' "$b")"
 	say "Data:        $DB ($( [ -f "$DB" ] && du -h "$DB" | cut -f1 || echo missing))"
 	say "Web page:    $(cat "$ADDON_DIR/webui_page" 2>/dev/null || echo 'not mounted')"
 	say "Ready:       $(ready && echo yes || echo 'no (NTP or storage)')"
@@ -1381,7 +1430,7 @@ fw_version() {   # e.g. 3004.388.12_2
 # Everything a bug report or router report needs, and nothing personal: no network names, no MAC
 # addresses, no IP addresses. Works without installing (sh /tmp/wifiinsight.sh debug).
 debug() {
-	say "$TITLE $VERSION"
+	say "$TITLE $VERSION$(b=$(build_text); [ -n "$b" ] && printf ' (%s)' "$b")"
 	say "Router:      $(nvram get productid) $(nvram get odmpid)  firmware $(fw_version)  $(uname -m)"
 	say "BusyBox:     $(busybox 2>/dev/null | head -1 | cut -d' ' -f2)   sqlite3: $("$SQLITE" --version 2>/dev/null | cut -d' ' -f1)"
 	say "Smart Connect: $(nvram get smart_connect_x)   wl_ifnames: $(nvram get wl_ifnames)"
@@ -1436,7 +1485,7 @@ amtm_update() {   # [check]
 }
 
 usage() {
-	say "Usage: $0 [menu] | install | check | update [force] | uninstall [--keep-data] | status | scan |"
+	say "Usage: $0 [menu] | install | check | update [force | dev [branch]] | uninstall [--keep-data] | status | scan |"
 	say "       collection [on|paused|off] | debug | amtmupdate [check] | export | version"
 }
 menu_pause() { printf '\n Press Enter to go back to the menu '; read -r dummy || exit 0; }
@@ -1468,6 +1517,7 @@ menu() {
 		page=$(cat "$ADDON_DIR/webui_page" 2>/dev/null)
 		say ""
 		say " $TITLE $VERSION${page:+   (Wireless > $TITLE, $page)}"
+		b=$(build_text); [ -n "$b" ] && say " This is a $b"
 		say " Collection:   $(collection_text)"
 		say " Quiet hours:  $(quiet_text)$(quiet_now && printf ' (quiet now; set them on the Settings page)')"
 		say " amtm updates: $AMTM_UPDATE"
@@ -1479,6 +1529,7 @@ menu() {
 		say "  5  Reinstall the latest release"
 		say "  6  Debug report, for bug reports (no network names or addresses)"
 		say "  7  Turn amtm updates $( [ "$AMTM_UPDATE" = on ] && printf off || printf on)"
+		say "  8  Development version from GitHub, for testing unreleased changes"
 		say "  9  Uninstall"
 		say "  e  Exit"
 		printf '\n Choose an option: '
@@ -1488,12 +1539,17 @@ menu() {
 			1) ( status ); menu_pause ;;
 			2) ( scan ); menu_pause ;;
 			3) menu_collection ;;
-			4|5)
-				if [ "$opt" = 5 ]; then ( update force ); else ( update ); fi
-				now_ver=$(sed -n 's/^VERSION="\([0-9][0-9.]*\)".*/\1/p' "$SCRIPT" 2>/dev/null | head -1)
+			4|5|8)
+				before=$(md5sum < "$SCRIPT" 2>/dev/null)
+				if [ "$opt" = 8 ]; then
+					say " Development versions are unreleased and can be broken. Option 4 goes back to the latest release."
+					printf ' Branch (Enter for main, e to go back): '; read -r br || br=e
+					case "$br" in e|E) continue ;; esac
+					( update_dev "${br:-main}" )
+				elif [ "$opt" = 5 ]; then ( update force ); else ( update ); fi
 				menu_pause
 				# the update replaced this script: carry on in the new one
-				[ -n "$now_ver" ] && [ "$now_ver" != "$VERSION" ] && exec sh "$SCRIPT" menu ;;
+				[ -f "$SCRIPT" ] && [ "$(md5sum < "$SCRIPT" 2>/dev/null)" != "$before" ] && exec sh "$SCRIPT" menu ;;
 			6) ( debug ); menu_pause ;;
 			7)
 				if [ "$AMTM_UPDATE" = on ]; then AMTM_UPDATE=off; else AMTM_UPDATE=on; fi
@@ -1510,7 +1566,7 @@ case "$1" in
 	'')            if [ -t 0 ] && [ -t 1 ]; then menu; else usage; fi ;;
 	menu)          menu ;;
 	install)       install ;;
-	update)        update "$2"; exit $? ;;
+	update)        if [ "$2" = dev ]; then update_dev "$3"; else update "$2"; fi; exit $? ;;
 	check)         check_support; exit $? ;;
 	uninstall)     uninstall "$2" ;;
 	startup)       startup ;;

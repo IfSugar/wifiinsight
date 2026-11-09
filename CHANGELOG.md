@@ -8,6 +8,7 @@ What changed in each release of WiFi Insight. The release workflow copies a vers
 - `scan` and the syslog say how many channels were measured, and "1 networks" now reads "1 network".
 - **A menu for the terminal, ready for amtm.** Run `/jffs/addons/wifiinsight/wifiinsight.sh` with no arguments for a menu: status, scan now, collection (on, scans paused or off), update, reinstall, debug report, amtm updates on or off, and uninstall (it asks first). amtm opens the same menu.
 - **amtm can update WiFi Insight** (`amtmupdate`), along with your other scripts, from its update option. It installs the latest release, prints two lines and logs the details to `/tmp/wifiinsight/amtmupdate.log`. To keep amtm from updating it, choose *Turn amtm updates off* in the menu (or set `AMTM_UPDATE=off` in the config); `update` still works.
+- **Try unreleased changes:** `wifiinsight.sh update dev` installs the newest code on `main` (or `update dev <branch>` for another branch, such as a fix waiting for release), keeping your settings and history. `status`, `debug` and the page's footer say when a development version is installed. `update` and amtm still only install releases, and bring a development version back to the latest release. Menu option 8 does the same.
 - New command: `wifiinsight.sh collection on|paused|off`, the same as Settings → Collection on the page.
 - Updating no longer runs an extra neighbour scan when you already have history, so `update` finishes sooner and doesn't make Wi-Fi hiccup.
 

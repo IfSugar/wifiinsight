@@ -98,6 +98,8 @@ If the tab doesn't show up, reload the router page with **Ctrl+F5** (Windows) or
 
 **Updating:** run `/jffs/addons/wifiinsight/wifiinsight.sh update`. It asks GitHub for the latest release, and if that's a newer version it installs it over the old one, keeping your settings, history and page slot. `update force` reinstalls the latest release. Only published releases are installed, never unreleased work. Every version is listed under [Releases](https://github.com/IfSugar/wifiinsight/releases), with an install command pinned to that version.
 
+**Trying unreleased changes:** `wifiinsight.sh update dev` installs the newest code on `main`, and `update dev <branch>` the newest code on another branch, for example one from a pull request you'd like to test (menu option 8 does the same). Settings, history and the page slot are kept. Development code can be unfinished, so use it to test a fix or help with a report. `status`, `debug` and the page's footer then say it's a development version, with the branch and commit. Plain `update` (and amtm) stays on releases: it takes you back to the latest release, unless the development version has a higher version number, then it waits for that release (`update force` goes back right away).
+
 **Menu and amtm:** run `/jffs/addons/wifiinsight/wifiinsight.sh` with no arguments for a menu (status, scan now, collection, update, debug report, uninstall). WiFi Insight supports amtm's script updates (`amtmupdate`), see [amtm](#amtm). Until it's in amtm's built-in list, you can open the menu from amtm by adding `/jffs/addons/wifiinsight/wifiinsight.sh` as a personal script, with no argument.
 
 ## Web UI slot
@@ -157,7 +159,8 @@ Cron jobs: `wifiinsight_collect` (every minute), `wifiinsight_scan` (scan interv
 /jffs/addons/wifiinsight/wifiinsight.sh collection paused   # on, paused or off, as in Settings
 /jffs/addons/wifiinsight/wifiinsight.sh debug       # router, firmware and driver details for issues (no network names or addresses)
 /jffs/addons/wifiinsight/wifiinsight.sh startup     # re-apply config, cron and the web page
-/jffs/addons/wifiinsight/wifiinsight.sh update      # install the latest version from GitHub
+/jffs/addons/wifiinsight/wifiinsight.sh update      # install the latest release from GitHub
+/jffs/addons/wifiinsight/wifiinsight.sh update dev  # install the newest unreleased code on main (or: update dev <branch>)
 /jffs/addons/wifiinsight/wifiinsight.sh amtmupdate  # the same, for amtm: two lines of output, details in /tmp/wifiinsight/amtmupdate.log
 /jffs/addons/wifiinsight/wifiinsight.sh version     # print the installed version
 /jffs/addons/wifiinsight/wifiinsight.sh uninstall   # remove everything
@@ -223,7 +226,7 @@ Please report security problems privately: see the [security policy](.github/SEC
 
 ## Releasing
 
-Changes go in through pull requests. The [Checks workflow](.github/workflows/checks.yml) runs on every pull request and push: the script and page versions match, the script parses in BusyBox `ash` (the router's shell), every layout of the driver's airtime statistics parses ([`.github/tests/chanim-formats.sh`](.github/tests/chanim-formats.sh)), a full day of history exports completely on a shell set up like Merlin's, with only the BusyBox commands Merlin includes ([`.github/tests/large-history.sh`](.github/tests/large-history.sh)), the page and the script read quiet hours the same way and each collection mode sets the right cron jobs ([`.github/tests/quiet-hours.sh`](.github/tests/quiet-hours.sh)), scans wait for slow or busy radios ([`.github/tests/scan-wait.sh`](.github/tests/scan-wait.sh)), the radio's per-channel measurements are read, stored and exported ([`.github/tests/measured.sh`](.github/tests/measured.sh)), `amtmupdate`, the menu and amtm's version check work ([`.github/tests/amtm.sh`](.github/tests/amtm.sh)), every band and width is read correctly from the driver's channel codes, and tri-band routers pass the check ([`.github/tests/radio-bands.sh`](.github/tests/radio-bands.sh)), and the page's JavaScript is valid. Merging never releases anything.
+Changes go in through pull requests. The [Checks workflow](.github/workflows/checks.yml) runs on every pull request and push: the script and page versions match, the script parses in BusyBox `ash` (the router's shell), every layout of the driver's airtime statistics parses ([`.github/tests/chanim-formats.sh`](.github/tests/chanim-formats.sh)), a full day of history exports completely on a shell set up like Merlin's, with only the BusyBox commands Merlin includes ([`.github/tests/large-history.sh`](.github/tests/large-history.sh)), the page and the script read quiet hours the same way and each collection mode sets the right cron jobs ([`.github/tests/quiet-hours.sh`](.github/tests/quiet-hours.sh)), scans wait for slow or busy radios ([`.github/tests/scan-wait.sh`](.github/tests/scan-wait.sh)), the radio's per-channel measurements are read, stored and exported ([`.github/tests/measured.sh`](.github/tests/measured.sh)), `amtmupdate`, the menu and amtm's version check work ([`.github/tests/amtm.sh`](.github/tests/amtm.sh)), `update dev` installs a branch's newest code and plain `update` stays on releases ([`.github/tests/dev-update.sh`](.github/tests/dev-update.sh)), every band and width is read correctly from the driver's channel codes, and tri-band routers pass the check ([`.github/tests/radio-bands.sh`](.github/tests/radio-bands.sh)), and the page's JavaScript is valid. Merging never releases anything.
 
 To release:
 
@@ -231,7 +234,7 @@ To release:
 2. Merge it.
 3. Tag `main` with the version, either with `git tag x.y.z origin/main && git push origin x.y.z` (the new version in place of `x.y.z`), or on GitHub under **Releases → Draft a new release**: type the version as a new tag, target `main`, and publish (leave the notes empty).
 
-The [Release workflow](.github/workflows/release.yml) then checks that the tag matches both files and is on `main`, runs the checks again, and publishes the release with both files attached and that version's changelog section as notes. `update` on routers and the install command only ever install the latest release. Editing the changelog later refreshes the notes of existing releases.
+The [Release workflow](.github/workflows/release.yml) then checks that the tag matches both files and is on `main`, runs the checks again, and publishes the release with both files attached and that version's changelog section as notes. `update` on routers and the install command only ever install the latest release (`update dev` is the explicit way to get unreleased code). Editing the changelog later refreshes the notes of existing releases.
 
 ## License
 

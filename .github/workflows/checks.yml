@@ -65,6 +65,9 @@ jobs:
       - name: Check amtm support (amtmupdate, the menu, amtm's version check)
         run: bash .github/tests/amtm.sh
 
+      - name: Check development updates (update dev [branch]; plain update stays on releases)
+        run: bash .github/tests/dev-update.sh
+
       - name: Check the page's JavaScript
         run: |
           python3 - <<'EOF'
