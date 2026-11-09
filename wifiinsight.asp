@@ -638,11 +638,11 @@ function renderHeat() {
 	}
 	if (WI.showActive && r) activeBox(ctx, ch, r, padL, colW, padT, gridH);
 	WI.heatGeo = { padL: padL, padT: padT, colW: colW, rowH: rowH, rows: rows, chans: ch, bucket: info.bucket, src: src };
+	/* "38 scans, newest 5 min ago, measured by the radio." (scans from before an update have no measurements) */
+	var how = src !== 'measured' ? 'estimated from the networks heard' : (info.mscans < info.scans && !info.latestOnly ? info.mscans + ' measured' : 'measured') + ' by the radio';
 	$('wiHeatSub').textContent = (info.latestOnly ? 'Latest scan, ' + ago(nowTs() - rows[0].ts)
-		: info.scans + ' scan' + (info.scans > 1 ? 's' : '') + ' in range' + (src === 'measured' && info.mscans < info.scans ? ', ' + info.mscans + ' measured' : '')
-			+ (info.bucket ? ', shown as ' + bucketName(info.bucket) + ' averages' : ', newest ' + ago(nowTs() - rows[0].ts)))
-		+ (src === 'measured' ? '. Airtime the radio measured on each channel while scanning.' : '. Estimated from nearby networks’ signal strength and the load they report.')
-		+ (qshow ? ' No scheduled scans during quiet hours.' : '');
+		: info.scans + ' scan' + (info.scans > 1 ? 's' : '') + (info.bucket ? ', shown as ' + bucketName(info.bucket) + ' averages' : ', newest ' + ago(nowTs() - rows[0].ts)))
+		+ ', ' + how + '.' + (qshow ? ' No scheduled scans in quiet hours.' : '');
 }
 function axisChannels(ctx, ch, padL, colW, y0) {
 	ctx.fillStyle = C.tick; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
@@ -866,8 +866,9 @@ function renderChannels() {
 	$('wiLoadSrc').innerHTML = srcControls(L.info, L.src, 'wiMeshLbl2');
 	$('wiLoadTitle').textContent = meas ? 'Load per channel' : 'Estimated load per channel';
 	var mn = L.info.mscans, part = meas && !L.latestOnly && mn < L.n;   /* scans from before the update have no measurements */
-	$('wiLoadSub').textContent = (L.latestOnly ? 'Latest scan' : 'Average of ' + (part ? mn + ' of ' : '') + L.n + ' scan' + (L.n === 1 ? '' : 's') + ' in range')
-		+ (part ? ', the ones the radio measured' : meas ? ', measured by the radio while scanning' : ', estimated from the networks heard') + '. Lower is better. The dashed band is the router’s current channel.';
+	var sc = function (n) { return n + ' scan' + (n === 1 ? '' : 's'); };
+	$('wiLoadSub').textContent = (meas ? 'Measured by the radio' : 'Estimated from the networks heard')
+		+ (L.latestOnly ? ' in the latest scan' : part ? ' in ' + mn + ' of the ' + sc(L.n) + ' in range' : ', averaged over ' + sc(L.n)) + '. Lower is better.';
 	var data = ch.map(function (c) { return L.avg[c]; });
 	var maxV = Math.max.apply(null, data.map(function (v) { return v || 0; }));
 	var curIdx = ch.map(function (c, i) { return cur.indexOf(c) >= 0 ? i : -1; }).filter(function (i) { return i >= 0; });
@@ -1531,7 +1532,7 @@ window.WiFiInsight = {
 		<div class="card">
 			<div class="head">
 				<div class="grow"><h3 id="wiLoadTitle">Estimated load per channel</h3><div class="sub" id="wiLoadSub"></div></div>
-				<div class="legend"><label id="wiMeshLbl2"><input type="checkbox" id="wiMesh2" onchange="WiFiInsight.setMesh(this.checked)"/>Include my mesh</label></div>
+				<div class="legend"><span class="li"><span class="sq" style="background:rgba(255,204,0,0.25);border:1px dashed #ffcc00"></span>Router's channel</span><label id="wiMeshLbl2"><input type="checkbox" id="wiMesh2" onchange="WiFiInsight.setMesh(this.checked)"/>Include my mesh</label></div>
 			</div>
 			<div class="legend srcrow" id="wiLoadSrc"></div>
 			<div class="chartbox sm" id="wiLoadChart"></div>
