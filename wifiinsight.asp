@@ -8,7 +8,7 @@
 <link rel="shortcut icon" href="images/favicon.png"/>
 <link rel="icon" href="images/favicon.png"/>
 <title>WiFi Insight</title>
-<!-- wifiinsight-version: 1.0.11 (must match VERSION in wifiinsight.sh) -->
+<!-- wifiinsight-version: 1.1.0 (must match VERSION in wifiinsight.sh) -->
 <link rel="stylesheet" type="text/css" href="index_style.css"/>
 <link rel="stylesheet" type="text/css" href="form_style.css"/>
 <script type="text/javascript" src="/js/jquery.js"></script>
@@ -122,6 +122,34 @@
 #wi .saved { color: #7fd1ad; margin-left: 10px; display: none; }
 #wi .scannote { color: var(--muted); font-size: 12px; }
 #wi .scannote.bad { color: #f2b8a2; }
+#wi .warn a { color: #ffe27a; }
+/* Quiet hours: 7 rows of 48 half hours. Gaps: 1px inside an hour, 3px between hours, 6px every 6 hours. */
+#wi .qpresets { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+#wi .qpresets .btn { padding: 5px 11px; }
+#wi .qgrid { display: flex; flex-direction: column; gap: 3px; touch-action: none; user-select: none; -webkit-user-select: none; }
+#wi .qrow { display: flex; align-items: center; }
+#wi .qrow.qhead { align-items: flex-end; height: 16px; }
+#wi .qday { width: 40px; flex: none; color: var(--ink-2); }
+#wi .qrow > button, #wi .qrow.qhead > span.qt { flex: 1 1 0; min-width: 0; margin: 0 1px 0 0; }
+#wi .qrow > .gh { margin-right: 3px; }
+#wi .qrow > .g6 { margin-right: 6px; }
+#wi .qrow > .gl { margin-right: 0; }
+#wi .qrow.qhead > span.qt { color: var(--muted); font-size: 10px; white-space: nowrap; overflow: visible; }
+#wi .qrow > button { height: 22px; padding: 0; border-radius: 2px; border: 1px solid #3a474b; background: #1f282b; cursor: pointer; }
+#wi .qrow > button:hover { border-color: var(--muted); }
+#wi .qrow > button.on { background: var(--unclass); border-color: var(--unclass); }
+#wi .qrow > button.on:hover { border-color: #ffd27a; }
+#wi .qrow > button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+#wi .qsum { margin-top: 12px; background: #1f282b; border: 1px solid var(--axis); border-radius: 6px; padding: 9px 12px; line-height: 1.6; }
+#wi .qsum .k { color: var(--muted); }
+#wi .qkey { display: inline-flex; align-items: center; gap: 6px; }
+#wi .qkey i { display: inline-block; width: 12px; height: 12px; border-radius: 2px; box-sizing: border-box; }
+#wi .qmark { display: none; align-items: center; gap: 6px; color: #f3e2b4; white-space: nowrap; }
+#wi .qmark i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; background: var(--unclass); }
+#wi .qband { display: none; align-items: center; margin-bottom: 3px; }
+#wi .qband .t { flex: none; text-align: right; padding-right: 6px; color: var(--muted); font-size: 11px; }
+#wi .qband .b { flex: 1; height: 22px; margin: 0 5px 0 1px; border-radius: 3px; border: 1px dashed var(--unclass); color: #f3e2b4; font-size: 11px;
+	display: flex; align-items: center; justify-content: center; background: repeating-linear-gradient(135deg, rgba(201,133,0,0.16) 0 6px, transparent 6px 12px); }
 </style>
 <script type="text/javascript">
 var custom_settings = <% get_custom_settings(); %>;
@@ -486,12 +514,20 @@ function prepCanvas(cv, cssH) {
 }
 function renderHeat() {
 	var cv = $('wiHeat'), r = radio(), info = scanRows(), rows = info.rows, ch = chans();
+	var qs = quietState(), qband = $('wiHeatQuiet');
+	qband.style.display = 'none'; $('wiHeatQuietKey').style.display = 'none';
 	if (!rows.length || !ch.length) {
 		cv.style.display = 'none'; $('wiHeatEmpty').style.display = 'block'; $('wiHeatEmpty').innerHTML = noScansMsg(); $('wiHeatSub').textContent = '';
 		WI.heatGeo = null; return;
 	}
 	cv.style.display = 'block'; $('wiHeatEmpty').style.display = 'none';
 	var padL = rangeInfo().multi ? 56 : 46, padB = 34, padT = 4, padR = 4;
+	var qshow = qs && qs.mode === 'quiet' && !qs.all && !info.bucket;   /* a row above the newest scan, while it's quiet */
+	if (qshow) {
+		var since = qWhen(qs.start, qs.from);
+		qband.innerHTML = '<span class="t" style="width:' + padL + 'px">' + since + '</span><div class="b">Quiet hours since ' + since + ': no scheduled scans</div>';
+		qband.style.display = 'flex'; $('wiHeatQuietKey').style.display = 'inline-flex';
+	}
 	var rowH = Math.min(20, 220 / rows.length);
 	if (rowH >= 3) rowH = Math.floor(rowH);
 	var gridH = rowH * rows.length;
@@ -515,7 +551,7 @@ function renderHeat() {
 	WI.heatGeo = { padL: padL, padT: padT, colW: colW, rowH: rowH, rows: rows, chans: ch, bucket: info.bucket };
 	$('wiHeatSub').textContent = (info.latestOnly ? 'Latest scan, ' + ago(nowTs() - rows[0].ts)
 		: info.scans + ' scan' + (info.scans > 1 ? 's' : '') + ' in range' + (info.bucket ? ', shown as ' + bucketName(info.bucket) + ' averages' : ', newest ' + ago(nowTs() - rows[0].ts)))
-		+ '. Estimated from nearby networks’ signal strength and the load they report.';
+		+ '. Estimated from nearby networks’ signal strength and the load they report.' + (qshow ? ' No scheduled scans during quiet hours.' : '');
 }
 function axisChannels(ctx, ch, padL, colW, y0) {
 	ctx.fillStyle = C.tick; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
@@ -865,13 +901,215 @@ function renderCounters() {
 	$('wiCountersSub').innerHTML = 'Raw values from <code>wl chanim_stats</code>, ' + ago(nowTs() - l[0]) + '.';
 }
 
+/* =================== QUIET HOURS =================== */
+/* The router keeps quiet hours as 84 hex digits: 336 half hours, Monday 00:00 first, four to a digit,
+   high bit first (so 12 digits a day). Times are the router's local time: the page works out the
+   router's clock from tz_off, whatever time zone the browser is in. */
+var QD = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+var QDL = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+var MODES = [
+	['on', 'On', 'Samples every 30 seconds and scans on schedule, outside quiet hours.'],
+	['paused', 'Scans paused', 'Keeps sampling (it doesn’t affect Wi-Fi), but runs no scheduled scans until you switch back. Scan now still works.'],
+	['off', 'Off', 'Stops sampling and scanning. The page, settings and history stay as they are, so you can switch it back on any time.']
+];
+var QPRESETS = [
+	['Evenings, 18:00–24:00 every day', function (d, s) { return s >= 36; }],
+	['Work hours, Mon–Fri 09:00–17:00', function (d, s) { return d < 5 && s >= 18 && s < 34; }],
+	['Weekends, all day', function (d) { return d >= 5; }],
+	['Clear', function () { return false; }]
+];
+function qDecode(hex) {
+	var a = [], ok = /^[0-9a-f]{84}$/.test(hex || '');
+	for (var i = 0; i < 336; i++) a.push(ok && ((parseInt(hex.charAt(i >> 2), 16) >> (3 - (i & 3))) & 1) === 1);
+	return a;
+}
+function qEncode(a) {
+	var h = '';
+	for (var i = 0; i < 84; i++) { var d = 0; for (var b = 0; b < 4; b++) if (a[i * 4 + b]) d |= 8 >> b; h += d.toString(16); }
+	return h;
+}
+function qCount(a) { var n = 0; for (var i = 0; i < 336; i++) if (a[i]) n++; return n; }
+function slotHm(s) { return pad(Math.floor(s / 2)) + ':' + (s % 2 ? '30' : '00'); }   /* 0..48; 48 = 24:00 */
+function routerNow() {   /* the router's local time, to read with getUTC* */
+	var off = WI.live && typeof WI.live.tz_off === 'number' ? WI.live.tz_off : -new Date().getTimezoneOffset() * 60;
+	return new Date(Date.now() + off * 1000);
+}
+function weekMinute(d) { return ((d.getUTCDay() + 6) % 7) * 1440 + d.getUTCHours() * 60 + d.getUTCMinutes(); }
+/* A minute counted from this Monday 00:00 (it can be before or after this week) as {day, time}.
+   end: a boundary at midnight reads as 24:00 of the day before. */
+function wmAt(x, end) {
+	var d = Math.floor((end ? x - 1 : x) / 1440), t = x - d * 1440;
+	return { day: ((d % 7) + 7) % 7, rel: d, time: pad(Math.floor(t / 60)) + ':' + pad(t % 60) };
+}
+/* The scan job's schedule, as cron_add in the script sets it: every N minutes, or minute 7 of every Nth hour. */
+function scanFires(t, iv) {
+	if (!(iv > 0)) return false;
+	var m = t % 60, h = Math.floor(t / 60) % 24;
+	return iv < 60 ? m % iv === 0 : m === 7 && h % (iv / 60) === 0;
+}
+function nextScan(a, iv, from) {   /* minutes until the next scheduled scan outside quiet hours, or -1 */
+	for (var k = 1; k <= 10080; k++) { var t = (from + k) % 10080; if (scanFires(t, iv) && !a[Math.floor(t / 30)]) return k; }
+	return -1;
+}
+function everyText(iv) { return iv < 60 ? 'every ' + iv + ' minutes' : iv === 60 ? 'every hour' : 'every ' + (iv / 60) + ' hours'; }
+function qDayRanges(a, d) {
+	var out = [], st = -1;
+	for (var s = 0; s <= 48; s++) {
+		var on = s < 48 && a[d * 48 + s];
+		if (on && st < 0) st = s;
+		if (!on && st >= 0) { out.push(slotHm(st) + '–' + slotHm(s)); st = -1; }
+	}
+	return out.join(', ');
+}
+function qText(a) {   /* "Mon–Fri 18:00–24:00 · Sat–Sun 09:00–24:00" */
+	var per = [], parts = [], d;
+	for (d = 0; d < 7; d++) per.push(qDayRanges(a, d));
+	for (d = 0; d < 7; ) {
+		var e = d;
+		while (e < 6 && per[e + 1] === per[d]) e++;
+		if (per[d]) parts.push((e > d ? QD[d] + '–' + QD[e] : QD[d]) + ' ' + per[d]);
+		d = e + 1;
+	}
+	return parts.join(' · ');
+}
+/* The quiet stretch the router is in now, from the saved settings, or null. */
+function quietState() {
+	var L = WI.live;
+	if (!L) return null;
+	if (L.collection === 'off' || L.collection === 'paused') return { mode: L.collection };
+	if (!(L.scan_interval > 0) || !L.quiet) return null;
+	var a = qDecode(L.quiet), from = weekMinute(routerNow()), s = Math.floor(from / 30), b = 0, e = 0;
+	if (!a[s]) return null;
+	if (qCount(a) === 336) return { mode: 'quiet', all: true };
+	while (a[(s - b - 1 + 336) % 336]) b++;
+	while (a[(s + e + 1) % 336]) e++;
+	return { mode: 'quiet', from: from, start: (s - b) * 30, end: (s + e + 1) * 30 };
+}
+function qWhen(x, from, end) {   /* "18:00", or "Wed 22:00" when it isn't today */
+	var w = wmAt(x, end), today = Math.floor(from / 1440);
+	return (w.rel === today ? '' : QD[w.day] + ' ') + w.time;
+}
+function renderQuietMarks() {
+	var q = quietState(), mark = $('wiQuietMark'), note = $('wiQuiet'), L = WI.live, v = WI.view;
+	var where = v === 'insight' || v === 'survey' || v === 'channels' || (v === 'trouble' && q && q.mode === 'off');
+	var link = function (t) { return ' <a href="#settings" onclick="WiFiInsight.setView(\'settings\');return false;">' + t + '</a>'; };
+	if (!q) { mark.style.display = 'none'; note.style.display = 'none'; return; }
+	var m = '', n = '', every = (L.sample_interval || 30) + ' seconds';
+	if (q.mode === 'off') {
+		m = 'Collection off';
+		n = 'Collection is off: no samples or scheduled scans are recorded, so the charts stop where it was switched off. Scan now still works.' + link('Switch it back on in Settings');
+	} else if (q.mode === 'paused') {
+		m = 'Scans paused';
+		n = 'Scheduled scans are paused, so the spectrum, site survey and channel statistics show the last scan. Interference keeps updating every ' + every + ', and Scan now still works.' + link('Change in Settings');
+	} else if (q.all) {
+		m = 'Quiet hours all week';
+		n = 'Every half hour of the week is marked quiet, so only Scan now runs a neighbour scan. Interference keeps updating every ' + every + '.' + link('Change quiet hours');
+	} else {
+		var st = wmAt(q.start), en = wmAt(q.end, true), today = Math.floor(q.from / 1440);
+		var later = wmAt(q.end);   /* past tomorrow: name the day, and midnight reads as 00:00 of the next one */
+		m = 'Quiet until ' + (q.end - q.from <= 1440 ? en.time : QD[later.day] + ' ' + later.time);
+		var range = st.rel === en.rel ? QDL[st.day] + ' ' + st.time + '–' + en.time : QDL[st.day] + ' ' + st.time + ' to ' + QDL[en.day] + ' ' + en.time;
+		n = 'Quiet hours (' + range + '): scheduled scans are skipped, so the spectrum, site survey and channel statistics show the last scan before ' + qWhen(q.start, q.from) + '. Interference keeps updating every ' + every + '.' + link('Change quiet hours');
+	}
+	mark.innerHTML = '<i></i>' + esc(m); mark.style.display = 'inline-flex';
+	note.innerHTML = n; note.style.display = where ? 'block' : 'none';
+}
+
 /* =================== SETTINGS =================== */
+function qCellCls(s) { return s === 47 ? 'gl' : (s + 1) % 12 === 0 ? 'g6' : (s + 1) % 2 === 0 ? 'gh' : ''; }
+function qLabel(i) { return QDL[Math.floor(i / 48)] + ' ' + slotHm(i % 48) + ' to ' + slotHm(i % 48 + 1) + (WI.qEdit[i] ? ', quiet' : ', scans allowed'); }
+function renderQuietGrid() {
+	var a = WI.qEdit, h = '<div class="qrow qhead"><span class="qday"></span>', s, d;
+	for (s = 0; s < 48; s++) h += '<span class="qt ' + qCellCls(s) + '">' + (s % 6 === 0 ? pad(s / 2) : '') + '</span>';
+	h += '</div>';
+	for (d = 0; d < 7; d++) {
+		h += '<div class="qrow"><span class="qday">' + QD[d] + '</span>';
+		for (s = 0; s < 48; s++) {
+			var i = d * 48 + s;
+			h += '<button type="button" data-s="' + i + '" class="' + qCellCls(s) + (a[i] ? ' on' : '') + '" aria-pressed="' + a[i] + '" aria-label="' + qLabel(i) + '"></button>';
+		}
+		h += '</div>';
+	}
+	$('qGrid').innerHTML = h;
+	renderQuietSum();
+}
+function qSet(i, v) {
+	if (WI.qEdit[i] === v) return;
+	WI.qEdit[i] = v;
+	var b = $('qGrid').querySelector('[data-s="' + i + '"]');
+	if (b) { b.className = qCellCls(i % 48) + (v ? ' on' : ''); b.setAttribute('aria-pressed', v); b.setAttribute('aria-label', qLabel(i)); }
+	renderQuietSum();
+}
+function qCellOf(el) { var v = el && el.getAttribute && el.getAttribute('data-s'); return v == null ? -1 : +v; }
+function qPreset(n) {
+	for (var i = 0; i < 336; i++) WI.qEdit[i] = !!QPRESETS[n][1](Math.floor(i / 48), i % 48);
+	renderQuietGrid();
+}
+function renderQuietSum() {
+	var a = WI.qEdit, iv = +$('setScan').value, mode = WI.modeEdit, all = 0, run = 0, t;
+	for (t = 0; t < 10080; t++) if (scanFires(t, iv)) { all++; if (!a[Math.floor(t / 30)]) run++; }
+	var q = qText(a), from = weekMinute(routerNow()), now = wmAt(from), rows = [];
+	rows.push(['Quiet', q || 'none, so scheduled scans run around the clock']);
+	if (mode === 'off') rows.push(['Scheduled scans', 'none while collection is off']);
+	else if (mode === 'paused') rows.push(['Scheduled scans', 'none while scans are paused']);
+	else if (!(iv > 0)) rows.push(['Scheduled scans', 'none: neighbour scans are set to Off']);
+	else {
+		rows.push(['Scheduled scans', run + ' of ' + all + ' a week (' + everyText(iv) + (q ? ' outside quiet hours' : '') + ')']);
+		var k = nextScan(a, iv, from);
+		rows.push(['Now, ' + QDL[now.day] + ' ' + now.time, (a[Math.floor(from / 30)] ? 'quiet' : 'scans allowed') + '; '
+			+ (k < 0 ? 'every half hour is quiet, so only Scan now runs a scan' : 'the next scheduled scan runs ' + (function () {
+				var w = wmAt(from + k), dd = w.rel - Math.floor(from / 1440);
+				return (dd === 0 ? 'today' : dd === 1 ? 'tomorrow' : 'on ' + QDL[w.day]) + ' at ' + w.time;
+			})())]);
+	}
+	$('qSum').innerHTML = rows.map(function (r) { return '<div><span class="k">' + esc(r[0]) + ':</span> ' + esc(r[1]) + '</div>'; }).join('');
+}
+function renderMode() {
+	$('setMode').innerHTML = MODES.map(function (m) {
+		return '<button type="button" class="' + (m[0] === WI.modeEdit ? 'on' : '') + '" aria-pressed="' + (m[0] === WI.modeEdit) + '" onclick="WiFiInsight.setMode(\'' + m[0] + '\')">' + m[1] + '</button>';
+	}).join('');
+	var hint = MODES.filter(function (m) { return m[0] === WI.modeEdit; })[0][2];
+	$('setModeHint').textContent = hint.replace('30 seconds', $('setSample').value === '60' ? 'minute' : '30 seconds');
+}
+function setMode(m) { WI.modeEdit = m; renderMode(); renderQuietSum(); }
+function quietBoot() {
+	/* Click or drag to paint: the first half hour sets whether the drag marks or clears.
+	   elementFromPoint, so touch drags paint too (a touch keeps sending events to where it started). */
+	var g = $('qGrid'), end = function () { WI.qPaint = null; };
+	g.addEventListener('pointerdown', function (e) {
+		var i = qCellOf(e.target);
+		if (i < 0 || (e.pointerType === 'mouse' && e.button !== 0)) return;
+		e.preventDefault();
+		WI.qPaint = !WI.qEdit[i]; qSet(i, WI.qPaint);
+	});
+	document.addEventListener('pointermove', function (e) {
+		if (WI.qPaint == null) return;
+		var i = qCellOf(document.elementFromPoint(e.clientX, e.clientY));
+		if (i >= 0) qSet(i, WI.qPaint);
+	});
+	document.addEventListener('pointerup', end);
+	document.addEventListener('pointercancel', end);
+	g.addEventListener('click', function (e) {   /* the keyboard (Enter / Space); pointer clicks were handled on pointerdown */
+		if (e.detail !== 0) return;
+		var i = qCellOf(e.target);
+		if (i >= 0) qSet(i, !WI.qEdit[i]);
+	});
+	$('setScan').addEventListener('change', renderQuietSum);
+	$('setSample').addEventListener('change', renderMode);
+}
 function renderSettings() {
 	var L = WI.live;
 	if (!L) return;
+	if (WI.setLoaded) return;   /* keep unsaved edits when the page redraws (a resize, a data refresh) */
+	WI.setLoaded = true;
 	$('setSample').value = String(L.sample_interval);
 	$('setScan').value = String(L.scan_interval);
 	$('setRetain').value = String(L.retain_days);
+	WI.modeEdit = L.collection === 'paused' || L.collection === 'off' ? L.collection : 'on';
+	WI.qEdit = qDecode(L.quiet);
+	renderMode();
+	$('qPresets').innerHTML = QPRESETS.map(function (p, n) { return '<button type="button" class="btn" onclick="WiFiInsight.qPreset(' + n + ')">' + p[0] + '</button>'; }).join('');
+	renderQuietGrid();
 	if (document.activeElement !== $('setOwn')) $('setOwn').value = L.extra_own || '';
 	$('setOwnAuto').innerHTML = (L.own_ssids || []).length ? 'Detected automatically: ' + L.own_ssids.map(function (s) { return '<code>' + esc(s) + '</code>'; }).join(' ') : '';
 	var mb = L.db_bytes ? (L.db_bytes / 1048576).toFixed(1) + ' MB' : '–';
@@ -883,13 +1121,21 @@ function saveSettings() {
 	custom_settings.wifiinsight_scan = $('setScan').value;
 	custom_settings.wifiinsight_retain = $('setRetain').value;
 	custom_settings.wifiinsight_ownssids = own;
+	custom_settings.wifiinsight_mode = WI.modeEdit || 'on';
+	custom_settings.wifiinsight_quiet = qEncode(WI.qEdit || []);   /* always 84 digits: all zeros = no quiet hours */
 	document.form.amng_custom.value = JSON.stringify(custom_settings);
 	document.form.action_script.value = 'start_wifiinsightconfig';
 	document.form.action_wait.value = '3';
 	document.form.submit();
-	var b = $('setSave'); b.disabled = true; b.textContent = 'Saving…';
+	var btns = [$('setSave'), $('qSave')], marks = [$('setSaved'), $('qSaved')];
+	btns.forEach(function (b) { b.disabled = true; b.textContent = 'Saving…'; });
 	setTimeout(function () {
-		loadAll().then(function () { b.disabled = false; b.textContent = 'Save'; $('setSaved').style.display = 'inline'; setTimeout(function () { $('setSaved').style.display = 'none'; }, 4000); });
+		WI.setLoaded = false;   /* show what the router saved */
+		loadAll().then(function () {
+			btns.forEach(function (b) { b.disabled = false; b.textContent = 'Save'; });
+			marks.forEach(function (m) { m.style.display = 'inline'; });
+			setTimeout(function () { marks.forEach(function (m) { m.style.display = 'none'; }); }, 4000);
+		});
 	}, 4000);
 }
 
@@ -908,9 +1154,12 @@ function render() {
 	renderView();
 	if (WI.live) {
 		var r = radio();
-		$('wiFoot').innerHTML = 'Updated ' + hm(WI.live.generated) + ' · samples every ' + WI.live.sample_interval + ' s · neighbour scans ' +
-			(WI.live.scan_interval > 0 ? 'every ' + WI.live.scan_interval + ' min' : 'off') + ' · history kept ' + WI.live.retain_days + ' days · v' + WI.live.version + (r ? ' · ' + r.iface : '');
+		var L = WI.live, scans = L.collection === 'off' ? 'collection off' : L.collection === 'paused' ? 'neighbour scans paused'
+			: 'neighbour scans ' + (L.scan_interval > 0 ? 'every ' + L.scan_interval + ' min' + (L.quiet ? ' outside quiet hours' : '') : 'off');
+		$('wiFoot').innerHTML = 'Updated ' + hm(L.generated) + ' · samples every ' + L.sample_interval + ' s · ' + scans
+			+ ' · history kept ' + L.retain_days + ' days · v' + L.version + (r ? ' · ' + r.iface : '');
 	}
+	renderQuietMarks();
 }
 function renderView() {
 	Object.keys(WI.charts).forEach(function (k) { WI.charts[k].destroy(); delete WI.charts[k]; });
@@ -920,7 +1169,7 @@ function renderView() {
 	else if (WI.view === 'trouble') renderTrouble();
 	else renderSettings();
 }
-function setView(v) { WI.view = v; store('view', v); try { history.replaceState(null, '', '#' + v); } catch (e) {} render(); }
+function setView(v) { if (v === 'settings' && WI.view !== 'settings') WI.setLoaded = false; WI.view = v; store('view', v); try { history.replaceState(null, '', '#' + v); } catch (e) {} render(); }
 function setBand(b) { WI.band = b; store('band', b); WI.allEvents = false; WI.mapHover = null; render(); }
 function setRange(r) {
 	WI.range = r; store('range', r);
@@ -979,6 +1228,7 @@ function boot() {
 	$('wiMap').addEventListener('mouseleave', function () { $('wiMapTip').style.display = 'none'; if (WI.mapHover) { WI.mapHover = null; renderSignalMap(aps()); } });
 	var rt; window.addEventListener('resize', function () { clearTimeout(rt); rt = setTimeout(renderView, 150); });
 	$('wiRamp').style.background = 'linear-gradient(90deg,' + RAMP.join(',') + ')';
+	quietBoot();
 	render();
 	loadAll();
 	setInterval(function () { if (WI.view !== 'settings') loadAll({ live: 1 }); }, 60000);
@@ -1029,7 +1279,7 @@ function loadChart(done) {
 window.initial = initial;
 window.WiFiInsight = {
 	setView: setView, setBand: setBand, setRange: setRange, scanNow: scanNow, setMesh: setMesh,
-	saveSettings: saveSettings, sortBy: sortBy, toggleSeries: toggleSeries,
+	saveSettings: saveSettings, sortBy: sortBy, toggleSeries: toggleSeries, setMode: setMode, qPreset: qPreset,
 	toggleEvents: function () { WI.allEvents = !WI.allEvents; renderEvents(); },
 	heatOption: function (key, on) { WI[key] = on; renderHeat(); },
 	state: WI
@@ -1080,9 +1330,11 @@ window.WiFiInsight = {
 		<div class="seg" id="wiBands"></div>
 		<div class="seg" id="wiRanges"></div>
 		<div class="grow"></div>
+		<span class="qmark" id="wiQuietMark"></span>
 		<span class="scannote" id="wiScanNote"></span>
 		<button type="button" class="btn" id="wiScanBtn" onclick="WiFiInsight.scanNow()" title="Scans every channel on both radios now (about 15 seconds). Wi-Fi may pause for about a second on each radio.">Scan now</button>
 	</div>
+	<div class="warn" id="wiQuiet"></div>
 
 	<!-- ============ INSIGHT ============ -->
 	<div class="view" id="v-insight">
@@ -1103,6 +1355,7 @@ window.WiFiInsight = {
 					<label><input type="checkbox" id="wiMesh" onchange="WiFiInsight.setMesh(this.checked)"/>Include my mesh</label>
 				</div>
 			</div>
+			<div class="qband" id="wiHeatQuiet"></div>
 			<div class="rel">
 				<canvas class="full" id="wiHeat"></canvas>
 				<div class="empty" id="wiHeatEmpty" style="display:none"></div>
@@ -1111,6 +1364,7 @@ window.WiFiInsight = {
 			<div class="foot">
 				<span class="ramp">Clean <i id="wiRamp"></i> Busy</span>
 				<span><span style="display:inline-block;width:14px;height:10px;border:2px solid #ffcc00;border-radius:2px;vertical-align:-1px;margin-right:5px"></span>Router's channel</span>
+				<span class="qkey" id="wiHeatQuietKey" style="display:none"><i style="border:1px dashed #c98500"></i>Quiet hours</span>
 			</div>
 		</div>
 		<div class="card">
@@ -1192,12 +1446,15 @@ window.WiFiInsight = {
 		<div class="card">
 			<div class="head"><div class="grow"><h3>Data collection</h3></div></div>
 			<div class="form">
+				<div class="lbl">Collection</div>
+				<div><div class="seg" id="setMode" role="group" aria-label="Collection"></div>
+					<div class="hint" id="setModeHint"></div></div>
 				<div class="lbl">Sample interval</div>
 				<div><select id="setSample"><option value="30">Every 30 seconds</option><option value="60">Every minute</option></select>
 					<div class="hint">How often the router's own channel is measured. Reading these counters doesn't affect Wi-Fi.</div></div>
 				<div class="lbl">Neighbour scans</div>
 				<div><select id="setScan"><option value="0">Off</option><option value="15">Every 15 minutes</option><option value="30">Every 30 minutes</option><option value="60">Every hour</option><option value="120">Every 2 hours</option><option value="180">Every 3 hours</option><option value="360">Every 6 hours</option></select>
-					<div class="hint">Feeds the spectrum map, site survey and channel statistics. Each scan pauses Wi-Fi for about a second.</div></div>
+					<div class="hint">Feeds the spectrum map, site survey and channel statistics. Each scan pauses Wi-Fi for about a second; quiet hours below skip scheduled scans.</div></div>
 				<div class="lbl">Keep history for</div>
 				<div><select id="setRetain"><option value="7">7 days</option><option value="14">14 days</option><option value="30">30 days</option><option value="60">60 days</option><option value="90">90 days</option><option value="180">180 days</option></select>
 					<div class="hint">Channel events are kept for a year.</div></div>
@@ -1211,9 +1468,21 @@ window.WiFiInsight = {
 			</div>
 		</div>
 		<div class="card">
+			<div class="head"><div class="grow"><h3>Quiet hours</h3><div class="sub">No scheduled neighbour scans in the marked half hours, so no Wi-Fi blips. Sampling carries on (it doesn't touch Wi-Fi), and Scan now still works. Click or drag to mark; drag over marked slots to clear them.</div></div></div>
+			<div class="qpresets" id="qPresets"></div>
+			<div class="qgrid" id="qGrid"></div>
+			<div class="foot" style="margin-top:10px">
+				<span class="qkey"><i style="background:#c98500"></i>Quiet: no scheduled scans</span>
+				<span class="qkey"><i style="background:#1f282b;border:1px solid #4a585d"></i>Scans allowed</span>
+				<span style="color:var(--muted)">Times are the router's local time.</span>
+			</div>
+			<div class="qsum" id="qSum"></div>
+			<div style="margin-top:12px"><button type="button" class="btn primary" id="qSave" onclick="WiFiInsight.saveSettings()">Save</button><span class="saved" id="qSaved">Saved</span></div>
+		</div>
+		<div class="card">
 			<div class="head"><div class="grow"><h3>Command line</h3></div></div>
 			<div class="sub" style="line-height:1.8">
-				Status: <code>/jffs/addons/wifiinsight/wifiinsight.sh status</code><br/>
+				Status: <code>/jffs/addons/wifiinsight/wifiinsight.sh status</code> (shows the quiet hours and whether it's quiet now)<br/>
 				Uninstall: <code>/jffs/addons/wifiinsight/wifiinsight.sh uninstall</code> (add <code>--keep-data</code> to keep history)
 			</div>
 		</div>
