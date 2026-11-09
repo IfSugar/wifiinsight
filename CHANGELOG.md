@@ -2,6 +2,12 @@
 
 What changed in each release of WiFi Insight. The release workflow copies a version's section into its GitHub release notes, so write for people running the addon.
 
+## 1.1.1
+
+- **Fixed: routers with a 6 GHz radio were refused** with "This router has two 5 GHz radios" (GT-AXE11000, RT-BE92U, RT-BE96U, GT-BE19000AI). WiFi Insight read the 6 GHz band code as 5 GHz. It now reads all three bands correctly, and 320 MHz channels on 6 GHz too. Thanks to BobWadd for the RT-BE96U report!
+- 6 GHz on the page: Channel Statistics suggests the quietest 40, 80, 160 and 320 MHz blocks, and its channel axis labels every few channels so the 59 channels stay readable.
+- Routers with two radios on the same band (GT-AX11000, ZenWiFi Pro XT12) are still refused for now, as before.
+
 ## 1.1.0
 
 - **Quiet hours.** Settings → Quiet hours: mark the half hours of the week when the router shouldn't run its scheduled neighbour scans, so there's no Wi-Fi hiccup while you're gaming, streaming or on a call. Click or drag on the week grid, or start from a preset (evenings, work hours, weekends). Sampling carries on, since it doesn't touch Wi-Fi, and Scan now still works. Times are the router's local time. Thanks to jksmurf for the idea!

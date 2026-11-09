@@ -56,7 +56,7 @@ Tested on an RT-AX86U with 3004.388.12_2. Every model current Merlin supports us
 | RT-AX88U | 2.4 + 5 GHz | Installs fine (user report) |
 | GT-AX6000, RT-BE88U | 2.4 + 5 GHz | Charts and 2.4 GHz scans work (user reports); 5 GHz scans fixed in 1.1.0, awaiting confirmation |
 | RT-AX58U (V1), RT-AX68U, RT-AX86U Pro, RT-AX88U Pro, RT-BE86U, RT-BE58 Go | 2.4 + 5 GHz | Should work |
-| GT-AXE11000, RT-BE92U, RT-BE96U, GT-BE19000AI | 2.4 + 5 + 6 GHz | Not yet: the check takes the 6 GHz radio for a second 5 GHz one (RT-BE96U report) |
+| GT-AXE11000, RT-BE92U, RT-BE96U, GT-BE19000AI | 2.4 + 5 + 6 GHz | Should work since 1.1.1 (6 GHz untested). Up to 1.1.0 the check took the 6 GHz radio for a second 5 GHz one |
 | GT-AX11000, GT-AX11000 Pro, ZenWiFi Pro XT12 | 2.4 + 5 + 5 GHz | Not yet: two 5 GHz radios |
 | GT-AXE16000, GT-BE98 Pro | four radios | Not yet: four radios |
 
@@ -195,7 +195,7 @@ Please report security problems privately: see the [security policy](.github/SEC
 
 ## Releasing
 
-Changes go in through pull requests. The [Checks workflow](.github/workflows/checks.yml) runs on every pull request and push: the script and page versions match, the script parses in BusyBox `ash` (the router's shell), every layout of the driver's airtime statistics parses ([`.github/tests/chanim-formats.sh`](.github/tests/chanim-formats.sh)), a full day of history exports completely on a shell set up like Merlin's, with only the BusyBox commands Merlin includes ([`.github/tests/large-history.sh`](.github/tests/large-history.sh)), the page and the script read quiet hours the same way and each collection mode sets the right cron jobs ([`.github/tests/quiet-hours.sh`](.github/tests/quiet-hours.sh)), scans wait for slow or busy radios ([`.github/tests/scan-wait.sh`](.github/tests/scan-wait.sh)), and the page's JavaScript is valid. Merging never releases anything.
+Changes go in through pull requests. The [Checks workflow](.github/workflows/checks.yml) runs on every pull request and push: the script and page versions match, the script parses in BusyBox `ash` (the router's shell), every layout of the driver's airtime statistics parses ([`.github/tests/chanim-formats.sh`](.github/tests/chanim-formats.sh)), a full day of history exports completely on a shell set up like Merlin's, with only the BusyBox commands Merlin includes ([`.github/tests/large-history.sh`](.github/tests/large-history.sh)), the page and the script read quiet hours the same way and each collection mode sets the right cron jobs ([`.github/tests/quiet-hours.sh`](.github/tests/quiet-hours.sh)), scans wait for slow or busy radios ([`.github/tests/scan-wait.sh`](.github/tests/scan-wait.sh)), every band and width is read correctly from the driver's channel codes, and tri-band routers pass the check ([`.github/tests/radio-bands.sh`](.github/tests/radio-bands.sh)), and the page's JavaScript is valid. Merging never releases anything.
 
 To release:
 

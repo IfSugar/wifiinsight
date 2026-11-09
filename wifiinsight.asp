@@ -8,7 +8,7 @@
 <link rel="shortcut icon" href="images/favicon.png"/>
 <link rel="icon" href="images/favicon.png"/>
 <title>WiFi Insight</title>
-<!-- wifiinsight-version: 1.1.0 (must match VERSION in wifiinsight.sh) -->
+<!-- wifiinsight-version: 1.1.1 (must match VERSION in wifiinsight.sh) -->
 <link rel="stylesheet" type="text/css" href="index_style.css"/>
 <link rel="stylesheet" type="text/css" href="form_style.css"/>
 <script type="text/javascript" src="/js/jquery.js"></script>
@@ -768,7 +768,7 @@ function renderChannels() {
 	list.forEach(function (a) { var i = ch.indexOf(a.ctl); if (i < 0) return; if (a.own) mine[i]++; else others[i]++; });
 	$('wiCntLegend').innerHTML = legendHTML('cnt', [['Other networks', C.others, 0], ['Yours', C.yours, 0]]);
 	var barBase = { borderRadius: { topLeft: 4, topRight: 4 }, borderSkipped: 'bottom', categoryPercentage: 0.72, barPercentage: 0.9, borderWidth: { top: 2 }, borderColor: C.surface };
-	var xCat = { type: 'category', grid: { display: false }, border: { color: '#4a585d' }, ticks: { color: C.tick, font: { size: 11 }, autoSkip: false, maxRotation: 0 } };
+	var xCat = { type: 'category', grid: { display: false }, border: { color: '#4a585d' }, ticks: { color: C.tick, font: { size: 11 }, autoSkip: ch.length > 30, autoSkipPadding: 6, maxRotation: 0 } };   /* 6 GHz has 59 channels */
 	drawChart('cnt', 'wiCntChart', 'bar', [
 		Object.assign({ label: 'Other networks', data: others, backgroundColor: C.others }, barBase),
 		Object.assign({ label: 'Yours', data: mine, backgroundColor: C.yours }, barBase)
@@ -799,10 +799,20 @@ function curBand(idx) {   // translucent band behind the router's channel(s), li
 var BLOCKS = {
 	'5g': { 40: [[36, 40], [44, 48], [52, 56], [60, 64], [100, 104], [108, 112], [116, 120], [124, 128], [132, 136], [140, 144], [149, 153], [157, 161]],
 		80: [[36, 40, 44, 48], [52, 56, 60, 64], [100, 104, 108, 112], [116, 120, 124, 128], [132, 136, 140, 144], [149, 153, 157, 161]],
-		160: [[36, 40, 44, 48, 52, 56, 60, 64], [100, 104, 108, 112, 116, 120, 124, 128]] }
+		160: [[36, 40, 44, 48, 52, 56, 60, 64], [100, 104, 108, 112, 116, 120, 124, 128]] },
+	'6g': (function () {   /* 6 GHz: channels 1-233 in steps of 4; 320 MHz blocks come in two overlapping sets */
+		var b = {}, w, s, n, i, blk;
+		[[40, 2, [1]], [80, 4, [1]], [160, 8, [1]], [320, 16, [1, 33]]].forEach(function (d) {
+			w = d[0]; n = d[1]; b[w] = [];
+			d[2].forEach(function (first) {
+				for (s = first; s + (n - 1) * 4 <= 233; s += n * 4) { blk = []; for (i = 0; i < n; i++) blk.push(s + i * 4); b[w].push(blk); }
+			});
+		});
+		return b;
+	})()
 };
 function renderBest(L, ch, r) {
-	var widths = WI.band === '2g' ? [20] : [20, 40, 80, 160];
+	var widths = WI.band === '2g' ? [20] : WI.band === '6g' ? [20, 40, 80, 160, 320] : [20, 40, 80, 160];
 	if (r && widths.indexOf(r.width) < 0) widths.push(r.width);
 	var rows = [];
 	widths.forEach(function (w) {
