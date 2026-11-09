@@ -495,9 +495,9 @@ parse_scan() {   # ts band "channels" ownfile
 
 # The web page follows a scan through scanstate.htm: state running|done|error, a sequence number
 # that goes up by one per scan, and each radio's result (ok, busy, empty, off).
-scan_state() {   # state [bands-json] [message]
+scan_state() {   # state [bands-json] [message] [notes-json]
 	wd=$(web_dir); mkdir -p "$wd"
-	printf '{"state":"%s","seq":%s,"ts":%s,"bands":{%s},"msg":"%s"}\n' "$1" "${SCAN_SEQ:-0}" "$(now)" "$2" "$(js "$3")" \
+	printf '{"state":"%s","seq":%s,"ts":%s,"bands":{%s},"notes":{%s},"msg":"%s"}\n' "$1" "${SCAN_SEQ:-0}" "$(now)" "$2" "$4" "$(js "$3")" \
 		| write_atomic "$wd/scanstate.htm"
 }
 scan_next_seq() {
@@ -522,40 +522,62 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 	trap 'rm -f "$SCAN_FLAG"' EXIT; trap 'rm -f "$SCAN_FLAG"; exit 1' INT TERM HUP
 	touch "$SCAN_FLAG"
 	scan_next_seq; scan_state running
-	ownf=$(own_ssids_file); bands=""
+	ownf=$(own_ssids_file); bands=""; notes=""
 	for r in $(radios); do
 		ifc=$(nvram get wl${r}_ifname)
 		hex=$(wl -i "$ifc" chanspec 2>/dev/null | sed -n 's/.*(\(0x[0-9a-fA-F]*\)).*/\1/p')
 		[ -n "$hex" ] || continue
-		band=$(band_of_hex "$hex"); result=ok
-		if [ "$(wl -i "$ifc" isup 2>/dev/null)" != "1" ]; then
-			result=off
-		else
-			# the radio refuses a scan while it's already scanning (Smart Connect, AiMesh): retry briefly
-			started=0
-			for try in 1 2 3; do wl -i "$ifc" scan >/dev/null 2>&1 && { started=1; break; }; sleep 2; done
-			if [ $started -eq 0 ]; then
-				result=busy
-			else
-				sleep 6
-				res="$TMPD/scan_$band.txt"
-				wl -i "$ifc" scanresults > "$res" 2>/dev/null
-				if ! grep -q '^BSSID' "$res"; then sleep 3; wl -i "$ifc" scanresults > "$res" 2>/dev/null; fi
-				if grep -q '^BSSID' "$res"; then
-					parse_scan "$(now)" "$band" "$(radio_channels "$ifc" "$band")" "$ownf" < "$res" | sql
-				else
-					result=empty
-				fi
-			fi
-		fi
+		band=$(band_of_hex "$hex")
+		scan_radio "$ifc" "$band"
+		[ "$result" = ok ] && parse_scan "$(now)" "$band" "$(radio_channels "$ifc" "$band")" "$ownf" < "$res" | sql
 		bands="$bands${bands:+,}\"$band\":\"$result\""
-		log "scan $band ($ifc): $result"
+		notes="$notes${notes:+,}\"$band\":\"$(js "$detail")\""
+		log "scan $band ($ifc): $result${detail:+, $detail}"
+		say "  $band ($ifc): $result${detail:+, $detail}"
 	done
 	rm -f "$SCAN_FLAG"
 	export_scans
-	scan_state done "$bands"
+	scan_state done "$bands" "" "$notes"
 	flock -u 7
 	log "scan complete"
+}
+
+wl_said() {   # errfile seconds fallback -> 'wl said "Not Ready" for 45 s', or 'fallback after 45 s'
+	m=$(head -1 "$1" 2>/dev/null | tr -d '\r"' | sed 's/^wl: //' | cut -c1-60)
+	if [ -n "$m" ]; then printf 'wl said "%s" for %s s' "$m" "$2"; else printf '%s after %s s' "$3" "$2"; fi
+}
+
+# One radio's neighbour scan. Sets result (ok, busy, empty or off) and detail; the results are in $res.
+# The driver answers "Not Ready" until the scan ends, so poll for the results instead of guessing how
+# long a scan takes: 2.4 GHz scans take a few seconds, 5 GHz ones longer (more channels, and DFS channels
+# are listened to rather than probed), and much longer on some drivers (3006.102 / 17.10).
+scan_radio() {   # ifc band
+	result=ok; detail=""; res="$TMPD/scan_$2.txt"; err="$TMPD/scan_$2.err"; : > "$res"
+	if [ "$(wl -i "$1" isup 2>/dev/null)" != "1" ]; then result=off; return 0; fi
+	# The radio refuses a scan while it's already scanning (Smart Connect, AiMesh, acsd): retry for up to 20 s.
+	t0=$(now)
+	until wl -i "$1" scan > /dev/null 2> "$err"; do
+		if [ $(( $(now) - t0 )) -ge 20 ]; then
+			result=busy; detail=$(wl_said "$err" 20 "still busy"); return 0
+		fi
+		sleep 2
+	done
+	limit=45; [ "$2" = 2g ] && limit=20
+	t1=$(now); sleep 3
+	while :; do
+		el=$(( $(now) - t1 ))
+		if wl -i "$1" scanresults > "$res" 2> "$err"; then
+			if grep -q '^BSSID' "$res"; then
+				detail="$(grep -c '^BSSID' "$res") networks in ${el} s"; return 0
+			fi
+			# Finished with nothing heard, or a driver that answers before the scan ends: give it 12 s.
+			if [ $el -ge 12 ]; then result=empty; detail="no networks heard in ${el} s"; return 0; fi
+		fi
+		if [ $el -ge $limit ]; then
+			result=empty; detail=$(wl_said "$err" "$el" "no results"); return 0
+		fi
+		sleep 2
+	done
 }
 
 # A scan pauses sampling; a flag left behind by a killed scan is ignored after 5 minutes.

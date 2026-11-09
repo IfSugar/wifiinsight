@@ -1188,12 +1188,14 @@ function scanNow() {
 		btn.disabled = false; btn.textContent = 'Scan now'; say(msg, bad);
 		if (msg && !bad) setTimeout(function () { if (note.textContent === msg) say(''); }, 8000);
 	};
-	var problems = function (bands) {
-		var why = { busy: 'radio was busy', empty: 'no networks heard', off: 'radio is off' }, out = [];
-		Object.keys(bands || {}).forEach(function (b) { if (bands[b] !== 'ok') out.push(BAND_NAME[b] + ': ' + (why[bands[b]] || bands[b])); });
-		return out.length ? out.join(', ') + ' (kept the previous scan)' : '';
+	var problems = function (bands, notes) {
+		var why = { busy: 'radio was busy', empty: 'no results', off: 'radio is off' }, out = [];
+		Object.keys(bands || {}).forEach(function (b) {
+			if (bands[b] !== 'ok') out.push(BAND_NAME[b] + ': ' + (why[bands[b]] || bands[b]) + (notes && notes[b] && bands[b] !== 'off' ? ' (' + notes[b] + ')' : ''));
+		});
+		return out.length ? out.join('; ') + '. Kept the previous scan.' : '';
 	};
-	btn.disabled = true; btn.textContent = 'Scanning…'; say('About 15 seconds');
+	btn.disabled = true; btn.textContent = 'Scanning…'; say('About 15 seconds, up to a minute on some routers');
 	getJSON('scanstate.htm').then(function (s) { s0 = s; }, function () { s0 = { seq: -1, state: 'none' }; }).then(function () {
 		document.formScriptActions.action_script.value = 'start_wifiinsightscan';
 		document.formScriptActions.submit();
@@ -1205,9 +1207,9 @@ function scanNow() {
 					if (waited > 15000) finish('The router didn\'t start the scan. Check that WiFi Insight is installed (wifiinsight.sh status).', true);
 					return;
 				}
-				if (s.state === 'running') { if (waited > 90000) finish('The scan is taking longer than expected. Results will appear when it finishes.', true); return; }
+				if (s.state === 'running') { if (waited > 150000) finish('The scan is taking longer than expected. Results will appear when it finishes.', true); return; }
 				if (s.state === 'error') { finish(s.msg || 'The scan failed.', true); return; }
-				loadAll({ scans: 1 }).then(function () { var p = problems(s.bands); finish(p || 'Scan complete', !!p); });
+				loadAll({ scans: 1 }).then(function () { var p = problems(s.bands, s.notes); finish(p || 'Scan complete', !!p); });
 			}, function () { if (waited > 15000) finish('The router didn\'t start the scan.', true); });
 		}, 2000);
 	});
@@ -1332,7 +1334,7 @@ window.WiFiInsight = {
 		<div class="grow"></div>
 		<span class="qmark" id="wiQuietMark"></span>
 		<span class="scannote" id="wiScanNote"></span>
-		<button type="button" class="btn" id="wiScanBtn" onclick="WiFiInsight.scanNow()" title="Scans every channel on both radios now (about 15 seconds). Wi-Fi may pause for about a second on each radio.">Scan now</button>
+		<button type="button" class="btn" id="wiScanBtn" onclick="WiFiInsight.scanNow()" title="Scans every channel on every radio now (about 15 seconds, up to a minute on some routers). Wi-Fi may pause for about a second on each radio.">Scan now</button>
 	</div>
 	<div class="warn" id="wiQuiet"></div>
 
