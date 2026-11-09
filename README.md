@@ -114,7 +114,11 @@ It only ever removes a page whose `.title` file says `WiFi Insight`, so other ad
   - `tx` and `inbss` are your own traffic
 
   Reading these counters doesn't disturb Wi-Fi.
-- **Spectrum, Channel Statistics and Site Survey** come from neighbour scans (`wl scan`), every 30 minutes by default, except during the quiet hours you set. A radio can only measure its own channel continuously, so the other channels are estimated from the networks heard on them. Each network contributes according to how much it overlaps the channel, how strong its signal is, and the load it advertises (QBSS). Networks with your SSIDs, including your AiMesh node, are listed as yours and kept out of the estimate. Tick **Include my mesh** to add them back. Each scan takes the radio off-channel briefly, so expect a hiccup of about a second. A scan takes a few seconds on 2.4 GHz and longer on 5 and 6 GHz (tens of seconds on some 3006.102 drivers): WiFi Insight waits for the driver to finish, and if a band still fails, Scan now and the syslog say why.
+- **Spectrum, Channel Statistics and Site Survey** come from neighbour scans (`wl scan`), every 30 minutes by default, except during the quiet hours you set. A radio measures its own channel continuously; the other channels are covered by the scan, two ways:
+  - **Measured** (where the driver reports it, e.g. the RT-AX86U on 3004.388): while scanning, the radio records each channel's airtime used by other networks (`obss`), non-Wi-Fi energy (`nocat`) and energy it couldn't decode (`nopkt`), plus glitches and the noise floor. WiFi Insight reads them with `wl chanim_stats all` right after the scan. Each figure comes from a short listen on that channel, so single readings are noisy; the longer ranges average them.
+  - **Estimated** (always available, and the fallback): built from the networks heard on each channel.
+
+  For the estimate, each network contributes according to how much it overlaps the channel, how strong its signal is, and the load it advertises (QBSS). Networks with your SSIDs, including your AiMesh node, are listed as yours and kept out of the estimate. Tick **Include my mesh** to add them back. Each scan takes the radio off-channel briefly, so expect a hiccup of about a second. A scan takes a few seconds on 2.4 GHz and longer on 5 and 6 GHz (tens of seconds on some 3006.102 drivers): WiFi Insight waits for the driver to finish, and if a band still fails, Scan now and the syslog say why.
 - **Channel events** are detected by comparing the channel and width on every sample:
   - a changed setting in nvram → *Manually configured*
   - a radar line in syslog within 10 minutes → *Regulatory (RADAR)*
@@ -138,7 +142,7 @@ If a scan's one-second hiccup gets in the way at certain times (gaming, calls, s
 | Path | Contents |
 |---|---|
 | `/jffs/addons/wifiinsight/` | script, page, config, local Chart.js |
-| `/opt/var/lib/wifiinsight/wifiinsight.db` | history (SQLite) |
+| `/opt/var/lib/wifiinsight/wifiinsight.db` | history (SQLite): samples, scans, measured channel airtime, networks, events |
 | `/tmp/var/wwwext/wifiinsight/` | JSON files the page reads (`live.htm`, `scans.htm`, `week.htm`, `month.htm`, `scanstate.htm`), rebuilt from the database |
 
 Cron jobs: `wifiinsight_collect` (every minute), `wifiinsight_scan` (scan interval) and `wifiinsight_prune` (04:23 daily, before a 05:00 scheduled reboot). A scheduled scan that starts in quiet hours does nothing. With *Scans paused* there's no scan job, and with collection *Off* there are no jobs at all.
@@ -219,7 +223,7 @@ Please report security problems privately: see the [security policy](.github/SEC
 
 ## Releasing
 
-Changes go in through pull requests. The [Checks workflow](.github/workflows/checks.yml) runs on every pull request and push: the script and page versions match, the script parses in BusyBox `ash` (the router's shell), every layout of the driver's airtime statistics parses ([`.github/tests/chanim-formats.sh`](.github/tests/chanim-formats.sh)), a full day of history exports completely on a shell set up like Merlin's, with only the BusyBox commands Merlin includes ([`.github/tests/large-history.sh`](.github/tests/large-history.sh)), the page and the script read quiet hours the same way and each collection mode sets the right cron jobs ([`.github/tests/quiet-hours.sh`](.github/tests/quiet-hours.sh)), scans wait for slow or busy radios ([`.github/tests/scan-wait.sh`](.github/tests/scan-wait.sh)), `amtmupdate`, the menu and amtm's version check work ([`.github/tests/amtm.sh`](.github/tests/amtm.sh)), every band and width is read correctly from the driver's channel codes, and tri-band routers pass the check ([`.github/tests/radio-bands.sh`](.github/tests/radio-bands.sh)), and the page's JavaScript is valid. Merging never releases anything.
+Changes go in through pull requests. The [Checks workflow](.github/workflows/checks.yml) runs on every pull request and push: the script and page versions match, the script parses in BusyBox `ash` (the router's shell), every layout of the driver's airtime statistics parses ([`.github/tests/chanim-formats.sh`](.github/tests/chanim-formats.sh)), a full day of history exports completely on a shell set up like Merlin's, with only the BusyBox commands Merlin includes ([`.github/tests/large-history.sh`](.github/tests/large-history.sh)), the page and the script read quiet hours the same way and each collection mode sets the right cron jobs ([`.github/tests/quiet-hours.sh`](.github/tests/quiet-hours.sh)), scans wait for slow or busy radios ([`.github/tests/scan-wait.sh`](.github/tests/scan-wait.sh)), the radio's per-channel measurements are read, stored and exported ([`.github/tests/measured.sh`](.github/tests/measured.sh)), `amtmupdate`, the menu and amtm's version check work ([`.github/tests/amtm.sh`](.github/tests/amtm.sh)), every band and width is read correctly from the driver's channel codes, and tri-band routers pass the check ([`.github/tests/radio-bands.sh`](.github/tests/radio-bands.sh)), and the page's JavaScript is valid. Merging never releases anything.
 
 To release:
 

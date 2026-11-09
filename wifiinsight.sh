@@ -176,6 +176,9 @@ CREATE TABLE IF NOT EXISTS aps(
   ctl INTEGER, center INTEGER, width INTEGER, util INTEGER, own INTEGER,
   phy TEXT, sec TEXT, snr INTEGER);
 CREATE INDEX IF NOT EXISTS ap_bt ON aps(band, ts);
+CREATE TABLE IF NOT EXISTS chanim(
+  ts INTEGER NOT NULL, band TEXT NOT NULL, ch INTEGER NOT NULL, obss INTEGER, nocat INTEGER,
+  nopkt INTEGER, glitch INTEGER, badplcp INTEGER, noise INTEGER, PRIMARY KEY(band, ts, ch));
 CREATE TABLE IF NOT EXISTS state(k TEXT PRIMARY KEY, v TEXT);
 EOF
 }
@@ -501,6 +504,64 @@ parse_scan() {   # ts band "channels" ownfile
 	}'
 }
 
+# stdin: `wl chanim_stats all`. After a scan the driver keeps what it measured on each channel it
+# visited: the share of airtime used by other networks (obss), non-Wi-Fi energy (nocat) and energy
+# it couldn't decode (nopkt), plus glitches, bad frame headers and the noise floor. txdur and inbss
+# are left out: off-channel they're the scan's own probes and the replies to them.
+# Layouts: 3004.388 (version 3) prints a block per channel under "Stats during last scan":
+#    chanspec: 0xd024 crsglitch cnt: 0 bad plcp: 16 noise: -93
+#   	 cca_txdur: 2 cca_inbss: 3 cca_obss:1 cca_nocat: 3 cca_nopkt: 1
+# and a table with a chanspec/chspec header and a row per channel is read too (newer drivers print
+# chanim_stats as a table). Prints SQL only for two or more channels: one row is just the radio's
+# own channel, not a scan. Channels on another band are skipped.
+parse_chanim_all() {   # ts band
+	awk -v ts="$1" -v band="$2" '
+	function hexval(s,   i, c, v) {
+		s = tolower(s); sub(/^0x/, "", s); v = 0
+		if (s == "") return -1
+		for (i = 1; i <= length(s); i++) { c = index("0123456789abcdef", substr(s, i, 1)); if (!c) return -1; v = v * 16 + c - 1 }
+		return v
+	}
+	function chan(cs,   v, b, t) {   # chanspec, hex or readable (36/80, 6g1/80, 11u) -> channel, -1 if another band
+		if (cs ~ /^0[xX]/) {
+			v = hexval(cs); if (v < 0) return -1
+			b = int(v / 16384) % 4; t = (b == 0) ? "2g" : (b == 1) ? "6g" : "5g"
+			return (t == band) ? v % 256 : -1
+		}
+		t = band
+		if (cs ~ /^6g/) { t = "6g"; sub(/^6g/, "", cs) }
+		if (!match(cs, /^[0-9]+/)) return -1
+		return (t == band) ? substr(cs, 1, RLENGTH) + 0 : -1
+	}
+	function num(x) { return (x ~ /^-?[0-9]+$/) ? x + 0 : "NULL" }
+	function pct(x) { x = num(x); return (x == "NULL") ? x : (x < 0 ? 0 : (x > 100 ? 100 : x)) }
+	function val(key,   i, t) {   # the number after key on this line
+		i = index($0, key); if (!i) return ""
+		t = substr($0, i + length(key)); sub(/^[ \t]*/, "", t)
+		return match(t, /^-?[0-9a-fA-Fx]+/) ? substr(t, 1, RLENGTH) : ""
+	}
+	function keep(c, o, n, p, g, b, z) {
+		if (c < 0 || (c in seen) || o == "") return
+		seen[c] = 1; k++
+		out[k] = sprintf("INSERT OR REPLACE INTO chanim VALUES(%d,\047%s\047,%d,%s,%s,%s,%s,%s,%s);", ts, band, c, pct(o), pct(n), pct(p), num(g), num(b), num(z))
+	}
+	function flush() { if (cs != "") keep(chan(cs), o, n, p, g, b, z); cs = "" }
+	/during last scan/ { sec = 1; next }
+	sec && /^[^ \t]/ { flush(); sec = 0 }
+	sec && /chanspec:/ { flush(); cs = val("chanspec:"); g = val("crsglitch cnt:"); b = val("bad plcp:"); z = val("noise:"); o = n = p = ""; next }
+	sec && /cca_/ { o = val("cca_obss:"); n = val("cca_nocat:"); p = val("cca_nopkt:"); next }
+	!sec && ($1 == "chanspec" || $1 == "chspec") { delete col; for (i = 1; i <= NF; i++) col[$i] = i; tbl = ("obss" in col) && ("nocat" in col); ncol = NF; next }
+	!sec && tbl && NF >= ncol - 1 && $1 !~ /^(version|state)/ {
+		keep(chan($1), $(col["obss"]), $(col["nocat"]), ("nopkt" in col) ? $(col["nopkt"]) : "", ("glitch" in col) ? $(col["glitch"]) : "",
+			("badplcp" in col) ? $(col["badplcp"]) : "", ("knoise" in col) ? $(col["knoise"]) : "")
+	}
+	END {
+		flush()
+		if (k < 2) exit 0
+		print "BEGIN;"; for (i = 1; i <= k; i++) print out[i]; print "COMMIT;"
+	}'
+}
+
 # The web page follows a scan through scanstate.htm: state running|done|error, a sequence number
 # that goes up by one per scan, and each radio's result (ok, busy, empty, off).
 scan_state() {   # state [bands-json] [message] [notes-json]
@@ -537,7 +598,16 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 		[ -n "$hex" ] || continue
 		band=$(band_of_hex "$hex")
 		scan_radio "$ifc" "$band"
-		[ "$result" = ok ] && parse_scan "$(now)" "$band" "$(radio_channels "$ifc" "$band")" "$ownf" < "$res" | sql
+		if [ "$result" = ok ]; then
+			sts=$(now)
+			parse_scan "$sts" "$band" "$(radio_channels "$ifc" "$band")" "$ownf" < "$res" | sql
+			# what the radio measured on each channel during this scan, where the driver reports it
+			msql="$TMPD/chanim_$band.sql"
+			wl -i "$ifc" chanim_stats all 2>/dev/null | parse_chanim_all "$sts" "$band" > "$msql"
+			mc=$(grep -c '^INSERT' "$msql")
+			if [ "$mc" -gt 0 ] 2>/dev/null && sql < "$msql"; then detail="$detail, $mc channels measured"; fi
+			rm -f "$msql"
+		fi
 		bands="$bands${bands:+,}\"$band\":\"$result\""
 		notes="$notes${notes:+,}\"$band\":\"$(js "$detail")\""
 		log "scan $band ($ifc): $result${detail:+, $detail}"
@@ -576,7 +646,7 @@ scan_radio() {   # ifc band
 		el=$(( $(now) - t1 ))
 		if wl -i "$1" scanresults > "$res" 2> "$err"; then
 			if grep -q '^BSSID' "$res"; then
-				detail="$(grep -c '^BSSID' "$res") networks in ${el} s"; return 0
+				nn=$(grep -c '^BSSID' "$res"); detail="$nn network$( [ "$nn" = 1 ] || printf s) in ${el} s"; return 0
 			fi
 			# Finished with nothing heard, or a driver that answers before the scan ends: give it 12 s.
 			if [ $el -ge 12 ]; then result=empty; detail="no networks heard in ${el} s"; return 0; fi
@@ -730,7 +800,7 @@ export_month() {
 		printf '{"generated":%s,"bucket":3600,"agg":' "$t"
 		samples_agg 30 3600
 		printf ',"scan_bucket":21600,"scans":'
-		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(b, ch, sc, ap, be, ow, n)) AS a FROM (SELECT band, ((ts+$off)/21600)*21600-$off AS b, ch, round(avg(score),1) AS sc, max(aps) AS ap, max(best) AS be, round(avg(own),1) AS ow, count(*) AS n FROM scans WHERE ts>=$since GROUP BY band, b, ch ORDER BY band, b, ch) GROUP BY band);"
+		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json(CASE WHEN mn = 0 THEN json_array(b, ch, sc, ap, be, ow, n) ELSE json_array(b, ch, sc, ap, be, ow, n, mo, mc, mp, mz, mg, mn) END)) AS a FROM (SELECT s.band, ((s.ts+$off)/21600)*21600-$off AS b, s.ch, round(avg(s.score),1) AS sc, max(s.aps) AS ap, max(s.best) AS be, round(avg(s.own),1) AS ow, count(*) AS n, round(avg(m.obss),1) AS mo, round(avg(m.nocat),1) AS mc, round(avg(m.nopkt),1) AS mp, round(avg(m.noise)) AS mz, round(avg(m.glitch)) AS mg, count(m.obss) AS mn FROM scans s LEFT JOIN chanim m ON m.band=s.band AND m.ts=s.ts AND m.ch=s.ch WHERE s.ts>=$since GROUP BY s.band, b, s.ch ORDER BY s.band, b, s.ch) GROUP BY band);"
 		printf '}\n'
 	} | write_atomic "$wd/month.htm"
 }
@@ -742,7 +812,9 @@ export_scans() {
 		printf '{"generated":%s,"scan_interval":%s,"last_scan":' "$t" "$SCAN_INTERVAL"
 		json_out '{}' "SELECT json_group_object(band, mt) FROM (SELECT band, max(ts) AS mt FROM scans GROUP BY band);"
 		printf ',"scans":'
-		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(ts,ch,score,aps,best,own)) AS a FROM (SELECT * FROM scans WHERE ts>=$since ORDER BY band, ts, ch) GROUP BY band);"
+		# [ts, ch, estimate, networks, strongest, own] and, where the radio measured the channel,
+		# [..., 1, others, non-Wi-Fi, unclassified, noise, glitches]
+		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json(CASE WHEN obss IS NULL THEN json_array(ts,ch,score,aps,best,own) ELSE json_array(ts,ch,score,aps,best,own,1,obss,nocat,nopkt,noise,glitch) END)) AS a FROM (SELECT s.ts, s.band, s.ch, s.score, s.aps, s.best, s.own, m.obss, m.nocat, m.nopkt, m.noise, m.glitch FROM scans s LEFT JOIN chanim m ON m.band=s.band AND m.ts=s.ts AND m.ch=s.ch WHERE s.ts>=$since ORDER BY s.band, s.ts, s.ch) GROUP BY band);"
 		printf ',"aps":'
 		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT x.band, json_group_array(json_object('ssid',x.ssid,'bssid',x.bssid,'rssi',x.rssi,'ctl',x.ctl,'center',x.center,'width',x.width,'util',x.util,'own',x.own,'phy',x.phy,'sec',x.sec,'snr',x.snr)) AS a FROM (SELECT p.* FROM aps p JOIN (SELECT band, max(ts) AS mt FROM aps GROUP BY band) l ON p.band=l.band AND p.ts=l.mt ORDER BY p.band, p.rssi DESC) x GROUP BY x.band);"
 		printf '}\n'
@@ -785,7 +857,7 @@ prune() {
 	# BusyBox flock has no -w, so poll with -n.
 	i=0; until flock -n 6; do i=$((i + 1)); [ $i -gt 60 ] && exit 0; sleep 2; done
 	t=$(now); cut=$((t - RETAIN_DAYS * 86400)); evcut=$((t - 365 * 86400))
-	sql "DELETE FROM samples WHERE ts<$cut; DELETE FROM scans WHERE ts<$cut; DELETE FROM aps WHERE ts<$cut; DELETE FROM events WHERE ts<$evcut; PRAGMA optimize;"
+	sql "DELETE FROM samples WHERE ts<$cut; DELETE FROM scans WHERE ts<$cut; DELETE FROM chanim WHERE ts<$cut; DELETE FROM aps WHERE ts<$cut; DELETE FROM events WHERE ts<$evcut; PRAGMA optimize;"
 	[ "$(date +%w)" = "0" ] && sql "VACUUM;"
 	export_all
 }
