@@ -1258,7 +1258,7 @@ function render() {
 		var L = WI.live, scans = L.collection === 'off' ? 'collection off' : L.collection === 'paused' ? 'neighbour scans paused'
 			: 'neighbour scans ' + (L.scan_interval > 0 ? 'every ' + L.scan_interval + ' min' + (L.quiet ? ' outside quiet hours' : '') : 'off');
 		$('wiFoot').innerHTML = 'Updated ' + hm(L.generated) + ' · samples every ' + L.sample_interval + ' s · ' + scans
-			+ ' · history kept ' + L.retain_days + ' days · v' + L.version + (r ? ' · ' + r.iface : '');
+			+ ' · history kept ' + L.retain_days + ' days · v' + L.version + (L.build ? ' (development: ' + esc(L.build) + ')' : '') + (r ? ' · ' + r.iface : '');
 	}
 	renderQuietMarks();
 }
