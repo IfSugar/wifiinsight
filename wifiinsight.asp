@@ -505,24 +505,25 @@ function scanRows() {
 	}
 	var r1 = function (v) { return Math.round(v * 10) / 10; }, need = Math.max(2, Math.ceil(chans().length / 2)), measured = false;
 	order.forEach(function (t) {
-		var got = 0;
+		var got = 0, mx = 0;
 		Object.keys(byT[t].cells).forEach(function (k) {
 			var c = byT[t].cells[k]; c[2] = r1(c[2] / c[6]); c[5] = r1(c[5] / c[6]);
-			if (c[12]) { c[7] = r1(c[7] / c[12]); c[8] = r1(c[8] / c[12]); c[9] = r1(c[9] / c[12]); c[11] = Math.round(c[11] / c[12]); got++; }
+			if (c[12]) { c[7] = r1(c[7] / c[12]); c[8] = r1(c[8] / c[12]); c[9] = r1(c[9] / c[12]); c[11] = Math.round(c[11] / c[12]); got++; if (c[12] > mx) mx = c[12]; }
 			else c[7] = c[8] = c[9] = c[11] = null;
 			c[10] = c[13] ? Math.round(c[10] / c[13]) : null;
 		});
+		byT[t].mscans = got >= need ? mx : 0;   /* measured scans behind this row */
 		if (got >= need) measured = true;   /* this driver reports per-channel measurements */
 	});
 	order.sort(function (a, b) { return b - a; });
 	var inRange = order.filter(function (t) { return t + (H || 0) > R.from; }), latestOnly = false;
 	if (!inRange.length && order.length && !agg) { inRange = [order[0]]; latestOnly = true; }
-	var scans = 0;
+	var scans = 0, mscans = 0;
 	var rows = inRange.map(function (t) {
-		var n = 0; Object.keys(byT[t].src).forEach(function (k) { n += byT[t].src[k]; }); scans += n;
+		var n = 0; Object.keys(byT[t].src).forEach(function (k) { n += byT[t].src[k]; }); scans += n; mscans += Math.min(n, byT[t].mscans);
 		return { ts: t, cells: byT[t].cells, n: n };
 	});
-	return { rows: rows, latestOnly: latestOnly, scans: scans, bucket: H, measured: measured };
+	return { rows: rows, latestOnly: latestOnly, scans: scans, mscans: mscans, bucket: H, measured: measured };
 }
 /* Measured: what the radio recorded on each channel while scanning (wl chanim_stats all), where the
    driver reports it. Estimated: built from the networks heard (signal, overlap, advertised load). */
@@ -600,7 +601,8 @@ function renderHeat() {
 	if (WI.showActive && r) activeBox(ctx, ch, r, padL, colW, padT, gridH);
 	WI.heatGeo = { padL: padL, padT: padT, colW: colW, rowH: rowH, rows: rows, chans: ch, bucket: info.bucket, src: src };
 	$('wiHeatSub').textContent = (info.latestOnly ? 'Latest scan, ' + ago(nowTs() - rows[0].ts)
-		: info.scans + ' scan' + (info.scans > 1 ? 's' : '') + ' in range' + (info.bucket ? ', shown as ' + bucketName(info.bucket) + ' averages' : ', newest ' + ago(nowTs() - rows[0].ts)))
+		: info.scans + ' scan' + (info.scans > 1 ? 's' : '') + ' in range' + (src === 'measured' && info.mscans < info.scans ? ', ' + info.mscans + ' measured' : '')
+			+ (info.bucket ? ', shown as ' + bucketName(info.bucket) + ' averages' : ', newest ' + ago(nowTs() - rows[0].ts)))
 		+ (src === 'measured' ? '. Airtime the radio measured on each channel while scanning.' : '. Estimated from nearby networks’ signal strength and the load they report.')
 		+ (qshow ? ' No scheduled scans during quiet hours.' : '');
 }
@@ -841,8 +843,9 @@ function renderChannels() {
 	var L = channelLoads(), meas = L.src === 'measured';
 	$('wiLoadSrc').innerHTML = srcControls(L.info, L.src, 'wiMeshLbl2');
 	$('wiLoadTitle').textContent = meas ? 'Load per channel' : 'Estimated load per channel';
-	$('wiLoadSub').textContent = (L.latestOnly ? 'Latest scan' : 'Average of ' + L.n + ' scan' + (L.n === 1 ? '' : 's') + ' in range')
-		+ (meas ? ', measured by the radio while scanning' : ', estimated from the networks heard') + '. Lower is better. The dashed band is the router’s current channel.';
+	var mn = L.info.mscans, part = meas && !L.latestOnly && mn < L.n;   /* scans from before the update have no measurements */
+	$('wiLoadSub').textContent = (L.latestOnly ? 'Latest scan' : 'Average of ' + (part ? mn + ' of ' : '') + L.n + ' scan' + (L.n === 1 ? '' : 's') + ' in range')
+		+ (part ? ', the ones the radio measured' : meas ? ', measured by the radio while scanning' : ', estimated from the networks heard') + '. Lower is better. The dashed band is the router’s current channel.';
 	var data = ch.map(function (c) { return L.avg[c]; });
 	var maxV = Math.max.apply(null, data.map(function (v) { return v || 0; }));
 	var curIdx = ch.map(function (c, i) { return cur.indexOf(c) >= 0 ? i : -1; }).filter(function (i) { return i >= 0; });
