@@ -13,7 +13,7 @@
 #              -o /tmp/wifiinsight.sh && sh /tmp/wifiinsight.sh install
 ###############################################################################
 
-VERSION="1.1.0"
+VERSION="1.1.1"
 NAME="wifiinsight"
 TITLE="WiFi Insight"
 
@@ -127,16 +127,20 @@ web_dir() {
 
 radios() { for i in 0 1 2; do [ -n "$(nvram get wl${i}_ifname)" ] && echo "$i"; done; }
 
+# Chanspec bits, as in Broadcom's bcmwifi_channels.h. Band (0xc000): 0x0000 2.4 GHz, 0x4000 6 GHz,
+# 0x8000 4.9 GHz (counted as 5), 0xc000 5 GHz. Width (0x3800): 0x1000 20, 0x1800 40, 0x2000 80,
+# 0x2800 160, 0x3000 80+80, and 0x0000 is 320 MHz on 6 GHz. Up to 1.1.0, 6 GHz was misread as 5 GHz.
 band_of_hex() {
-	h=$(( $1 ))
-	case $(( h & 0xc000 )) in
-		0) echo 2g ;; 49152) echo 5g ;; 32768) echo 6g ;; *) echo 5g ;;
+	case $(( $1 & 0xc000 )) in
+		0) echo 2g ;; 16384) echo 6g ;; *) echo 5g ;;
 	esac
 }
 
 width_of_hex() {
 	case $(( ($1 & 0x3800) >> 11 )) in
-		2) echo 20 ;; 3) echo 40 ;; 4) echo 80 ;; 5|6) echo 160 ;; 7) echo 320 ;; *) echo 20 ;;
+		2) echo 20 ;; 3) echo 40 ;; 4) echo 80 ;; 5|6) echo 160 ;; 7) echo 320 ;;
+		0) if [ $(( $1 & 0xc000 )) -eq 16384 ]; then echo 320; else echo 20; fi ;;
+		*) echo 20 ;;
 	esac
 }
 
@@ -435,7 +439,7 @@ parse_scan() {   # ts band "channels" ownfile
 	!have { next }
 	/^Mode: / {
 		if (match($0, /RSSI: -?[0-9]+/)) { t = substr($0, RSTART + 6, RLENGTH - 6); rssi = t + 0 }
-		if (match($0, /Channel: [0-9]+(\/[0-9]+)?/)) chf = substr($0, RSTART + 9, RLENGTH - 9)
+		if (match($0, /Channel: (6g)?[0-9]+(\/[0-9]+)?/)) { chf = substr($0, RSTART + 9, RLENGTH - 9); sub(/^6g/, "", chf) }
 		if (match($0, /SNR: -?[0-9]+/)) snr = substr($0, RSTART + 5, RLENGTH - 5) + 0
 		next
 	}
