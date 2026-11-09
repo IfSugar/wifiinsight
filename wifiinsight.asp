@@ -240,17 +240,22 @@ function spanOf(center, width) {
 	return out;
 }
 function isDfs(ch) { return WI.band === '5g' && ch >= 52 && ch <= 144; }
-/* Weather radar: 5600-5650 MHz (channels 120, 124, 128, and any wider block that includes one) is shared
-   with weather radars. Marked where the router's country follows rules we know: Europe, the US, Canada. */
-var EUROPE = 'E0 EU AT BE BG CH CY CZ DE DK EE ES FI FR GB GR HR HU IE IS IT LI LT LU LV MT NL NO PL PT RO SE SI SK UK'.split(' ');
+/* Weather radar: 5600-5650 MHz (channels 120, 124, 128, and any wider block that includes one) is shared with
+   weather radars. Countries where Wi-Fi may use it, by the radar rules they follow, from the Linux wireless
+   regulatory database (wireless-regdb), plus every EU/EEA country. ETSI rules: a 10-minute radar check on
+   these channels instead of 1. Canada allowed them in July 2025 (RSS-247 Issue 4). Elsewhere: no marks. */
+var WX_ETSI = 'E0 EU UK AD AF AI AL AN AT AW BA BE BG BL BT BY CH CY CZ DE DK EE ES ET FI FR GB GF GL GP GR HK HR HU IE IL IS IT KH KN KZ LC LI LS LT LU LV MC MD ME MF MK MQ MR MT MW NL NO NZ OM PF PL PM PT QA RE RO RS SA SE SI SK SR TD TG TR UA VC WF WS YT ZA ZW'.split(' ');
+var WX_OTHER = 'AE AR AS BF BM BR BS CF CI CO CR CU CX DZ EC FM GD GH GU HN HT JM JP KR KY LB LK MH MN MO MP MU MX MY NI PA PE PG PH PW PY RW SG SN TC TH TT TW UG VI VN VU'.split(' ');
+var WX_DFS = 'Before using a DFS channel the router listens for radar for 1 minute';
 var WX = {
-	eu: 'Weather radar (120–128): in Europe the router must listen for radar for 10 minutes before using these channels, instead of 1.',
-	us: 'Weather radar (120–128): shared with airport weather radars (TDWR). Stricter radar detection applies, and many devices skip them.',
-	ca: 'Weather radar (120–128): Canada has allowed Wi-Fi here (with DFS) only since 2025, so many devices don’t use them yet.'
+	etsi: WX_DFS + ', or 10 minutes on the weather-radar channels 120–128.',
+	us: WX_DFS + '. 120–128 are shared with airport weather radars.',
+	ca: WX_DFS + '. Canada has allowed the weather-radar channels 120–128 only since 2025.',
+	other: WX_DFS + '. 120–128 are shared with weather radars.'
 };
-function wxRegion() {   /* 'eu', 'us', 'ca' or '' from the radio's country code, else ASUS's territory code */
+function wxRegion() {   /* from the radio's country code, else ASUS's territory code: 'etsi', 'us', 'ca', 'other' or '' */
 	var L = WI.live || {}, c = L.country || (L.territory || '').slice(0, 2);
-	return EUROPE.indexOf(c) >= 0 ? 'eu' : ['US', 'Q1', 'Q2', 'PR'].indexOf(c) >= 0 ? 'us' : c === 'CA' ? 'ca' : '';
+	return WX_ETSI.indexOf(c) >= 0 ? 'etsi' : ['US', 'Q1', 'Q2', 'PR'].indexOf(c) >= 0 ? 'us' : c === 'CA' ? 'ca' : WX_OTHER.indexOf(c) >= 0 ? 'other' : '';
 }
 function isWx(ch) { return WI.band === '5g' && (ch === 120 || ch === 124 || ch === 128) && !!wxRegion(); }
 function chanTags(ch) { return isWx(ch) ? 'DFS, weather radar' : isDfs(ch) ? 'DFS' : ''; }
@@ -944,10 +949,11 @@ function renderBest(L, ch, r) {
 	});
 	if (!rows.length) { $('wiBest').innerHTML = ''; return; }
 	var name = function (x) { return x.b.length > 1 ? x.b[0] + '–' + x.b[x.b.length - 1] : String(x.b[0]); };
-	var lh = L.src === 'measured' ? 'Load' : 'Est. load', reg = wxRegion(), anyWx = false;
+	var lh = L.src === 'measured' ? 'Load' : 'Est. load', reg = wxRegion(), anyWx = false, anyDfs = false;
 	var tag = function (x) {   /* DFS, or DFS · weather radar with what that means here */
-		if (x.wx) { anyWx = true; return '<span class="pill dfs" title="' + esc(WX[reg]) + '">DFS · weather radar</span>'; }
-		return x.dfs ? '<span class="pill dfs">DFS</span>' : '';
+		if (x.wx) { anyWx = anyDfs = true; return '<span class="pill dfs" title="' + esc(WX[reg]) + '">DFS · weather radar</span>'; }
+		if (x.dfs) { anyDfs = true; return '<span class="pill dfs" title="' + WX_DFS + '.">DFS</span>'; }
+		return '';
 	};
 	var h = '<table class="t"><tr><th style="width:80px">Width</th><th>Quietest channel</th><th class="num">' + lh + '</th><th>Quietest without DFS</th><th class="num">' + lh + '</th><th>Your current</th></tr>';
 	rows.forEach(function (x) {
@@ -955,7 +961,7 @@ function renderBest(L, ch, r) {
 			'<td>' + (x.nonDfs ? name(x.nonDfs) : '<span style="color:var(--muted)">–</span>') + '</td><td class="num">' + (x.nonDfs ? x.nonDfs.s + '%' : '') + '</td>' +
 			'<td>' + (x.cur ? name(x.cur) + ' · ' + x.cur.s + '%' + (x.cur.wx ? tag(x.cur) : '') + '<span class="pill cur">in use</span>' : '<span style="color:var(--muted)">–</span>') + '</td></tr>';
 	});
-	$('wiBest').innerHTML = h + '</table>' + (anyWx ? '<div class="sub" style="margin:8px 8px 0">' + esc(WX[reg]) + '</div>' : '');
+	$('wiBest').innerHTML = h + '</table>' + (anyDfs ? '<div class="sub" style="margin:8px 8px 0">' + esc(anyWx ? WX[reg] : WX_DFS + '.') + '</div>' : '');
 }
 
 /* =================== TROUBLESHOOTING =================== */
