@@ -68,7 +68,12 @@
 #wi .card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px 10px; margin-bottom: 12px; min-width: 0; }
 #wi .card h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--ink); }
 #wi .card .sub { color: var(--muted); font-size: 11px; margin-top: 2px; line-height: 1.4; }
-#wi .head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 8px; }
+/* Card header: the title and its controls on the first line, the description across the whole card below them */
+#wi .head { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; align-items: center; margin-bottom: 8px; }
+#wi .head > .grow { display: contents; }
+#wi .head > .grow > h3 { grid-column: 1; grid-row: 1; }
+#wi .head > .grow > .sub { grid-column: 1 / -1; grid-row: 2; }
+#wi .head > .legend { grid-column: 2; grid-row: 1; }
 #wi .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 #wi .grid2 .card { margin-bottom: 0; }
 #wi .gridgap { height: 12px; }
@@ -123,6 +128,9 @@
 #wi .scannote { color: var(--muted); font-size: 12px; }
 #wi .scannote.bad { color: #f2b8a2; }
 #wi .warn a { color: #ffe27a; }
+#wi .seg.sm button { padding: 3px 9px; font-size: 11px; }
+#wi .legend.srcrow { justify-content: flex-start; align-items: center; margin: 0 0 8px; }
+#wi .legend.srcrow:empty { display: none; }
 /* Quiet hours: 7 rows of 48 half hours. Gaps: 1px inside an hour, 3px between hours, 6px every 6 hours. */
 #wi .qpresets { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
 #wi .qpresets .btn { padding: 5px 11px; }
@@ -161,7 +169,7 @@ var WI = {
 	live: null, week: null, scans: null,
 	view: 'insight', band: '5g', range: '1h',
 	charts: {}, hidden: {},
-	showMesh: false, showDfs: true, showActive: true, allEvents: false,
+	showMesh: false, showDfs: true, showActive: true, allEvents: false, src: 'measured',
 	sortKey: 'rssi', sortDir: -1
 };
 /* How each range is drawn. Short ranges plot every sample; longer ones plot time-bucket averages
@@ -481,27 +489,68 @@ function scanRows() {
 		var r = all[i], n = agg ? (r[6] || 1) : 1;   // ts,ch,score,aps,best,own[,scans]
 		var t = H ? bucketOf(r[0], H) : r[0];
 		if (!byT[t]) { byT[t] = { cells: {}, src: {} }; order.push(t); }
-		var c = byT[t].cells[r[1]] || (byT[t].cells[r[1]] = [t, r[1], 0, 0, -127, 0, 0]);
+		/* cell: [t, ch, estimate, networks, strongest, own, scans, measured: others, non-Wi-Fi, unclassified,
+		   noise, glitches, readings, noise readings]. Rows: [ts, ch, estimate, networks, strongest, own, scans,
+		   others, non-Wi-Fi, unclassified, noise, glitches(, readings in the 30D averages)]. */
+		var c = byT[t].cells[r[1]] || (byT[t].cells[r[1]] = [t, r[1], 0, 0, -127, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 		c[2] += r[2] * n; c[5] += r[5] * n; c[6] += n;
 		if (r[3] > c[3]) c[3] = r[3];
 		if (r[4] > c[4]) c[4] = r[4];
+		var mn = r[7] == null ? 0 : agg ? (r[12] || 1) : 1;
+		if (mn) {
+			c[7] += r[7] * mn; c[8] += (r[8] || 0) * mn; c[9] += (r[9] || 0) * mn; c[11] += (r[11] || 0) * mn; c[12] += mn;
+			if (r[10] != null) { c[10] += r[10] * mn; c[13] += mn; }
+		}
 		byT[t].src[r[0]] = n;   // scans behind this row
 	}
+	var r1 = function (v) { return Math.round(v * 10) / 10; }, need = Math.max(2, Math.ceil(chans().length / 2)), measured = false;
 	order.forEach(function (t) {
+		var got = 0, mx = 0;
 		Object.keys(byT[t].cells).forEach(function (k) {
-			var c = byT[t].cells[k]; c[2] = Math.round(c[2] / c[6] * 10) / 10; c[5] = Math.round(c[5] / c[6] * 10) / 10;
+			var c = byT[t].cells[k]; c[2] = r1(c[2] / c[6]); c[5] = r1(c[5] / c[6]);
+			if (c[12]) { c[7] = r1(c[7] / c[12]); c[8] = r1(c[8] / c[12]); c[9] = r1(c[9] / c[12]); c[11] = Math.round(c[11] / c[12]); got++; if (c[12] > mx) mx = c[12]; }
+			else c[7] = c[8] = c[9] = c[11] = null;
+			c[10] = c[13] ? Math.round(c[10] / c[13]) : null;
 		});
+		byT[t].mscans = got >= need ? mx : 0;   /* measured scans behind this row */
+		if (got >= need) measured = true;   /* this driver reports per-channel measurements */
 	});
 	order.sort(function (a, b) { return b - a; });
 	var inRange = order.filter(function (t) { return t + (H || 0) > R.from; }), latestOnly = false;
 	if (!inRange.length && order.length && !agg) { inRange = [order[0]]; latestOnly = true; }
-	var scans = 0;
+	var scans = 0, mscans = 0;
 	var rows = inRange.map(function (t) {
-		var n = 0; Object.keys(byT[t].src).forEach(function (k) { n += byT[t].src[k]; }); scans += n;
+		var n = 0; Object.keys(byT[t].src).forEach(function (k) { n += byT[t].src[k]; }); scans += n; mscans += Math.min(n, byT[t].mscans);
 		return { ts: t, cells: byT[t].cells, n: n };
 	});
-	return { rows: rows, latestOnly: latestOnly, scans: scans, bucket: H };
+	return { rows: rows, latestOnly: latestOnly, scans: scans, mscans: mscans, bucket: H, measured: measured };
 }
+/* Measured: what the radio recorded on each channel while scanning (wl chanim_stats all), where the
+   driver reports it. Estimated: built from the networks heard (signal, overlap, advertised load). */
+var MEAS = [['Others Wi-Fi', 7, C.others], ['Non-Wi-Fi', 8, C.nonwifi], ['Unclassified', 9, C.unclass]];
+function heatSrc(info) { return WI.src === 'estimated' || !info.measured ? 'estimated' : 'measured'; }
+function cellVal(c, src) {
+	if (!c) return null;
+	if (src === 'measured') {
+		if (!c[12]) return null;
+		var v = 0;
+		MEAS.forEach(function (m) { if (!WI.hidden['meas:' + m[0]]) v += c[m[1]] || 0; });
+		return Math.min(100, Math.round(v * 10) / 10);
+	}
+	return Math.min(100, c[2] + (WI.showMesh ? c[5] : 0));
+}
+function srcControls(info, src, meshId) {   /* the Measured / Estimated switch and the measured parts, for a card's legend */
+	$(meshId).style.display = src === 'estimated' ? '' : 'none';
+	if (!info.measured) {   /* no scan since this version yet (after one, the router reports how many channels it measured) */
+		var m = (WI.live && WI.live.measured) || {};
+		return m[WI.band] == null ? '<span class="li" style="color:var(--muted)">Measured airtime starts with the next neighbour scan, or press Scan now.</span>' : '';
+	}
+	return '<span class="seg sm">' + [['measured', 'Measured'], ['estimated', 'Estimated']].map(function (x) {
+		return '<button type="button" class="' + (x[0] === src ? 'on' : '') + '" onclick="WiFiInsight.setSrc(\'' + x[0] + '\')" title="' +
+			(x[0] === 'measured' ? 'Airtime the radio measured on each channel while scanning' : 'Estimated from the networks heard: their signal, overlap and advertised load') + '">' + x[1] + '</button>';
+	}).join('') + '</span>' + (src === 'measured' ? legendHTML('meas', MEAS.map(function (m) { return [m[0], m[2], 1]; })) : '');
+}
+function setSrc(s) { WI.src = s; store('src', s); renderView(); }
 function noScansMsg() {
 	return (WI.scans && WI.scans.scan_interval === 0) ? 'Neighbour scans are switched off. Turn them on in Settings, or press <b>Scan now</b>.' : 'No scans yet. Press <b>Scan now</b> or wait for the next scheduled scan.';
 }
@@ -513,7 +562,9 @@ function prepCanvas(cv, cssH) {
 	return { ctx: ctx, w: cssW, h: cssH };
 }
 function renderHeat() {
-	var cv = $('wiHeat'), r = radio(), info = scanRows(), rows = info.rows, ch = chans();
+	var cv = $('wiHeat'), r = radio(), info = scanRows(), rows = info.rows, ch = chans(), src = heatSrc(info);
+	$('wiHeatSrc').innerHTML = srcControls(info, src, 'wiMeshLbl');
+	$('wiRampNote').textContent = src === 'measured' ? ' (half the airtime or more)' : '';
 	var qs = quietState(), qband = $('wiHeatQuiet');
 	qband.style.display = 'none'; $('wiHeatQuietKey').style.display = 'none';
 	if (!rows.length || !ch.length) {
@@ -534,8 +585,8 @@ function renderHeat() {
 	var P = prepCanvas(cv, Math.ceil(gridH) + padT + padB), ctx = P.ctx;
 	var colW = (P.w - padL - padR) / ch.length, gx = colW > 8 ? 2 : 1, gy = rowH >= 8 ? 2 : (rowH >= 5 ? 1 : 0);
 	for (var i = 0; i < rows.length; i++) for (var j = 0; j < ch.length; j++) {
-		var c = rows[i].cells[ch[j]], v = c ? c[2] + (WI.showMesh ? c[5] : 0) : 0;
-		ctx.fillStyle = c ? rampColor(v) : '#2f3a3e';
+		var c = rows[i].cells[ch[j]], v = cellVal(c, src);
+		ctx.fillStyle = v == null ? '#2f3a3e' : rampColor(src === 'measured' ? Math.min(100, v * 2) : v);   /* measured: full colour at 50% of airtime */
 		if (rowH < 3) ctx.fillRect(padL + j * colW + gx / 2, padT + i * rowH, colW - gx, rowH + 0.6);
 		else roundRect(ctx, padL + j * colW + gx / 2, padT + i * rowH + gy / 2, colW - gx, rowH - gy, rowH >= 8 ? 3 : 1);
 	}
@@ -548,10 +599,12 @@ function renderHeat() {
 		ctx.fillText(timeLabel(rows[k].ts), padL - 6, padT + k * rowH + rowH / 2);
 	}
 	if (WI.showActive && r) activeBox(ctx, ch, r, padL, colW, padT, gridH);
-	WI.heatGeo = { padL: padL, padT: padT, colW: colW, rowH: rowH, rows: rows, chans: ch, bucket: info.bucket };
+	WI.heatGeo = { padL: padL, padT: padT, colW: colW, rowH: rowH, rows: rows, chans: ch, bucket: info.bucket, src: src };
+	/* "38 scans, newest 5 min ago, measured by the radio." (scans from before an update have no measurements) */
+	var how = src !== 'measured' ? 'estimated from the networks heard' : (info.mscans < info.scans && !info.latestOnly ? info.mscans + ' measured' : 'measured') + ' by the radio';
 	$('wiHeatSub').textContent = (info.latestOnly ? 'Latest scan, ' + ago(nowTs() - rows[0].ts)
-		: info.scans + ' scan' + (info.scans > 1 ? 's' : '') + ' in range' + (info.bucket ? ', shown as ' + bucketName(info.bucket) + ' averages' : ', newest ' + ago(nowTs() - rows[0].ts)))
-		+ '. Estimated from nearby networks’ signal strength and the load they report.' + (qshow ? ' No scheduled scans during quiet hours.' : '');
+		: info.scans + ' scan' + (info.scans > 1 ? 's' : '') + (info.bucket ? ', shown as ' + bucketName(info.bucket) + ' averages' : ', newest ' + ago(nowTs() - rows[0].ts)))
+		+ ', ' + how + '.' + (qshow ? ' No scheduled scans in quiet hours.' : '');
 }
 function axisChannels(ctx, ch, padL, colW, y0) {
 	ctx.fillStyle = C.tick; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
@@ -597,9 +650,14 @@ function heatHover(ev) {
 	var ch = g.chans[j], row = g.rows[i], c = row.cells[ch];
 	var h = '<b>Channel ' + ch + '</b>' + (isDfs(ch) ? ' <span class="m">DFS</span>' : '') + '<br><span class="m">'
 		+ (g.bucket ? timeLabel(row.ts) + ', ' + bucketName(g.bucket) + ' average of ' + row.n + ' scan' + (row.n > 1 ? 's' : '') : when(row.ts)) + '</span><br>';
-	if (c) {
-		h += 'Interference estimate: <b>' + Math.round(c[2]) + '%</b><br>';
-		h += c[3] ? ((g.bucket ? 'Up to ' : '') + c[3] + ' network' + (c[3] > 1 ? 's' : '') + ' overlapping, strongest ' + c[4] + ' dBm') : 'No other networks heard';
+	var nets = function (c) { return c[3] ? ((g.bucket ? 'Up to ' : '') + c[3] + ' network' + (c[3] > 1 ? 's' : '') + ' overlapping, strongest ' + c[4] + ' dBm') : 'No other networks heard'; };
+	if (c && g.src === 'measured' && c[12]) {
+		h += 'Measured: <b>' + Math.round(cellVal(c, 'measured')) + '%</b> of airtime busy<br>';
+		h += MEAS.map(function (m) { return m[0] + ' ' + c[m[1]] + '%'; }).join(' · ') + '<br>';
+		h += '<span class="m">' + (c[10] != null ? 'Noise ' + c[10] + ' dBm · ' : '') + 'glitches ' + c[11] + (g.bucket ? ' (average)' : '') + '<br>' + nets(c) + '</span>';
+	} else if (c) {
+		if (g.src === 'measured') h += '<span class="m">Not measured in this scan</span><br>';
+		h += 'Interference estimate: <b>' + Math.round(c[2]) + '%</b><br>' + nets(c);
 		if (c[5] > 0) h += '<br><span class="m">Your mesh adds ' + Math.round(c[5]) + '%</span>';
 	} else h += 'Not scanned';
 	tip.innerHTML = h; placeTip(tip, ev.target.parentNode, x, y);
@@ -744,24 +802,31 @@ function renderApTable(list) {
 function sortBy(k) { if (WI.sortKey === k) WI.sortDir = -WI.sortDir; else { WI.sortKey = k; WI.sortDir = (k === 'ssid' || k === 'bssid' || k === 'sec' || k === 'phy' || k === 'ctl') ? 1 : -1; } renderApTable(aps()); }
 
 /* =================== CHANNEL STATISTICS =================== */
-function channelLoads() {   // average and peak estimated load per channel across scans in range
-	var info = scanRows(), ch = chans(), avg = {}, peak = {};
+function channelLoads() {   // average and peak load per channel across scans in range (measured or estimated)
+	var info = scanRows(), ch = chans(), src = heatSrc(info), avg = {}, peak = {}, comp = {}, noise = {};
+	MEAS.forEach(function (m) { comp[m[0]] = {}; });
 	ch.forEach(function (c) {
-		var sum = 0, n = 0, pk = 0;
+		var sum = 0, n = 0, pk = 0, parts = [0, 0, 0], nz = 0, nzn = 0;
 		info.rows.forEach(function (r) {
-			var x = r.cells[c]; if (!x) return;
-			var v = Math.min(100, x[2] + (WI.showMesh ? x[5] : 0)), w = x[6] || 1;
+			var x = r.cells[c], v = cellVal(x, src);
+			if (x && x[10] != null) { nz += x[10] * x[13]; nzn += x[13]; }
+			if (v == null) return;
+			var w = src === 'measured' ? x[12] : (x[6] || 1);
 			sum += v * w; n += w; if (v > pk) pk = v;
+			if (src === 'measured') MEAS.forEach(function (m, i) { parts[i] += (x[m[1]] || 0) * w; });
 		});
 		avg[c] = n ? Math.round(sum / n * 10) / 10 : null; peak[c] = n ? Math.round(pk) : null;
+		MEAS.forEach(function (m, i) { comp[m[0]][c] = n ? Math.round(parts[i] / n * 10) / 10 : null; });
+		noise[c] = nzn ? Math.round(nz / nzn) : null;
 	});
-	return { avg: avg, peak: peak, n: info.scans, latestOnly: info.latestOnly };
+	return { avg: avg, peak: peak, comp: comp, noise: noise, src: src, info: info, n: info.scans, latestOnly: info.latestOnly };
 }
 function renderChannels() {
 	var ch = chans(), list = aps(), r = radio(), cur = r ? spanOf(r.center, r.width) : [];
 	if (!ch.length || !list.length && !(WI.scans && WI.scans.scans && WI.scans.scans[WI.band])) {
 		drawChart('cnt', 'wiCntChart', 'bar', [], { empty: noScansMsg() });
 		drawChart('load', 'wiLoadChart', 'bar', [], { empty: noScansMsg() });
+		$('wiNzChCard').style.display = 'none'; $('wiLoadSrc').innerHTML = '';
 		$('wiBest').innerHTML = ''; return;
 	}
 	var labels = ch.map(String), others = ch.map(function () { return 0; }), mine = ch.map(function () { return 0; });
@@ -775,16 +840,41 @@ function renderChannels() {
 	], { labels: labels, x: xCat, stacked: true, yMin: 0, yStep: 1, plugins: [curBand(ch.map(function (c, i) { return cur.indexOf(c) >= 0 ? i : -1; }).filter(function (i) { return i >= 0; }))], yFmt: function (v) { return Number.isInteger(v) ? v : ''; },
 		ttTitle: function (it) { return 'Channel ' + it[0].label + (isDfs(+it[0].label) ? ' (DFS)' : ''); } });
 
-	var L = channelLoads();
-	$('wiLoadSub').textContent = (L.latestOnly ? 'Latest scan' : 'Average of ' + L.n + ' scan' + (L.n === 1 ? '' : 's') + ' in range') + '. Lower is better. The dashed band is the router’s current channel.';
+	var L = channelLoads(), meas = L.src === 'measured';
+	$('wiLoadSrc').innerHTML = srcControls(L.info, L.src, 'wiMeshLbl2');
+	$('wiLoadTitle').textContent = meas ? 'Load per channel' : 'Estimated load per channel';
+	var mn = L.info.mscans, part = meas && !L.latestOnly && mn < L.n;   /* scans from before the update have no measurements */
+	var sc = function (n) { return n + ' scan' + (n === 1 ? '' : 's'); };
+	$('wiLoadSub').textContent = (meas ? 'Measured by the radio' : 'Estimated from the networks heard')
+		+ (L.latestOnly ? ' in the latest scan' : part ? ' in ' + mn + ' of the ' + sc(L.n) + ' in range' : ', averaged over ' + sc(L.n)) + '. Lower is better.';
 	var data = ch.map(function (c) { return L.avg[c]; });
-	var colors = data.map(function (v) { return rampColor(v == null ? 0 : Math.max(8, v)); });
 	var maxV = Math.max.apply(null, data.map(function (v) { return v || 0; }));
 	var curIdx = ch.map(function (c, i) { return cur.indexOf(c) >= 0 ? i : -1; }).filter(function (i) { return i >= 0; });
-	drawChart('load', 'wiLoadChart', 'bar', [{ label: 'Estimated load', data: data, backgroundColor: colors, borderRadius: { topLeft: 4, topRight: 4 }, borderSkipped: 'bottom', categoryPercentage: 0.72, barPercentage: 0.9 }],
-		{ labels: labels, x: xCat, yMin: 0, plugins: [curBand(curIdx)], yMax: Math.min(100, Math.max(20, Math.ceil((maxV + 5) / 10) * 10)), yFmt: pctFmt,
-			ttTitle: function (it) { return 'Channel ' + it[0].label + (isDfs(+it[0].label) ? ' (DFS)' : '') + (cur.indexOf(+it[0].label) >= 0 ? ' · in use' : ''); },
-			ttLabel: function (it) { var c = +it.label; return [' Average: ' + (it.parsed.y == null ? '–' : it.parsed.y + '%'), ' Peak: ' + (L.peak[c] == null ? '–' : L.peak[c] + '%')]; } });
+	var title = function (it) { return 'Channel ' + it[0].label + (isDfs(+it[0].label) ? ' (DFS)' : '') + (cur.indexOf(+it[0].label) >= 0 ? ' · in use' : ''); };
+	var bar = { borderSkipped: 'bottom', categoryPercentage: 0.72, barPercentage: 0.9 };
+	var yMax = Math.min(100, Math.max(20, Math.ceil((maxV + 5) / 10) * 10));
+	if (meas) {   /* stacked: the measured parts that are switched on */
+		var sets = MEAS.filter(function (m) { return !WI.hidden['meas:' + m[0]]; }).map(function (m) {
+			return Object.assign({ label: m[0], data: ch.map(function (c) { return L.comp[m[0]][c]; }), backgroundColor: m[2], borderWidth: { top: 1 }, borderColor: C.surface }, bar);
+		});
+		drawChart('load', 'wiLoadChart', 'bar', sets, { labels: labels, x: xCat, stacked: true, yMin: 0, plugins: [curBand(curIdx)], yMax: yMax, yFmt: pctFmt, ttTitle: title,
+			ttLabel: function (it) { return ' ' + it.dataset.label + ': ' + (it.parsed.y == null ? '–' : it.parsed.y + '%'); } });
+	} else {
+		var colors = data.map(function (v) { return rampColor(v == null ? 0 : Math.max(8, v)); });
+		drawChart('load', 'wiLoadChart', 'bar', [Object.assign({ label: 'Estimated load', data: data, backgroundColor: colors, borderRadius: { topLeft: 4, topRight: 4 } }, bar)],
+			{ labels: labels, x: xCat, yMin: 0, plugins: [curBand(curIdx)], yMax: yMax, yFmt: pctFmt, ttTitle: title,
+				ttLabel: function (it) { var c = +it.label; return [' Average: ' + (it.parsed.y == null ? '–' : it.parsed.y + '%'), ' Peak: ' + (L.peak[c] == null ? '–' : L.peak[c] + '%')]; } });
+	}
+	/* Noise floor of every channel, where the radio measures it while scanning */
+	var nz = ch.map(function (c) { return L.noise[c]; }), anyNz = nz.some(function (v) { return v != null; });
+	$('wiNzChCard').style.display = anyNz ? '' : 'none';
+	if (anyNz) {
+		var nzMin = Math.min.apply(null, nz.filter(function (v) { return v != null; })), nzMax = Math.max.apply(null, nz.filter(function (v) { return v != null; }));
+		drawChart('nzch', 'wiNzChChart', 'bar', [Object.assign({ label: 'Noise floor', data: nz.map(function (v) { return v == null ? null : [-110, v]; }), backgroundColor: '#5f7d87',
+			borderRadius: { topLeft: 4, topRight: 4 } }, bar)],
+			{ labels: labels, x: xCat, yMin: Math.max(-110, Math.floor((nzMin - 5) / 5) * 5), yMax: Math.min(-40, Math.ceil((nzMax + 5) / 5) * 5), plugins: [curBand(curIdx)],
+				yStep: 5, yFmt: function (v) { return v + ' dBm'; }, ttTitle: title, ttLabel: function (it) { return ' Noise floor: ' + nz[it.dataIndex] + ' dBm'; } });
+	}
 	renderBest(L, ch, r);
 }
 function curBand(idx) {   // translucent band behind the router's channel(s), like the signal map
@@ -832,7 +922,8 @@ function renderBest(L, ch, r) {
 	});
 	if (!rows.length) { $('wiBest').innerHTML = ''; return; }
 	var name = function (x) { return x.b.length > 1 ? x.b[0] + '–' + x.b[x.b.length - 1] : String(x.b[0]); };
-	var h = '<table class="t"><tr><th style="width:80px">Width</th><th>Quietest channel</th><th class="num">Est. load</th><th>Quietest without DFS</th><th class="num">Est. load</th><th>Your current</th></tr>';
+	var lh = L.src === 'measured' ? 'Load' : 'Est. load';
+	var h = '<table class="t"><tr><th style="width:80px">Width</th><th>Quietest channel</th><th class="num">' + lh + '</th><th>Quietest without DFS</th><th class="num">' + lh + '</th><th>Your current</th></tr>';
 	rows.forEach(function (x) {
 		h += '<tr><td>' + x.w + ' MHz</td><td>' + name(x.best) + (x.best.dfs ? '<span class="pill dfs">DFS</span>' : '') + '</td><td class="num">' + x.best.s + '%</td>' +
 			'<td>' + (x.nonDfs ? name(x.nonDfs) : '<span style="color:var(--muted)">–</span>') + '</td><td class="num">' + (x.nonDfs ? x.nonDfs.s + '%' : '') + '</td>' +
@@ -1233,6 +1324,7 @@ function boot() {
 	if (!RANGES[WI.range]) WI.range = '1h';
 	if (RANGE_CFG[WI.range].src === 'month') loadAll({ month: 1 });
 	WI.showMesh = store('mesh') === '1';
+	WI.src = store('src') === 'estimated' ? 'estimated' : 'measured';
 	$('wiMesh').checked = WI.showMesh; $('wiMesh2').checked = WI.showMesh;
 	$('wiHeat').addEventListener('mousemove', heatHover);
 	$('wiHeat').addEventListener('mouseleave', function () { $('wiTip').style.display = 'none'; });
@@ -1291,7 +1383,7 @@ function loadChart(done) {
 window.initial = initial;
 window.WiFiInsight = {
 	setView: setView, setBand: setBand, setRange: setRange, scanNow: scanNow, setMesh: setMesh,
-	saveSettings: saveSettings, sortBy: sortBy, toggleSeries: toggleSeries, setMode: setMode, qPreset: qPreset,
+	saveSettings: saveSettings, sortBy: sortBy, toggleSeries: toggleSeries, setMode: setMode, qPreset: qPreset, setSrc: setSrc,
 	toggleEvents: function () { WI.allEvents = !WI.allEvents; renderEvents(); },
 	heatOption: function (key, on) { WI[key] = on; renderHeat(); },
 	state: WI
@@ -1364,9 +1456,10 @@ window.WiFiInsight = {
 				<div class="legend">
 					<label><input type="checkbox" checked onchange="WiFiInsight.heatOption('showActive',this.checked)"/>Active channel</label>
 					<label><input type="checkbox" checked onchange="WiFiInsight.heatOption('showDfs',this.checked)"/>DFS</label>
-					<label><input type="checkbox" id="wiMesh" onchange="WiFiInsight.setMesh(this.checked)"/>Include my mesh</label>
+					<label id="wiMeshLbl"><input type="checkbox" id="wiMesh" onchange="WiFiInsight.setMesh(this.checked)"/>Include my mesh</label>
 				</div>
 			</div>
+			<div class="legend srcrow" id="wiHeatSrc"></div>
 			<div class="qband" id="wiHeatQuiet"></div>
 			<div class="rel">
 				<canvas class="full" id="wiHeat"></canvas>
@@ -1374,7 +1467,7 @@ window.WiFiInsight = {
 				<div class="tip" id="wiTip"></div>
 			</div>
 			<div class="foot">
-				<span class="ramp">Clean <i id="wiRamp"></i> Busy</span>
+				<span class="ramp">Clean <i id="wiRamp"></i> Busy<span id="wiRampNote"></span></span>
 				<span><span style="display:inline-block;width:14px;height:10px;border:2px solid #ffcc00;border-radius:2px;vertical-align:-1px;margin-right:5px"></span>Router's channel</span>
 				<span class="qkey" id="wiHeatQuietKey" style="display:none"><i style="border:1px dashed #c98500"></i>Quiet hours</span>
 			</div>
@@ -1412,14 +1505,19 @@ window.WiFiInsight = {
 		</div>
 		<div class="card">
 			<div class="head">
-				<div class="grow"><h3>Estimated load per channel</h3><div class="sub" id="wiLoadSub"></div></div>
-				<div class="legend"><label><input type="checkbox" id="wiMesh2" onchange="WiFiInsight.setMesh(this.checked)"/>Include my mesh</label></div>
+				<div class="grow"><h3 id="wiLoadTitle">Estimated load per channel</h3><div class="sub" id="wiLoadSub"></div></div>
+				<div class="legend"><span class="li"><span class="sq" style="background:rgba(255,204,0,0.25);border:1px dashed #ffcc00"></span>Router's channel</span><label id="wiMeshLbl2"><input type="checkbox" id="wiMesh2" onchange="WiFiInsight.setMesh(this.checked)"/>Include my mesh</label></div>
 			</div>
+			<div class="legend srcrow" id="wiLoadSrc"></div>
 			<div class="chartbox sm" id="wiLoadChart"></div>
 		</div>
 		<div class="card">
-			<div class="head"><div class="grow"><h3>Quietest options</h3><div class="sub">Best channel for each width, based on the estimated load above. DFS channels can be forced to change if radar is detected.</div></div></div>
+			<div class="head"><div class="grow"><h3>Quietest options</h3><div class="sub">Best channel for each width, based on the load above. DFS channels can be forced to change if radar is detected.</div></div></div>
 			<div id="wiBest"></div>
+		</div>
+		<div class="card" id="wiNzChCard" style="display:none">
+			<div class="head"><div class="grow"><h3>Noise floor per channel</h3><div class="sub">Measured by the radio while scanning, averaged over the range. Lower (more negative) is better.</div></div></div>
+			<div class="chartbox sm" id="wiNzChChart"></div>
 		</div>
 	</div>
 
@@ -1480,7 +1578,7 @@ window.WiFiInsight = {
 			</div>
 		</div>
 		<div class="card">
-			<div class="head"><div class="grow"><h3>Quiet hours</h3><div class="sub">No scheduled neighbour scans in the marked half hours, so no Wi-Fi blips. Sampling carries on (it doesn't touch Wi-Fi), and Scan now still works. Click or drag to mark; drag over marked slots to clear them.</div></div></div>
+			<div class="head"><div class="grow"><h3>Quiet hours</h3><div class="sub">No scheduled scans in the marked half hours, so no Wi-Fi blips. Sampling and Scan now still work. Click or drag to mark or clear.</div></div></div>
 			<div class="qpresets" id="qPresets"></div>
 			<div class="qgrid" id="qGrid"></div>
 			<div class="foot" style="margin-top:10px">
@@ -1502,7 +1600,7 @@ window.WiFiInsight = {
 
 	<div class="note">
 		<b>Others Wi-Fi</b>: airtime used by networks that aren't yours, including your mesh node's separate access point when it shares the channel.
-		<b>Non-Wi-Fi</b>: energy from devices such as microwaves, baby monitors and Bluetooth. Spectrum and channel load are estimates built from periodic scans.
+		<b>Non-Wi-Fi</b>: energy from devices such as microwaves, baby monitors and Bluetooth. Spectrum and channel load come from periodic scans: measured by the radio on each channel where the driver reports it, otherwise estimated from the networks heard.
 		<br/><span id="wiFoot"></span>
 	</div>
 </div>
