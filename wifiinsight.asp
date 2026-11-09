@@ -68,7 +68,12 @@
 #wi .card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px 10px; margin-bottom: 12px; min-width: 0; }
 #wi .card h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--ink); }
 #wi .card .sub { color: var(--muted); font-size: 11px; margin-top: 2px; line-height: 1.4; }
-#wi .head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 8px; }
+/* Card header: the title and its controls on the first line, the description across the whole card below them */
+#wi .head { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; align-items: center; margin-bottom: 8px; }
+#wi .head > .grow { display: contents; }
+#wi .head > .grow > h3 { grid-column: 1; grid-row: 1; }
+#wi .head > .grow > .sub { grid-column: 1 / -1; grid-row: 2; }
+#wi .head > .legend { grid-column: 2; grid-row: 1; }
 #wi .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 #wi .grid2 .card { margin-bottom: 0; }
 #wi .gridgap { height: 12px; }
@@ -535,7 +540,10 @@ function cellVal(c, src) {
 }
 function srcControls(info, src, meshId) {   /* the Measured / Estimated switch and the measured parts, for a card's legend */
 	$(meshId).style.display = src === 'estimated' ? '' : 'none';
-	if (!info.measured) return '';
+	if (!info.measured) {   /* no scan since this version yet (after one, the router reports how many channels it measured) */
+		var m = (WI.live && WI.live.measured) || {};
+		return m[WI.band] == null ? '<span class="li" style="color:var(--muted)">Measured airtime starts with the next neighbour scan, or press Scan now.</span>' : '';
+	}
 	return '<span class="seg sm">' + [['measured', 'Measured'], ['estimated', 'Estimated']].map(function (x) {
 		return '<button type="button" class="' + (x[0] === src ? 'on' : '') + '" onclick="WiFiInsight.setSrc(\'' + x[0] + '\')" title="' +
 			(x[0] === 'measured' ? 'Airtime the radio measured on each channel while scanning' : 'Estimated from the networks heard: their signal, overlap and advertised load') + '">' + x[1] + '</button>';
@@ -1566,7 +1574,7 @@ window.WiFiInsight = {
 			</div>
 		</div>
 		<div class="card">
-			<div class="head"><div class="grow"><h3>Quiet hours</h3><div class="sub">No scheduled neighbour scans in the marked half hours, so no Wi-Fi blips. Sampling carries on (it doesn't touch Wi-Fi), and Scan now still works. Click or drag to mark; drag over marked slots to clear them.</div></div></div>
+			<div class="head"><div class="grow"><h3>Quiet hours</h3><div class="sub">No scheduled scans in the marked half hours, so no Wi-Fi blips. Sampling and Scan now still work. Click or drag to mark or clear.</div></div></div>
 			<div class="qpresets" id="qPresets"></div>
 			<div class="qgrid" id="qGrid"></div>
 			<div class="foot" style="margin-top:10px">

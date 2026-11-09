@@ -130,6 +130,8 @@ echo 'enable -n test [ printf echo' > "$t/no-builtins.sh"
 run() { WI_ROOT="$R" TZ=UTC PATH="$t/bin" BASH_ENV="$t/no-builtins.sh" "$bash_bin" "$R/jffs/addons/wifiinsight/wifiinsight.sh" "$@"; }
 q() { "$sqlite" "$D/wifiinsight.db" "$1"; }
 
+live_measured() { run export > /dev/null 2>&1 || true; python3 -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1]))["measured"], sort_keys=True))' "$R/www/user/wifiinsight/live.htm" 2>&1; }
+expect "live.htm before a scan with this version: no figures yet (the page says they start with the next scan)" "{}" "$(live_measured)"
 out=$(run scan 2>&1) || true
 expect "scan: 5 GHz says how many channels were measured" "ok, 1 network in 3 s, 11 channels measured" "$(printf '%s\n' "$out" | sed -n 's/^  5g (eth7): //p')"
 expect "scan: 2.4 GHz too" "ok, 1 network in 3 s, 3 channels measured" "$(printf '%s\n' "$out" | sed -n 's/^  2g (eth6): //p')"
@@ -142,7 +144,7 @@ assert row[60][6:12] == [1, 4, 8, 1, -91, 22], row[60]       # scans, others, no
 assert len(row[140]) == 6, row[140]                            # channel 140 wasn't in the list: estimate only
 assert len(row[36]) == 12
 EOF
-run export > /dev/null 2>&1 || true
+expect "live.htm: channels measured in each band's last scan" '{"2g": 3, "5g": 11}' "$(live_measured)"
 python3 - "$R/www/user/wifiinsight/month.htm" <<'EOF' && ok "month.htm: measured averages and how many readings" || bad "month.htm measured values"
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -154,6 +156,7 @@ EOF
 rm -f "$F/chanim_eth7"; echo 1800001800 > "$F/clock"
 out=$(run scan 2>&1) || true
 expect "no per-channel list: the scan reports no measurements" "ok, 1 network in 3 s" "$(printf '%s\n' "$out" | sed -n 's/^  5g (eth7): //p')"
+expect "no per-channel list: live.htm says 0 for that band" '{"2g": 3, "5g": 0}' "$(live_measured)"
 # prune keeps the retention for measurements too
 echo $(( 1800000000 + 31 * 86400 )) > "$F/clock"
 run prune > /dev/null 2>&1 || true
