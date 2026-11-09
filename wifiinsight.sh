@@ -6,14 +6,16 @@
 #
 #  Pages: Insight, Site Survey, Channel Statistics, Troubleshooting, Settings
 #
-#  Usage: wifiinsight.sh install | update [force] | uninstall [--keep-data] |
-#                        status | startup | collect | scan | export | prune | debug
+#  Usage: wifiinsight.sh                    (a menu, when run in a terminal: amtm opens this)
+#         wifiinsight.sh install | update [force] | uninstall [--keep-data] | status | scan |
+#                        collection [on|paused|off] | debug | amtmupdate [check] |
+#                        startup | collect | export | prune
 #
 #  Install:  curl -fsL --retry 3 https://github.com/IfSugar/wifiinsight/releases/latest/download/wifiinsight.sh \
 #              -o /tmp/wifiinsight.sh && sh /tmp/wifiinsight.sh install
 ###############################################################################
 
-VERSION="1.1.1"
+VERSION="1.2.0"
 NAME="wifiinsight"
 TITLE="WiFi Insight"
 
@@ -48,11 +50,13 @@ RETAIN_DAYS=30          # history kept for samples and scans
 EXTRA_OWN_SSIDS=""      # extra SSIDs to treat as yours, separated by |
 COLLECTION=on           # on, paused (no scheduled scans) or off (no samples or scans)
 QUIET=""                # quiet hours, no scheduled scans: see quiet_at() below
+AMTM_UPDATE=on          # on: amtm may update WiFi Insight (amtmupdate); off: only 'update' does
 DATA_DIR="/opt/var/lib/$NAME"
 SQLITE="/opt/bin/sqlite3"
 [ -f "$CONF" ] && . "$CONF"
 DB="$DATA_DIR/$NAME.db"
 case "$COLLECTION" in on|paused|off) ;; *) COLLECTION=on ;; esac
+case "$AMTM_UPDATE" in on|off) ;; *) AMTM_UPDATE=on ;; esac
 case "$QUIET" in *[A-F]*) QUIET=$(printf '%s' "$QUIET" | tr ABCDEF abcdef) ;; esac
 QUIET_BAD=""
 case "${#QUIET}:$QUIET" in
@@ -964,6 +968,7 @@ COLLECTION=$COLLECTION          # on, paused (no scheduled scans) or off (no sam
 # Quiet hours (no scheduled scans): one bit per half hour, Monday 00:00 first, 12 hex digits
 # a day, 84 in all; easiest to set on the Settings page. Empty = none.
 QUIET="$QUIET"
+AMTM_UPDATE=$AMTM_UPDATE         # on: amtm may update WiFi Insight (amtmupdate); off: only 'update' does
 DATA_DIR="$DATA_DIR"
 SQLITE="$SQLITE"
 EOF
@@ -1149,7 +1154,7 @@ install() {
 		[ -f "$src/chart.umd.min.js" ] && cp -f "$src/chart.umd.min.js" "$ADDON_DIR/"
 	fi
 	chmod 755 "$SCRIPT"
-	grep -q '^COLLECTION=' "$CONF" 2>/dev/null || write_conf   # new, or from before 1.1.0: add the new settings
+	grep -q '^AMTM_UPDATE=' "$CONF" 2>/dev/null || write_conf   # new, or from before 1.2.0: add the new settings
 	. "$CONF"; DB="$DATA_DIR/$NAME.db"
 	mkdir -p "$DATA_DIR" || die "Couldn't create $DATA_DIR"
 	init_db || die "Couldn't create the database in $DATA_DIR"
@@ -1168,8 +1173,12 @@ install() {
 	startup
 	if ready; then
 		collect --once
-		say "Running the first neighbour scan (Wi-Fi may hiccup for a second)..."
-		scan
+		if [ "$(sql "SELECT count(*) FROM scans;" 2>/dev/null)" = "0" ]; then
+			say "Running the first neighbour scan (Wi-Fi may hiccup for a second)..."
+			scan
+		else
+			say "Kept your history: neighbour scans carry on as scheduled."   # an update: no extra scan
+		fi
 	else
 		say "Storage or NTP not ready yet - collection will start automatically."
 	fi
@@ -1280,6 +1289,7 @@ status() {
 	say "Ready:       $(ready && echo yes || echo 'no (NTP or storage)')"
 	say "Collection:  $(collection_text)"
 	say "Quiet hours: $(quiet_text)$(quiet_now && printf ' (quiet now)')$( [ -n "$QUIET_BAD" ] && printf ' (the QUIET line in the config is invalid, so it is ignored)')"
+	say "amtm updates: $AMTM_UPDATE"
 	say "Cron:";  cru l 2>/dev/null | grep "$NAME" | sed 's/^/  /'
 	if [ -f "$DB" ]; then
 		t=$(now)
@@ -1317,7 +1327,116 @@ debug() {
 	done
 }
 
+# ---- collection switch, amtm and the menu ----------------------------------------
+set_collection() {   # on|paused|off, as Settings -> Collection on the page
+	case "$1" in on|paused|off) ;; *) die "Collection can be on, paused or off." ;; esac
+	COLLECTION=$1
+	write_conf
+	if [ -f "$HELPER" ]; then . "$HELPER"; am_settings_set ${NAME}_mode "$1" 2>/dev/null; fi   # what the page saves
+	cron_add
+	ready && export_live
+	log "collection set to $1 from the command line"
+	say "Collection: $(collection_text)"
+}
+
+# amtm (the Asuswrt-Merlin Terminal Menu) updates scripts that answer "amtmupdate". It runs
+# "amtmupdate check" (exit 0: amtm may update it, 1: the user turned that off), and when a newer
+# release is out, "amtmupdate", expecting a line or two and exit 0 on success, 1 on failure.
+amtm_update() {   # [check]
+	if [ "$1" = check ]; then [ "$AMTM_UPDATE" = on ]; return; fi
+	if [ "$AMTM_UPDATE" != on ]; then
+		say "  ✖  $TITLE: updates through amtm are turned off (AMTM_UPDATE=off). '$SCRIPT update' still works."
+		return 1
+	fi
+	say "  i  Running function amtmupdate"
+	mkdir -p "$TMPD"; alog="$TMPD/amtmupdate.log"
+	( update ) > "$alog" 2>&1; rc=$?
+	now_ver=$(sed -n 's/^VERSION="\([0-9][0-9.]*\)".*/\1/p' "$SCRIPT" 2>/dev/null | head -1)
+	if [ $rc -eq 0 ]; then
+		say "  ✔  $TITLE ${now_ver:-$VERSION} amtmupdate complete"
+		log "amtmupdate: $VERSION -> ${now_ver:-$VERSION}"
+	else
+		why=$(grep -v '^[[:space:]]*$' "$alog" | tail -1 | sed 's/^ERROR: //' | cut -c1-100)
+		say "  ✖  $TITLE amtmupdate failed: ${why:-no output} (details in $alog)"
+		log "amtmupdate failed: $why"
+	fi
+	return $rc
+}
+
+usage() {
+	say "Usage: $0 [menu] | install | check | update [force] | uninstall [--keep-data] | status | scan |"
+	say "       collection [on|paused|off] | debug | amtmupdate [check] | export | version"
+}
+menu_pause() { printf '\n Press Enter to go back to the menu '; read -r dummy || exit 0; }
+menu_collection() {
+	say " Collection is $COLLECTION."
+	say "  1  On: samples, and scans on schedule outside quiet hours"
+	say "  2  Scans paused: keeps sampling, no scheduled scans"
+	say "  3  Off: no sampling or scans; the page, settings and history stay"
+	say "  e  Back"
+	printf '\n Choose an option: '; read -r c || return 0
+	case "$c" in
+		1) set_collection on ;; 2) set_collection paused ;; 3) set_collection off ;;
+		*) return 0 ;;
+	esac
+	menu_pause
+}
+menu_uninstall() {   # true once removed
+	printf ' Remove %s? Type yes to confirm: ' "$TITLE"; read -r a || return 1
+	if [ "$a" != yes ]; then say " Nothing was removed."; menu_pause; return 1; fi
+	printf ' Keep the history database, for a later reinstall? (y/n) '; read -r k
+	case "$k" in [yY]*) uninstall --keep-data ;; *) uninstall ;; esac
+	return 0
+}
+# Run with no arguments in a terminal (which is how amtm opens it). Each action runs in a subshell,
+# so one that stops with an error returns to the menu instead of closing it.
+menu() {
+	while :; do
+		have clear && clear
+		page=$(cat "$ADDON_DIR/webui_page" 2>/dev/null)
+		say ""
+		say " $TITLE $VERSION${page:+   (Wireless > $TITLE, $page)}"
+		say " Collection:   $(collection_text)"
+		say " Quiet hours:  $(quiet_text)$(quiet_now && printf ' (quiet now; set them on the Settings page)')"
+		say " amtm updates: $AMTM_UPDATE"
+		say ""
+		say "  1  Status"
+		say "  2  Scan now"
+		say "  3  Collection: on, scans paused or off"
+		say "  4  Update to the latest release"
+		say "  5  Reinstall the latest release"
+		say "  6  Debug report, for bug reports (no network names or addresses)"
+		say "  7  Turn amtm updates $( [ "$AMTM_UPDATE" = on ] && printf off || printf on)"
+		say "  9  Uninstall"
+		say "  e  Exit"
+		printf '\n Choose an option: '
+		read -r opt || { say ""; return 0; }
+		say ""
+		case "$opt" in
+			1) ( status ); menu_pause ;;
+			2) ( scan ); menu_pause ;;
+			3) menu_collection ;;
+			4|5)
+				if [ "$opt" = 5 ]; then ( update force ); else ( update ); fi
+				now_ver=$(sed -n 's/^VERSION="\([0-9][0-9.]*\)".*/\1/p' "$SCRIPT" 2>/dev/null | head -1)
+				menu_pause
+				# the update replaced this script: carry on in the new one
+				[ -n "$now_ver" ] && [ "$now_ver" != "$VERSION" ] && exec sh "$SCRIPT" menu ;;
+			6) ( debug ); menu_pause ;;
+			7)
+				if [ "$AMTM_UPDATE" = on ]; then AMTM_UPDATE=off; else AMTM_UPDATE=on; fi
+				write_conf; log "amtm updates turned $AMTM_UPDATE" ;;
+			9) menu_uninstall && return 0 ;;
+			e|E|q|Q) return 0 ;;
+			'') ;;
+			*) say " $opt isn't an option."; menu_pause ;;
+		esac
+	done
+}
+
 case "$1" in
+	'')            if [ -t 0 ] && [ -t 1 ]; then menu; else usage; fi ;;
+	menu)          menu ;;
 	install)       install ;;
 	update)        update "$2"; exit $? ;;
 	check)         check_support; exit $? ;;
@@ -1331,5 +1450,7 @@ case "$1" in
 	debug)         debug ;;
 	service_event) service_event "$2" "$3" ;;
 	version)       say "$VERSION" ;;
-	*) say "Usage: $0 install | check | update [force] | uninstall [--keep-data] | status | scan | export | debug | version" ;;
+	collection)    if [ -n "$2" ]; then set_collection "$2"; else say "Collection: $(collection_text)"; fi ;;
+	amtmupdate)    amtm_update "$2"; exit $? ;;
+	*)             usage ;;
 esac

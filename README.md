@@ -98,7 +98,7 @@ If the tab doesn't show up, reload the router page with **Ctrl+F5** (Windows) or
 
 **Updating:** run `/jffs/addons/wifiinsight/wifiinsight.sh update`. It asks GitHub for the latest release, and if that's a newer version it installs it over the old one, keeping your settings, history and page slot. `update force` reinstalls the latest release. Only published releases are installed, never unreleased work. Every version is listed under [Releases](https://github.com/IfSugar/wifiinsight/releases), with an install command pinned to that version.
 
-**amtm:** WiFi Insight isn't in amtm's built-in list, but you can launch it from amtm by adding `/jffs/addons/wifiinsight/wifiinsight.sh` as a personal script, with `status` as the argument.
+**Menu and amtm:** run `/jffs/addons/wifiinsight/wifiinsight.sh` with no arguments for a menu (status, scan now, collection, update, debug report, uninstall). WiFi Insight supports amtm's script updates (`amtmupdate`), see [amtm](#amtm). Until it's in amtm's built-in list, you can open the menu from amtm by adding `/jffs/addons/wifiinsight/wifiinsight.sh` as a personal script, with no argument.
 
 ## Web UI slot
 
@@ -146,12 +146,15 @@ Cron jobs: `wifiinsight_collect` (every minute), `wifiinsight_scan` (scan interv
 ## Commands
 
 ```sh
+/jffs/addons/wifiinsight/wifiinsight.sh             # the menu (in a terminal; amtm opens this too)
 /jffs/addons/wifiinsight/wifiinsight.sh check       # can this router run it? (changes nothing)
 /jffs/addons/wifiinsight/wifiinsight.sh status      # what's running, quiet hours, sample counts, recent events
 /jffs/addons/wifiinsight/wifiinsight.sh scan        # scan now (even in quiet hours) and print each band's result
+/jffs/addons/wifiinsight/wifiinsight.sh collection paused   # on, paused or off, as in Settings
 /jffs/addons/wifiinsight/wifiinsight.sh debug       # router, firmware and driver details for issues (no network names or addresses)
 /jffs/addons/wifiinsight/wifiinsight.sh startup     # re-apply config, cron and the web page
 /jffs/addons/wifiinsight/wifiinsight.sh update      # install the latest version from GitHub
+/jffs/addons/wifiinsight/wifiinsight.sh amtmupdate  # the same, for amtm: two lines of output, details in /tmp/wifiinsight/amtmupdate.log
 /jffs/addons/wifiinsight/wifiinsight.sh version     # print the installed version
 /jffs/addons/wifiinsight/wifiinsight.sh uninstall   # remove everything
 /jffs/addons/wifiinsight/wifiinsight.sh uninstall --keep-data   # remove, keep history
@@ -168,6 +171,7 @@ RETAIN_DAYS=30             # samples and scans; events are kept for a year
 EXTRA_OWN_SSIDS=""         # extra SSIDs to treat as yours, separated by |
 COLLECTION=on              # on, paused (no scheduled scans) or off (no samples or scans)
 QUIET=""                   # quiet hours, no scheduled scans (below); empty = none
+AMTM_UPDATE=on             # on: amtm may update WiFi Insight; off: only 'update' does
 DATA_DIR="/opt/var/lib/wifiinsight"
 SQLITE="/opt/bin/sqlite3"
 ```
@@ -175,6 +179,26 @@ SQLITE="/opt/bin/sqlite3"
 `QUIET` is easiest to set on the Settings page. In the file it's 84 hex digits, one bit per half hour of the week, starting Monday 00:00 in the router's local time: 12 digits a day, each digit covering 2 hours (8 is its first half hour, 4 the second, 2 the third, 1 the fourth). For example, `000000000fff` repeated seven times is 18:00–24:00 every day. A value that isn't exactly 84 hex digits is ignored, and `status` says so.
 
 Storage is about 21 MB for 30 days of 30-second samples on two radios.
+
+## amtm
+
+WiFi Insight follows amtm's conventions for third-party scripts:
+
+- **Menu:** with no arguments, in a terminal, the script shows its menu. Outside a terminal (cron, other scripts) it prints the usage and exits.
+- **Updates:** `wifiinsight.sh amtmupdate check` exits 0 when amtm may update it, and 1 when you've turned that off (menu option 7, or `AMTM_UPDATE=off` in the config). `wifiinsight.sh amtmupdate` installs the latest release, prints two lines and exits 0, or 1 if the update failed, leaving the installed version in place.
+- **Version:** amtm reads it from the `VERSION="x.y.z"` line. The installed script is byte for byte the release's, so amtm's MD5 check matches.
+
+For amtm's maintainer, the details of a module:
+
+| | |
+|---|---|
+| Script | `/jffs/addons/wifiinsight/wifiinsight.sh` |
+| Version line | `^VERSION=` |
+| Remote script | `https://github.com/IfSugar/wifiinsight/releases/latest/download/wifiinsight.sh` (the latest release, never unreleased work) |
+| Check string | `IfSugar/wifiinsight` |
+| Install | download the remote script to `/tmp/wifiinsight.sh`, then `sh /tmp/wifiinsight.sh install` |
+| Open | `/jffs/addons/wifiinsight/wifiinsight.sh` |
+| Entware | required (`sqlite3`) |
 
 ## What it changes on your router
 
@@ -195,7 +219,7 @@ Please report security problems privately: see the [security policy](.github/SEC
 
 ## Releasing
 
-Changes go in through pull requests. The [Checks workflow](.github/workflows/checks.yml) runs on every pull request and push: the script and page versions match, the script parses in BusyBox `ash` (the router's shell), every layout of the driver's airtime statistics parses ([`.github/tests/chanim-formats.sh`](.github/tests/chanim-formats.sh)), a full day of history exports completely on a shell set up like Merlin's, with only the BusyBox commands Merlin includes ([`.github/tests/large-history.sh`](.github/tests/large-history.sh)), the page and the script read quiet hours the same way and each collection mode sets the right cron jobs ([`.github/tests/quiet-hours.sh`](.github/tests/quiet-hours.sh)), scans wait for slow or busy radios ([`.github/tests/scan-wait.sh`](.github/tests/scan-wait.sh)), every band and width is read correctly from the driver's channel codes, and tri-band routers pass the check ([`.github/tests/radio-bands.sh`](.github/tests/radio-bands.sh)), and the page's JavaScript is valid. Merging never releases anything.
+Changes go in through pull requests. The [Checks workflow](.github/workflows/checks.yml) runs on every pull request and push: the script and page versions match, the script parses in BusyBox `ash` (the router's shell), every layout of the driver's airtime statistics parses ([`.github/tests/chanim-formats.sh`](.github/tests/chanim-formats.sh)), a full day of history exports completely on a shell set up like Merlin's, with only the BusyBox commands Merlin includes ([`.github/tests/large-history.sh`](.github/tests/large-history.sh)), the page and the script read quiet hours the same way and each collection mode sets the right cron jobs ([`.github/tests/quiet-hours.sh`](.github/tests/quiet-hours.sh)), scans wait for slow or busy radios ([`.github/tests/scan-wait.sh`](.github/tests/scan-wait.sh)), `amtmupdate`, the menu and amtm's version check work ([`.github/tests/amtm.sh`](.github/tests/amtm.sh)), every band and width is read correctly from the driver's channel codes, and tri-band routers pass the check ([`.github/tests/radio-bands.sh`](.github/tests/radio-bands.sh)), and the page's JavaScript is valid. Merging never releases anything.
 
 To release:
 

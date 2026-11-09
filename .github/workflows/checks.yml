@@ -59,6 +59,9 @@ jobs:
       - name: Check bands and widths are read correctly (2.4, 5 and 6 GHz)
         run: bash .github/tests/radio-bands.sh
 
+      - name: Check amtm support (amtmupdate, the menu, amtm's version check)
+        run: bash .github/tests/amtm.sh
+
       - name: Check the page's JavaScript
         run: |
           python3 - <<'EOF'

@@ -2,6 +2,13 @@
 
 What changed in each release of WiFi Insight. The release workflow copies a version's section into its GitHub release notes, so write for people running the addon.
 
+## 1.2.0
+
+- **A menu for the terminal, ready for amtm.** Run `/jffs/addons/wifiinsight/wifiinsight.sh` with no arguments for a menu: status, scan now, collection (on, scans paused or off), update, reinstall, debug report, amtm updates on or off, and uninstall (it asks first). amtm opens the same menu.
+- **amtm can update WiFi Insight** (`amtmupdate`), along with your other scripts, from its update option. It installs the latest release, prints two lines and logs the details to `/tmp/wifiinsight/amtmupdate.log`. To keep amtm from updating it, choose *Turn amtm updates off* in the menu (or set `AMTM_UPDATE=off` in the config); `update` still works.
+- New command: `wifiinsight.sh collection on|paused|off`, the same as Settings → Collection on the page.
+- Updating no longer runs an extra neighbour scan when you already have history, so `update` finishes sooner and doesn't make Wi-Fi hiccup.
+
 ## 1.1.1
 
 - **Fixed: routers with a 6 GHz radio were refused** with "This router has two 5 GHz radios" (GT-AXE11000, RT-BE92U, RT-BE96U, GT-BE19000AI). WiFi Insight read the 6 GHz band code as 5 GHz. It now reads all three bands correctly, and 320 MHz channels on 6 GHz too. Thanks to BobWadd for the RT-BE96U report!
