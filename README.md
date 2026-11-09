@@ -54,7 +54,7 @@ Tested on an RT-AX86U with 3004.388.12_2. Every model current Merlin supports us
 |---|---|---|
 | RT-AX86U | 2.4 + 5 GHz | Tested |
 | RT-AX88U | 2.4 + 5 GHz | Installs fine (user report) |
-| GT-AX6000, RT-BE88U | 2.4 + 5 GHz | Install and sample (user reports); 5 GHz scans fixed in 1.1.0, awaiting confirmation |
+| GT-AX6000, RT-BE88U | 2.4 + 5 GHz | Charts and 2.4 GHz scans work (user reports); 5 GHz scans fixed in 1.1.0, awaiting confirmation |
 | RT-AX58U (V1), RT-AX68U, RT-AX86U Pro, RT-AX88U Pro, RT-BE86U, RT-BE58 Go | 2.4 + 5 GHz | Should work |
 | GT-AXE11000, RT-BE92U, RT-BE96U, GT-BE19000AI | 2.4 + 5 + 6 GHz | Not yet: the check takes the 6 GHz radio for a second 5 GHz one (RT-BE96U report) |
 | GT-AX11000, GT-AX11000 Pro, ZenWiFi Pro XT12 | 2.4 + 5 + 5 GHz | Not yet: two 5 GHz radios |
