@@ -680,10 +680,11 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 				{ print }' > "$msql"
 			mc=$(grep -c '^INSERT' "$msql")
 			if [ "$mc" -gt 0 ] 2>/dev/null && sql < "$msql"; then detail="$detail, $mc channels measured"; else mc=0; fi
-			rm -f "$msql" "$m0" "$m1" "$all"
+			rm -f "$msql" "$m1" "$all"
 			# the page says "starts with the next scan" until a scan has run with this version
 			[ "$(cat "$DATA_DIR/measured_$band" 2>/dev/null)" = "$mc" ] || echo "$mc" > "$DATA_DIR/measured_$band"
 		fi
+		rm -f "$m0"
 		bands="$bands${bands:+,}\"$band\":\"$result\""
 		notes="$notes${notes:+,}\"$band\":\"$(js "$detail")\""
 		log "scan $band ($ifc): $result${detail:+, $detail}"
@@ -846,7 +847,7 @@ export_live() {
 	while IFS= read -r o; do ownj="$ownj${ownj:+,}\"$(js "$o")\""; done < "$(own_ssids_file)"
 	dbb=$(ls -l "$DB" 2>/dev/null | awk '{print $5}')
 	mj=""   # channels measured in each band's last scan; none yet: no scan since this version
-	for f in "$DATA_DIR"/measured_*; do [ -f "$f" ] && mj="$mj${mj:+,}\"${f##*/measured_}\":$(jnum "$(cat "$f")")"; done
+	for b in 2g 5g 6g; do [ -f "$DATA_DIR/measured_$b" ] && mj="$mj${mj:+,}\"$b\":$(jnum "$(cat "$DATA_DIR/measured_$b")")"; done
 	{
 		printf '{"version":"%s","generated":%s,"sample_interval":%s,"scan_interval":%s,"retain_days":%s,' \
 			"$VERSION" "$t" "$SAMPLE_INTERVAL" "$SCAN_INTERVAL" "$RETAIN_DAYS"
@@ -1440,18 +1441,20 @@ build_text() {   # "" for a release; "development version: main @ 1a2b3c4, insta
 }
 update_dev() {   # [branch]
 	br=${1:-main}
-	case "$br" in ''|[-./]*|*..*|*//*|*[!A-Za-z0-9._/-]*) die "'$br' isn't a branch name; nothing was changed." ;; esac
+	case "$br" in ''|[-./]*|*..*|*//*|*/|*[!A-Za-z0-9._/-]*|refs/*|pull/*) die "'$br' isn't a branch name; nothing was changed." ;; esac
 	dl="$TMPD/update.$$"; rm -rf "$dl"; mkdir -p "$dl" || die "Couldn't create $dl"
 	say "Looking up the newest commit on $br..."
-	sha=$(curl -fsL --retry 2 --connect-timeout 15 -H 'Accept: application/vnd.github.sha' \
-		"https://api.github.com/repos/$REPO/commits/$br" 2>/dev/null | head -1 | cut -c1-40)
-	case "$sha" in
-		*[!0-9a-f]*|'') sha=""; ref=$br
-			say "  (GitHub didn't say which commit, so the files may be up to 5 minutes old)" ;;
-		*) ref=$sha ;;
-	esac
+	# Only a branch of this repository, by its commit. GitHub also serves commits and pull requests
+	# from other people's forks under this repository's addresses, and those aren't reviewed here.
+	sha=$(curl -fsL --retry 2 --connect-timeout 15 -H 'Accept: application/vnd.github+json' \
+		"https://api.github.com/repos/$REPO/branches/$br" 2>/dev/null \
+		| grep -o '"sha": *"[0-9a-f]\{40\}"' | head -1 | grep -o '[0-9a-f]\{40\}')
+	if [ -z "$sha" ]; then
+		rm -rf "$dl"; die "GitHub has no branch '$br' in $REPO, or couldn't be reached; nothing was changed."
+	fi
+	ref=$sha
 	if ! fetch "$RAW_BASE/$ref/$NAME.sh" "$dl/$NAME.sh" quiet; then
-		rm -rf "$dl"; die "Couldn't download $NAME.sh from the branch '$br' (no such branch, or no connection to GitHub); nothing was changed."
+		rm -rf "$dl"; die "Couldn't download $NAME.sh from the branch '$br' (no connection to GitHub?); nothing was changed."
 	fi
 	new=$(sed -n 's/^VERSION="\([0-9][0-9.]*\)".*/\1/p' "$dl/$NAME.sh" | head -1)
 	if [ -z "$new" ] || ! sh -n "$dl/$NAME.sh" 2>/dev/null; then
@@ -1460,7 +1463,7 @@ update_dev() {   # [branch]
 	if ! fetch "$RAW_BASE/$ref/$NAME.asp" "$dl/$NAME.asp" quiet || ! grep -q "wifiinsight-version: $new " "$dl/$NAME.asp"; then
 		rm -rf "$dl"; die "Couldn't download the matching web page from '$br'; nothing was changed."
 	fi
-	short=$(printf '%s' "${sha:-unknown}" | cut -c1-7)
+	short=$(printf '%s' "$sha" | cut -c1-7)
 	say "Installing the development version of $br ($new, commit $short). Settings and history are kept;"
 	say "'$SCRIPT update' goes back to the latest release."
 	b="dev $br $short $(date '+%Y-%m-%d %H:%M')"
