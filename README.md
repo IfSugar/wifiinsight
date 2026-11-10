@@ -30,7 +30,7 @@ Time ranges: 10 minutes, 1 hour, 12 hours, 1 day, 7 days and 30 days. Short rang
 </tr>
 <tr>
 <td><a href="docs/survey.webp"><img src="docs/survey.webp" alt="Site Survey: signal map of neighbouring networks by channel, and a sortable network list"></a><br><b>Site Survey</b>: who's around you and on which channels, with your own networks and mesh node marked</td>
-<td><a href="docs/channels.webp"><img src="docs/channels.webp" alt="Channel Statistics: networks and estimated load per channel, plus the quietest channel for each width"></a><br><b>Channel Statistics</b>: load per channel and the quietest channel for each width</td>
+<td><a href="docs/channels.webp"><img src="docs/channels.webp" alt="Channel Statistics: networks and load per channel, plus the quietest channel for each width"></a><br><b>Channel Statistics</b>: load per channel and the quietest channel for each width</td>
 </tr>
 <tr>
 <td><a href="docs/troubleshooting.webp"><img src="docs/troubleshooting.webp" alt="Troubleshooting: airtime breakdown, glitches, transmit success and noise floor"></a><br><b>Troubleshooting</b>: airtime breakdown, glitches, transmit quality and noise floor</td>
@@ -92,7 +92,7 @@ The installer:
 3. creates the database in `/opt/var/lib/wifiinsight/` on the USB drive
 4. downloads Chart.js once and checks it against the official release's SHA-256, so the page works without internet
 5. hooks itself into `services-start` and `service-event`
-6. mounts the page and runs a first sample and scan
+6. mounts the page and runs a first sample and scan (an update keeps your history and skips the scan)
 
 Open **Wireless → WiFi Insight** (the tab after *Professional*). The interference chart fills in over the first few minutes, and the heatmap gains a row every scan.
 
@@ -102,7 +102,7 @@ If the tab doesn't show up, reload the router page with **Ctrl+F5** (Windows) or
 
 **Trying unreleased changes:** `wifiinsight.sh update dev` installs the newest code on `main`, and `update dev <branch>` the newest code on another branch, for example one from a pull request you'd like to test (menu option 8 does the same). Settings, history and the page slot are kept. Development code can be unfinished, so use it to test a fix or help with a report. `status`, `debug` and the page's footer then say it's a development version, with the branch and commit. Plain `update` (and amtm) stays on releases: it takes you back to the latest release, unless the development version has a higher version number, then it waits for that release (`update force` goes back right away).
 
-**Menu and amtm:** run `/jffs/addons/wifiinsight/wifiinsight.sh` with no arguments for a menu (status, scan now, collection, update, debug report, uninstall). WiFi Insight supports amtm's script updates (`amtmupdate`), see [amtm](#amtm). Until it's in amtm's built-in list, you can open the menu from amtm by adding `/jffs/addons/wifiinsight/wifiinsight.sh` as a personal script, with no argument.
+**Menu and amtm:** run `/jffs/addons/wifiinsight/wifiinsight.sh` with no arguments for a menu (status, scan now, collection, update, development version, debug report, amtm updates, uninstall). WiFi Insight supports amtm's script updates (`amtmupdate`), see [amtm](#amtm). Until it's in amtm's built-in list, you can open the menu from amtm by adding `/jffs/addons/wifiinsight/wifiinsight.sh` as a personal script, with no argument.
 
 ## Web UI slot
 
@@ -119,7 +119,7 @@ It only ever removes a page whose `.title` file says `WiFi Insight`, so other ad
 
   Reading these counters doesn't disturb Wi-Fi.
 - **Spectrum, Channel Statistics and Site Survey** come from neighbour scans (`wl scan`), every 30 minutes by default, except during the quiet hours you set. A radio measures its own channel continuously; the other channels are covered by the scan, two ways:
-  - **Measured** (where the driver reports it, e.g. the RT-AX86U on 3004.388): while scanning, the radio records each channel's airtime used by other networks (`obss`), non-Wi-Fi energy (`nocat`) and energy it couldn't decode (`nopkt`), plus glitches and the noise floor. WiFi Insight reads them with `wl chanim_stats all` right after the scan. Each figure comes from a short listen on that channel, so single readings are noisy; the longer ranges average them.
+  - **Measured** (where the driver reports it: the RT-AX86U on 3004.388, and the GT-AX6000 on 3006.102 reports them too): while scanning, the radio records each channel's airtime used by other networks (`obss`), non-Wi-Fi energy (`nocat`) and energy it couldn't decode (`nopkt`), plus glitches and the noise floor. WiFi Insight reads them with `wl chanim_stats all` right after the scan. Each figure comes from a short listen on that channel, so single readings are noisy; the longer ranges average them.
   - **Estimated** (always available, and the fallback): built from the networks heard on each channel.
 
   For the estimate, each network contributes according to how much it overlaps the channel, how strong its signal is, and the load it advertises (QBSS). Networks with your SSIDs, including your AiMesh node, are listed as yours and kept out of the estimate. Tick **Include my mesh** to add them back. Each scan takes the radio off-channel briefly, so expect a hiccup of about a second. A scan takes a few seconds on 2.4 GHz and longer on 5 and 6 GHz (tens of seconds on some 3006.102 drivers): WiFi Insight waits for the driver to finish, and if a band still fails, Scan now and the syslog say why.
@@ -145,8 +145,9 @@ If a scan's one-second hiccup gets in the way at certain times (gaming, calls, s
 
 | Path | Contents |
 |---|---|
-| `/jffs/addons/wifiinsight/` | script, page, config, local Chart.js |
+| `/jffs/addons/wifiinsight/` | script, page, config, local Chart.js, and `build` while a development version is installed |
 | `/opt/var/lib/wifiinsight/wifiinsight.db` | history (SQLite): samples, scans, measured channel airtime, networks, events |
+| `/opt/var/lib/wifiinsight/measured_2g`, `measured_5g`… | how many channels the radio measured in each band's last scan |
 | `/tmp/var/wwwext/wifiinsight/` | JSON files the page reads (`live.htm`, `scans.htm`, `week.htm`, `month.htm`, `scanstate.htm`), rebuilt from the database |
 
 Cron jobs: `wifiinsight_collect` (every minute), `wifiinsight_scan` (scan interval) and `wifiinsight_prune` (04:23 daily, before a 05:00 scheduled reboot). A scheduled scan that starts in quiet hours does nothing. With *Scans paused* there's no scan job, and with collection *Off* there are no jobs at all.
@@ -225,18 +226,6 @@ To remove everything: `wifiinsight.sh uninstall`. If the web UI ever looks wrong
 Found a bug, have an idea, or run WiFi Insight on another router? [Open an issue](https://github.com/IfSugar/wifiinsight/issues/new/choose). The forms ask for the output of `check`, `status` and `debug`, which never include network names, MAC addresses or IP addresses. The **Router report** form works without installing anything, and it's how support for more models gets added.
 
 Please report security problems privately: see the [security policy](.github/SECURITY.md).
-
-## Releasing
-
-Changes go in through pull requests. The [Checks workflow](.github/workflows/checks.yml) runs on every pull request and push: the script and page versions match, the script parses in BusyBox `ash` (the router's shell), every layout of the driver's airtime statistics parses ([`.github/tests/chanim-formats.sh`](.github/tests/chanim-formats.sh)), a full day of history exports completely on a shell set up like Merlin's, with only the BusyBox commands Merlin includes ([`.github/tests/large-history.sh`](.github/tests/large-history.sh)), the page and the script read quiet hours the same way and each collection mode sets the right cron jobs ([`.github/tests/quiet-hours.sh`](.github/tests/quiet-hours.sh)), scans wait for slow or busy radios ([`.github/tests/scan-wait.sh`](.github/tests/scan-wait.sh)), the radio's per-channel measurements are read, stored and exported ([`.github/tests/measured.sh`](.github/tests/measured.sh)), `amtmupdate`, the menu and amtm's version check work ([`.github/tests/amtm.sh`](.github/tests/amtm.sh)), `update dev` installs a branch's newest code and plain `update` stays on releases ([`.github/tests/dev-update.sh`](.github/tests/dev-update.sh)), every band and width is read correctly from the driver's channel codes, and tri-band routers pass the check ([`.github/tests/radio-bands.sh`](.github/tests/radio-bands.sh)), and the page's JavaScript is valid. Merging never releases anything.
-
-To release:
-
-1. In the pull request, bump `VERSION` in `wifiinsight.sh` and the matching `wifiinsight-version:` line in `wifiinsight.asp`, and add a `## x.y.z` section to [CHANGELOG.md](CHANGELOG.md) saying what changed, written for people running the addon.
-2. Merge it.
-3. Tag `main` with the version, either with `git tag x.y.z origin/main && git push origin x.y.z` (the new version in place of `x.y.z`), or on GitHub under **Releases → Draft a new release**: type the version as a new tag, target `main`, and publish (leave the notes empty).
-
-The [Release workflow](.github/workflows/release.yml) then checks that the tag matches both files and is on `main`, runs the checks again, and publishes the release with both files attached and that version's changelog section as notes. `update` on routers and the install command only ever install the latest release (`update dev` is the explicit way to get unreleased code). Editing the changelog later refreshes the notes of existing releases.
 
 ## License
 
