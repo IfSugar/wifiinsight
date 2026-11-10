@@ -59,6 +59,9 @@ jobs:
       - name: Check the radio's per-channel measurements are stored and exported
         run: bash .github/tests/measured.sh
 
+      - name: Check scans the driver stops early are finished, and old per-channel figures aren't stored
+        run: bash .github/tests/short-scans.sh
+
       - name: Check bands and widths are read correctly (2.4, 5 and 6 GHz)
         run: bash .github/tests/radio-bands.sh
 

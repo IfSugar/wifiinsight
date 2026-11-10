@@ -135,9 +135,9 @@ case "\$3" in
 	isup) echo 1 ;;
 	chanspec) [ "\$ifc" = eth6 ] && echo "1 (0x1001)" || echo "100l (0xd866)" ;;
 	channels) [ "\$ifc" = eth6 ] && echo "1 2 3 4 5 6 7 8 9 10 11 12 13" || echo "36 40 44 48 52 56 60 64 100 104 108 112 116 120 124 128 132 136 140" ;;
-	scan) : ;;
+	scan) touch "\$F/scanned_\$ifc"; if [ -f "\$F/chanim_\$ifc.next" ]; then mv "\$F/chanim_\$ifc.next" "\$F/chanim_\$ifc"; fi ;;   # a scan brings new figures
 	scanresults) printf 'SSID: "Neighbour"\nMode: Managed\tRSSI: -60 dBm\tChannel: %s\nBSSID: 02:00:00:00:00:01\tCapability: ESS\n' "\$( [ "\$ifc" = eth6 ] && echo 6 || echo 36)" ;;
-	chanim_stats) [ "\$4" = all ] && [ -f "\$F/chanim_\$ifc" ] && cat "\$F/chanim_\$ifc" ;;
+	chanim_stats) [ "\$4" = all ] && [ -f "\$F/scanned_\$ifc" ] && [ -f "\$F/chanim_\$ifc" ] && cat "\$F/chanim_\$ifc" ;;   # nothing until a scan, as after a reboot
 	country) [ -f "\$F/country" ] && cat "\$F/country" || { echo "wl: Unsupported" >&2; exit 1; } ;;
 	*) exit 1 ;;
 esac
@@ -179,8 +179,9 @@ row = {r[1]: r for r in d['scans']['2g']}
 assert row[3][7:13] == [0.0, 16.0, 16.0, -67.0, 3700.0, 1], row[3]
 assert len(row[13]) == 7, row[13]                              # channel 13 wasn't measured
 EOF
-# a router whose driver doesn't list channels: the scan works as before
+# a router whose driver doesn't list channels: the scan works as before (2.4 GHz measures new figures)
 rm -f "$F/chanim_eth7"; echo 1800001800 > "$F/clock"
+printf '%s' "$V3_2G" | sed 's/crsglitch cnt: \([0-9]*\)/crsglitch cnt: 1\1/' > "$F/chanim_eth6.next"
 out=$(run scan 2>&1) || true
 expect "no per-channel list: the scan reports no measurements" "ok, 1 network in 3 s" "$(printf '%s\n' "$out" | sed -n 's/^  5g (eth7): //p')"
 expect "no per-channel list: live.htm says 0 for that band" '{"2g": 3, "5g": 0}' "$(live_measured)"

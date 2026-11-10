@@ -420,6 +420,8 @@ parse_scan() {   # ts band "channels" ownfile
 			}
 		}
 		if (rssi == "") rssi = -100
+		if (bssid != "" && (bssid in seenb)) { have = 0; return }   # heard again by a follow-up scan
+		seenb[bssid] = 1
 		n++
 		S[n] = ssid; B[n] = bssid; R[n] = rssi + 0; C[n] = ctl + 0; M[n] = center + 0
 		W[n] = width + 0; U[n] = util; O[n] = (ssid in own) ? 1 : 0
@@ -515,8 +517,8 @@ parse_scan() {   # ts band "channels" ownfile
 # and a table with a chanspec/chspec header and a row per channel is read too (newer drivers print
 # chanim_stats as a table). Prints SQL only for two or more channels: one row is just the radio's
 # own channel, not a scan. Channels on another band are skipped.
-parse_chanim_all() {   # ts band
-	awk -v ts="$1" -v band="$2" '
+parse_chanim_all() {   # ts band [raw]   raw: "channel<TAB>its figures as printed", to compare readings
+	awk -v ts="$1" -v band="$2" -v raw="$3" '
 	function hexval(s,   i, c, v) {
 		s = tolower(s); sub(/^0x/, "", s); v = 0
 		if (s == "") return -1
@@ -544,20 +546,23 @@ parse_chanim_all() {   # ts band
 	function keep(c, o, n, p, g, b, z) {
 		if (c < 0 || (c in seen) || o == "") return
 		seen[c] = 1; k++
+		if (raw != "") { out[k] = c "\t" blk; return }
 		out[k] = sprintf("INSERT OR REPLACE INTO chanim VALUES(%d,\047%s\047,%d,%s,%s,%s,%s,%s,%s);", ts, band, c, pct(o), pct(n), pct(p), num(g), num(b), num(z))
 	}
 	function flush() { if (cs != "") keep(chan(cs), o, n, p, g, b, z); cs = "" }
 	/during last scan/ { sec = 1; next }
 	sec && /^[^ \t]/ && !/chanspec:|cca_/ { flush(); sec = 0 }   # the next heading ends it (lines may come unindented)
-	sec && /chanspec:/ { flush(); cs = val("chanspec:"); g = val("crsglitch cnt:"); b = val("bad plcp:"); z = val("noise:"); o = n = p = ""; next }
-	sec && /cca_/ { o = val("cca_obss:"); n = val("cca_nocat:"); p = val("cca_nopkt:"); next }
+	sec && /chanspec:/ { flush(); blk = $0; cs = val("chanspec:"); g = val("crsglitch cnt:"); b = val("bad plcp:"); z = val("noise:"); o = n = p = ""; next }
+	sec && /cca_/ { blk = blk " " $0; o = val("cca_obss:"); n = val("cca_nocat:"); p = val("cca_nopkt:"); next }
 	!sec && ($1 == "chanspec" || $1 == "chspec") { delete col; for (i = 1; i <= NF; i++) col[$i] = i; tbl = ("obss" in col) && ("nocat" in col); ncol = NF; next }
 	!sec && tbl && NF >= ncol - 1 && $1 !~ /^(version|state)/ {
+		blk = $0
 		keep(chan($1), $(col["obss"]), $(col["nocat"]), ("nopkt" in col) ? $(col["nopkt"]) : "", ("glitch" in col) ? $(col["glitch"]) : "",
 			("badplcp" in col) ? $(col["badplcp"]) : "", ("knoise" in col) ? $(col["knoise"]) : "")
 	}
 	END {
 		flush()
+		if (raw != "") { for (i = 1; i <= k; i++) print out[i]; exit 0 }
 		if (k < 2) exit 0
 		print "BEGIN;"; for (i = 1; i <= k; i++) print out[i]; print "COMMIT;"
 	}'
@@ -573,6 +578,51 @@ scan_state() {   # state [bands-json] [message] [notes-json]
 scan_next_seq() {
 	mkdir -p "$TMPD"
 	SCAN_SEQ=$(( $(cat "$TMPD/scan_seq" 2>/dev/null || echo 0) + 1 )); echo "$SCAN_SEQ" > "$TMPD/scan_seq"
+}
+
+# The driver keeps each channel's last figures between scans and overwrites only the channels a scan
+# reaches, and on a busy channel it can stop a scan early (an RT-AX86U on 3004.388 reached 36-104 of
+# 36-140 in the daytime). So compare the radio's list before and after: a channel whose figures changed
+# was measured, and as scans go through the channels in order, so was every channel before it.
+chanim_reached() {   # "channels in scan order" before-file after-file band -> "reached|not reached"
+	parse_chanim_all 0 "$4" raw < "$2" > "$2.raw"
+	parse_chanim_all 0 "$4" raw < "$3" > "$3.raw"
+	awk -v order="$1" -v bf="$2.raw" -v af="$3.raw" 'BEGIN {
+		while ((getline l < bf) > 0) { i = index(l, "\t"); B[substr(l, 1, i - 1)] = substr(l, i + 1) }
+		while ((getline l < af) > 0) { i = index(l, "\t"); A[substr(l, 1, i - 1)] = substr(l, i + 1) }
+		k = split(order, O, " "); last = 0
+		for (j = 1; j <= k; j++) if ((O[j] in A) && (!(O[j] in B) || A[O[j]] != B[O[j]])) last = j
+		v = ""; r = ""
+		for (j = 1; j <= k; j++) {
+			if (j > last) r = r (r == "" ? "" : " ") O[j]
+			else if (O[j] in A) v = v (v == "" ? "" : " ") O[j]
+		}
+		print v "|" r
+	}'
+	rm -f "$2.raw" "$3.raw"
+}
+# Finish a scan the driver stopped early: scan the channels it didn't reach. Appends what it hears to
+# the scan's results and leaves the radio's list in after-file.
+scan_rest() {   # ifc band "channels" before-file after-file results-file
+	t0=$(now)
+	until wl -i "$1" scan -c "$(echo $3 | tr ' ' ',')" > /dev/null 2>&1; do
+		[ $(( $(now) - t0 )) -ge 10 ] && return 1
+		sleep 2
+	done
+	t1=$(now); sleep 2
+	while :; do   # done when the last channel has new figures (passive DFS channels take a moment each)
+		wl -i "$1" chanim_stats all > "$5" 2>/dev/null
+		p=$(chanim_reached "$3" "$4" "$5" "$2")
+		[ -z "${p#*|}" ] && break
+		[ $(( $(now) - t1 )) -ge 12 ] && break
+		sleep 1
+	done
+	for i in 1 2 3; do
+		if wl -i "$1" scanresults > "$TMPD/scan_rest.txt" 2>/dev/null; then cat "$TMPD/scan_rest.txt" >> "$6"; break; fi
+		sleep 1
+	done
+	rm -f "$TMPD/scan_rest.txt"
+	return 0
 }
 
 scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in quiet hours
@@ -597,17 +647,40 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 		ifc=$(nvram get wl${r}_ifname)
 		hex=$(wl -i "$ifc" chanspec 2>/dev/null | sed -n 's/.*(\(0x[0-9a-fA-F]*\)).*/\1/p')
 		[ -n "$hex" ] || continue
-		band=$(band_of_hex "$hex")
+		band=$(band_of_hex "$hex"); chs=$(radio_channels "$ifc" "$band")
+		m0="$TMPD/chanim_$band.before"; m1="$TMPD/chanim_$band.after"; all="$TMPD/scan_$band.all"
+		wl -i "$ifc" chanim_stats all > "$m0" 2>/dev/null   # the figures the radio still holds from earlier scans
+		ts0=$(now)
 		scan_radio "$ifc" "$band"
 		if [ "$result" = ok ]; then
-			sts=$(now)
-			parse_scan "$sts" "$band" "$(radio_channels "$ifc" "$band")" "$ownf" < "$res" | sql
-			# what the radio measured on each channel during this scan, where the driver reports it
+			sts=$(now); cp "$res" "$all"
+			wl -i "$ifc" chanim_stats all > "$m1" 2>/dev/null
+			p=$(chanim_reached "$chs" "$m0" "$m1" "$band"); got=${p%%|*}; rest=${p#*|}
+			# stopped early: scan the channels it didn't reach (twice at most), so every scan covers them all.
+			# If that reached none of them, don't try the same channels again until a reboot.
+			more=0; stop=${got##* }; skip="$TMPD/rest_$band.skip"
+			[ -n "$rest" ] && [ "$(cat "$skip" 2>/dev/null)" = "$rest" ] && rest=""
+			while [ -n "$got" ] && [ -n "$rest" ] && [ $more -lt 2 ]; do
+				cp "$m1" "$m0"
+				scan_rest "$ifc" "$band" "$rest" "$m0" "$m1" "$all" || break
+				p=$(chanim_reached "$rest" "$m0" "$m1" "$band")
+				if [ -z "${p%%|*}" ]; then [ $more -eq 0 ] && echo "$rest" > "$skip"; break; fi
+				more=$((more + 1)); got="$got ${p%%|*}"; rest=${p#*|}
+			done
+			if [ $more -gt 0 ]; then
+				nn=$(grep '^BSSID' "$all" | awk '{ print $2 }' | sort -u | wc -l | tr -d ' ')
+				detail="$nn network$( [ "$nn" = 1 ] || printf s) in $(( $(now) - ts0 )) s, stopped at $stop and finished with $( [ $more = 1 ] && echo 'a second scan' || echo "$more more scans")"
+			fi
+			parse_scan "$sts" "$band" "$chs" "$ownf" < "$all" | sql
+			# what the radio measured on each channel this scan reached, where the driver reports it
 			msql="$TMPD/chanim_$band.sql"
-			wl -i "$ifc" chanim_stats all 2>/dev/null | parse_chanim_all "$sts" "$band" > "$msql"
+			parse_chanim_all "$sts" "$band" < "$m1" | awk -v got="$got" '
+				BEGIN { n = split(got, G, " "); for (i = 1; i <= n; i++) K[G[i]] = 1 }
+				/^INSERT/ { c = $0; sub(/^[^,]*,[^,]*,/, "", c); if (!((c + 0) in K)) next }
+				{ print }' > "$msql"
 			mc=$(grep -c '^INSERT' "$msql")
 			if [ "$mc" -gt 0 ] 2>/dev/null && sql < "$msql"; then detail="$detail, $mc channels measured"; else mc=0; fi
-			rm -f "$msql"
+			rm -f "$msql" "$m0" "$m1" "$all"
 			# the page says "starts with the next scan" until a scan has run with this version
 			[ "$(cat "$DATA_DIR/measured_$band" 2>/dev/null)" = "$mc" ] || echo "$mc" > "$DATA_DIR/measured_$band"
 		fi
