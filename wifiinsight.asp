@@ -946,6 +946,9 @@ function renderBest(L, ch, r) {
 			return { b: b, s: Math.round(s * 10) / 10, pk: pk, dfs: b.some(isDfs), wx: b.some(isWx) };
 		}).sort(function (a, b) { return a.s - b.s || a.pk - b.pk || (a.dfs - b.dfs); });
 		var best = scored[0], nonDfs = scored.filter(function (x) { return !x.dfs; })[0];
+		/* Weather-radar channels need a much longer radar check (10 minutes in Europe): when a block
+		   without one is about as quiet (within half a percentage point), suggest that instead. */
+		if (best.wx) best = scored.filter(function (x) { return !x.wx && x.s <= best.s + 0.5; })[0] || best;
 		var curBlk = null;
 		if (r && r.width === w) { var sp = spanOf(r.center, r.width); curBlk = scored.filter(function (x) { return x.b[0] === sp[0]; })[0] || null; }
 		rows.push({ w: w, best: best, nonDfs: nonDfs, cur: curBlk });
