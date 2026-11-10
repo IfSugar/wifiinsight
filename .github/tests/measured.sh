@@ -87,6 +87,24 @@ expect "one row (the radio's own channel, not a scan): nothing" "" \
 expect "an error from wl: nothing" "" "$(parse 1800000000 5g "wl: Unsupported")"
 expect "values are clamped to 0-100%" "1800000000,'5g',36,100,0,1,0,0,-90" \
 	"$(parse 1800000000 5g "$(printf 'Stats during last scan:\n chanspec: 0xd024 crsglitch cnt: 0 bad plcp: 0 noise: -90\n\t cca_obss:250 cca_nocat: 0 cca_nopkt: 1\n chanspec: 0xd028 crsglitch cnt: 0 bad plcp: 0 noise: -90\n\t cca_obss:1 cca_nocat: 0 cca_nopkt: 1\n')" | rows | head -1)"
+# GT-AX6000 (3006.102, "version: 4") after single-channel scans of 36, 100 and 149, as posted in the
+# forum thread: the same blocks, but with no indentation. A heading after the blocks still ends them.
+V4_GTAX6000='version: 4
+CHAN Interference Measurement:
+Stats during last scan:
+chanspec: 0xd024 crsglitch cnt: 0 bad plcp: 0 noise: -97
+cca_txdur: 2 cca_inbss: 0 cca_obss:1 cca_nocat: 0 cca_nopkt: 0
+chanspec: 0xd064 crsglitch cnt: 6 bad plcp: 34 noise: -91
+cca_txdur: 1 cca_inbss: 0 cca_obss:0 cca_nocat: 2 cca_nopkt: 1
+chanspec: 0xd095 crsglitch cnt: 0 bad plcp: 0 noise: -97
+cca_txdur: 2 cca_inbss: 0 cca_obss:2 cca_nocat: 3 cca_nopkt: 2
+'
+want_v4="1800000000,'5g',36,1,0,0,0,0,-97 1800000000,'5g',100,0,2,1,6,34,-91 1800000000,'5g',149,2,3,2,0,0,-97"
+expect "3006.102 layout (GT-AX6000), unindented" "$want_v4" "$(parse 1800000000 5g "$V4_GTAX6000" | rows | tr '\n' ' ' | sed 's/ $//')"
+expect "3006.102 layout, indented like 3004.388" "$want_v4" \
+	"$(parse 1800000000 5g "$(printf '%s' "$V4_GTAX6000" | sed -e 's/^chanspec:/ chanspec:/' -e 's/^cca_/	 cca_/')" | rows | tr '\n' ' ' | sed 's/ $//')"
+expect "unindented: the next heading ends the blocks" "$want_v4" \
+	"$(parse 1800000000 5g "$(printf '%sStats during last 60 seconds:\nchanspec: 0xd02c crsglitch cnt: 0 bad plcp: 0 noise: -90\ncca_txdur: 2 cca_inbss: 0 cca_obss:50 cca_nocat: 0 cca_nopkt: 0\n' "$V4_GTAX6000")" | rows | tr '\n' ' ' | sed 's/ $//')"
 
 # ---- 2: a scan on a stand-in router --------------------------------------------------------------
 R=$t/root; F=$t/fix; D=$t/data

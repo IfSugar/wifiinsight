@@ -548,7 +548,7 @@ parse_chanim_all() {   # ts band
 	}
 	function flush() { if (cs != "") keep(chan(cs), o, n, p, g, b, z); cs = "" }
 	/during last scan/ { sec = 1; next }
-	sec && /^[^ \t]/ { flush(); sec = 0 }
+	sec && /^[^ \t]/ && !/chanspec:|cca_/ { flush(); sec = 0 }   # the next heading ends it (lines may come unindented)
 	sec && /chanspec:/ { flush(); cs = val("chanspec:"); g = val("crsglitch cnt:"); b = val("bad plcp:"); z = val("noise:"); o = n = p = ""; next }
 	sec && /cca_/ { o = val("cca_obss:"); n = val("cca_nocat:"); p = val("cca_nopkt:"); next }
 	!sec && ($1 == "chanspec" || $1 == "chspec") { delete col; for (i = 1; i <= NF; i++) col[$i] = i; tbl = ("obss" in col) && ("nocat" in col); ncol = NF; next }

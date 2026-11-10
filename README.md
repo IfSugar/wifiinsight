@@ -11,7 +11,7 @@ It adds a **Wireless → WiFi Insight** tab with five pages:
 
 | Page | What it shows |
 |---|---|
-| **Insight** | Live tiles (channel, interference, others Wi-Fi, non-Wi-Fi, idle, noise), in-channel interference over time with event markers, a spectrum heatmap of every channel, and a channel event log (manual changes, radar, bandwidth changes, reboots). |
+| **Insight** | Live tiles (channel, interference, others Wi-Fi, non-Wi-Fi, idle, noise), in-channel interference over time with event markers, a spectrum heatmap of every channel (the airtime the radio measured while scanning, where it reports it), and a channel event log (manual changes, radar, bandwidth changes, reboots). |
 | **Site Survey** | A signal map (each network drawn across the channels it occupies, by signal strength) and a sortable list with BSSID, channel, width, Wi-Fi standard, security, signal and the load each network reports. |
 | **Channel Statistics** | Networks per channel, load per channel over the selected range (measured by the radio where it reports it, estimated otherwise), the noise floor per channel, and the quietest channel for each width (with and without DFS) next to what you're using now. The weather-radar channels (120–128) are marked, with a note on the radar check: 1 minute before using a DFS channel, 10 minutes for 120–128 in Europe and other countries on European rules. |
 | **Troubleshooting** | Airtime breakdown (your TX/RX, others, non-Wi-Fi, unclassified, idle), glitch counters, transmit success vs failure, noise floor and the raw `chanim_stats` counters. |
@@ -48,15 +48,17 @@ Time ranges: 10 minutes, 1 hour, 12 hours, 1 day, 7 days and 30 days. Short rang
 
 ## Supported routers
 
-Tested on an RT-AX86U with 3004.388.12_2. Every model current Merlin supports uses Broadcom Wi-Fi on all its radios; what differs is the radio layout and the driver. Models on Merlin 3006.102 have a newer driver (17.10) that prints its airtime statistics differently and scans more slowly: they need WiFi Insight 1.0.11 or later, and 1.1.0 for 5 GHz scans.
+Tested on an RT-AX86U with 3004.388.12_2. Every model current Merlin supports uses Broadcom Wi-Fi on all its radios; what differs is the radio layout and the driver. Models on Merlin 3006.102 have a newer driver (17.10) that prints its airtime statistics differently: they need WiFi Insight 1.0.11 or later. On some of them the driver rejects full 5 GHz scans ("Scan Rejected"), which is being looked into.
 
 | Router | Radios | Status |
 |---|---|---|
-| RT-AX86U | 2.4 + 5 GHz | Tested |
-| RT-AX88U | 2.4 + 5 GHz | Installs fine (user report) |
-| GT-AX6000, RT-BE88U | 2.4 + 5 GHz | Charts and 2.4 GHz scans work (user reports); 5 GHz scans fixed in 1.1.0, awaiting confirmation |
-| RT-AX58U (V1), RT-AX68U, RT-AX86U Pro, RT-AX88U Pro, RT-BE86U, RT-BE58 Go | 2.4 + 5 GHz | Should work |
-| GT-AXE11000, RT-BE92U, RT-BE96U, GT-BE19000AI | 2.4 + 5 + 6 GHz | Should work since 1.1.1 (6 GHz untested). Up to 1.1.0 the check took the 6 GHz radio for a second 5 GHz one |
+| RT-AX86U | 2.4 + 5 GHz | Tested, including the measured spectrum |
+| RT-AX88U | 2.4 + 5 GHz | Works, scans on both bands (user report) |
+| RT-AX86U Pro | 2.4 + 5 GHz | Works (user report); one report of 5 GHz scans failing, being looked into |
+| GT-AX6000 | 2.4 + 5 GHz | Charts and 2.4 GHz scans work; the driver rejects full 5 GHz scans ("Scan Rejected"), being looked into |
+| RT-BE88U | 2.4 + 5 GHz | Charts and 2.4 GHz scans work (user report); 5 GHz scans not yet confirmed |
+| RT-AX58U (V1), RT-AX68U, RT-AX88U Pro, RT-BE86U, RT-BE58 Go | 2.4 + 5 GHz | Should work |
+| GT-AXE11000, RT-BE92U, RT-BE96U, GT-BE19000AI | 2.4 + 5 + 6 GHz | Should work since 1.2.0 (6 GHz untested). Up to 1.1.0 the check took the 6 GHz radio for a second 5 GHz one |
 | GT-AX11000, GT-AX11000 Pro, ZenWiFi Pro XT12 | 2.4 + 5 + 5 GHz | Not yet: two 5 GHz radios |
 | GT-AXE16000, GT-BE98 Pro | four radios | Not yet: four radios |
 
