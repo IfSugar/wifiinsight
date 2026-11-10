@@ -13,7 +13,7 @@ What changed in each release of WiFi Insight. The release workflow copies a vers
 - **Try unreleased changes:** `wifiinsight.sh update dev` installs the newest code on `main` (`update dev <branch>` for another branch of this repository; pull requests from forks are refused), keeping your settings and history; menu option 8 does the same. `status`, `debug` and the page's footer say when a development version is installed. `update` and amtm only ever install releases, and take a development version back to the latest release.
 - New command: `wifiinsight.sh collection on|paused|off`, the same as Settings → Collection on the page.
 - Updating no longer runs an extra neighbour scan when you already have history, so `update` finishes sooner without a Wi-Fi hiccup.
-- The page: card descriptions sit on one line under the title, and the Spectrum and *Load per channel* subtitles are shorter. `scan` and the syslog say how many channels were measured, and `debug` prints the radio's country code.
+- The page: card descriptions sit on one line under the title, the Spectrum and *Load per channel* subtitles are shorter, the footer is just the status line, and DFS and radar are only mentioned on 5 GHz (2.4 and 6 GHz have no DFS channels). `scan` and the syslog say how many channels were measured, and `debug` prints the radio's country code.
 
 ## 1.1.0
 
