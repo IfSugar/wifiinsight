@@ -435,7 +435,7 @@ function drawChart(key, boxId, type, datasets, o) {
 		options: {
 			animation: false, responsive: true, maintainAspectRatio: false, parsing: type === 'bar', normalized: true,
 			interaction: { mode: 'index', intersect: false },
-			layout: { padding: { top: 4, right: 6 } },
+			layout: { padding: { top: 4, right: 6, bottom: o.padBottom || 0 } },
 			scales: scales,
 			plugins: {
 				legend: { display: false },
@@ -607,6 +607,7 @@ function prepCanvas(cv, cssH) {
 function renderHeat() {
 	var cv = $('wiHeat'), r = radio(), info = scanRows(), rows = info.rows, ch = chans(), src = heatSrc(info);
 	$('wiHeatSrc').innerHTML = srcControls(info, src, 'wiMeshLbl');
+	$('wiDfsLbl').style.display = WI.band === '5g' ? '' : 'none';   /* DFS channels: 5 GHz only */
 	$('wiRampNote').textContent = src === 'measured' ? ' (half the airtime or more)' : '';
 	var qs = quietState(), qband = $('wiHeatQuiet');
 	qband.style.display = 'none'; $('wiHeatQuietKey').style.display = 'none';
@@ -699,6 +700,7 @@ function heatHover(ev) {
 	tip.innerHTML = h; placeTip(tip, ev.target.parentNode, x, y);
 }
 function renderEvents() {
+	$('wiEvSub').textContent = WI.band === '5g' ? 'Channel and bandwidth changes, radar detections and restarts.' : 'Channel and bandwidth changes and restarts.';   /* radar: 5 GHz only */
 	var evs = bandEvents(), shown = WI.allEvents ? evs : evs.slice(0, 10);
 	if (!evs.length) { $('wiEvents').innerHTML = '<div class="empty" style="padding:16px 0">No events yet.</div>'; return; }
 	var h = '<table class="t"><tr><th style="width:130px">Time</th><th style="width:190px">Event</th><th>Change</th></tr>';
@@ -849,6 +851,7 @@ function channelLoads() {   // average and peak load per channel across scans in
 	return { avg: avg, peak: peak, comp: comp, noise: noise, src: src, info: info, n: info.scans, latestOnly: info.latestOnly };
 }
 function renderChannels() {
+	$('wiBestSub').textContent = 'Best channel for each width, based on the load above.' + (WI.band === '5g' ? ' DFS channels can be forced to change if radar is detected.' : '');
 	var ch = chans(), list = aps(), r = radio(), cur = r ? spanOf(r.center, r.width) : [];
 	if (!ch.length || !list.length && !(WI.scans && WI.scans.scans && WI.scans.scans[WI.band])) {
 		drawChart('cnt', 'wiCntChart', 'bar', [], { empty: noScansMsg() });
@@ -864,7 +867,7 @@ function renderChannels() {
 	drawChart('cnt', 'wiCntChart', 'bar', [
 		Object.assign({ label: 'Other networks', data: others, backgroundColor: C.others }, barBase),
 		Object.assign({ label: 'Yours', data: mine, backgroundColor: C.yours }, barBase)
-	], { labels: labels, x: xCat, stacked: true, yMin: 0, yStep: 1, plugins: [curBand(ch.map(function (c, i) { return cur.indexOf(c) >= 0 ? i : -1; }).filter(function (i) { return i >= 0; }))], yFmt: function (v) { return Number.isInteger(v) ? v : ''; },
+	], { labels: labels, x: xCat, stacked: true, yMin: 0, yStep: 1, plugins: [curBand(ch.map(function (c, i) { return cur.indexOf(c) >= 0 ? i : -1; }).filter(function (i) { return i >= 0; })), dfsAxis(ch)], padBottom: WI.band === '5g' ? 22 : 0, yFmt: function (v) { return Number.isInteger(v) ? v : ''; },
 		ttTitle: function (it) { return 'Channel ' + it[0].label + (isDfs(+it[0].label) ? ' (' + chanTags(+it[0].label) + ')' : ''); } });
 
 	var L = channelLoads(), meas = L.src === 'measured';
@@ -884,12 +887,12 @@ function renderChannels() {
 		var sets = MEAS.filter(function (m) { return !WI.hidden['meas:' + m[0]]; }).map(function (m) {
 			return Object.assign({ label: m[0], data: ch.map(function (c) { return L.comp[m[0]][c]; }), backgroundColor: m[2], borderWidth: { top: 1 }, borderColor: C.surface }, bar);
 		});
-		drawChart('load', 'wiLoadChart', 'bar', sets, { labels: labels, x: xCat, stacked: true, yMin: 0, plugins: [curBand(curIdx)], yMax: yMax, yFmt: pctFmt, ttTitle: title,
+		drawChart('load', 'wiLoadChart', 'bar', sets, { labels: labels, x: xCat, stacked: true, yMin: 0, plugins: [curBand(curIdx), dfsAxis(ch)], padBottom: WI.band === '5g' ? 22 : 0, yMax: yMax, yFmt: pctFmt, ttTitle: title,
 			ttLabel: function (it) { return ' ' + it.dataset.label + ': ' + (it.parsed.y == null ? '–' : it.parsed.y + '%'); } });
 	} else {
 		var colors = data.map(function (v) { return rampColor(v == null ? 0 : Math.max(8, v)); });
 		drawChart('load', 'wiLoadChart', 'bar', [Object.assign({ label: 'Estimated load', data: data, backgroundColor: colors, borderRadius: { topLeft: 4, topRight: 4 } }, bar)],
-			{ labels: labels, x: xCat, yMin: 0, plugins: [curBand(curIdx)], yMax: yMax, yFmt: pctFmt, ttTitle: title,
+			{ labels: labels, x: xCat, yMin: 0, plugins: [curBand(curIdx), dfsAxis(ch)], padBottom: WI.band === '5g' ? 22 : 0, yMax: yMax, yFmt: pctFmt, ttTitle: title,
 				ttLabel: function (it) { var c = +it.label; return [' Average: ' + (it.parsed.y == null ? '–' : it.parsed.y + '%'), ' Peak: ' + (L.peak[c] == null ? '–' : L.peak[c] + '%')]; } });
 	}
 	/* Noise floor of every channel, where the radio measures it while scanning */
@@ -899,10 +902,19 @@ function renderChannels() {
 		var nzMin = Math.min.apply(null, nz.filter(function (v) { return v != null; })), nzMax = Math.max.apply(null, nz.filter(function (v) { return v != null; }));
 		drawChart('nzch', 'wiNzChChart', 'bar', [Object.assign({ label: 'Noise floor', data: nz.map(function (v) { return v == null ? null : [-110, v]; }), backgroundColor: '#5f7d87',
 			borderRadius: { topLeft: 4, topRight: 4 } }, bar)],
-			{ labels: labels, x: xCat, yMin: Math.max(-110, Math.floor((nzMin - 5) / 5) * 5), yMax: Math.min(-40, Math.ceil((nzMax + 5) / 5) * 5), plugins: [curBand(curIdx)],
+			{ labels: labels, x: xCat, yMin: Math.max(-110, Math.floor((nzMin - 5) / 5) * 5), yMax: Math.min(-40, Math.ceil((nzMax + 5) / 5) * 5), plugins: [curBand(curIdx), dfsAxis(ch)], padBottom: WI.band === '5g' ? 22 : 0,
 				yStep: 5, yFmt: function (v) { return v + ' dBm'; }, ttTitle: title, ttLabel: function (it) { return ' Noise floor: ' + nz[it.dataIndex] + ' dBm'; } });
 	}
 	renderBest(L, ch, r);
+}
+function dfsAxis(ch) {   // the Spectrum's DFS / weather-radar bracket, under a channel chart's labels (5 GHz)
+	return { id: 'wiDfs', afterDraw: function (chart) {
+		if (WI.band !== '5g') return;
+		var x = chart.scales.x, half = (x.getPixelForValue(1) - x.getPixelForValue(0)) / 2, ctx = chart.ctx;
+		ctx.save(); ctx.font = '11px system-ui, -apple-system, Segoe UI, sans-serif';
+		dfsBracket(ctx, ch, function (c) { var p = x.getPixelForValue(ch.indexOf(c)); return [p - half, p + half]; }, x.bottom + 6);
+		ctx.restore();
+	} };
 }
 function curBand(idx) {   // translucent band behind the router's channel(s), like the signal map
 	return { id: 'wiCur', beforeDatasetsDraw: function (chart) {
@@ -943,6 +955,9 @@ function renderBest(L, ch, r) {
 			return { b: b, s: Math.round(s * 10) / 10, pk: pk, dfs: b.some(isDfs), wx: b.some(isWx) };
 		}).sort(function (a, b) { return a.s - b.s || a.pk - b.pk || (a.dfs - b.dfs); });
 		var best = scored[0], nonDfs = scored.filter(function (x) { return !x.dfs; })[0];
+		/* Weather-radar channels need a much longer radar check (10 minutes in Europe): when a block
+		   without one is about as quiet (within half a percentage point), suggest that instead. */
+		if (best.wx) best = scored.filter(function (x) { return !x.wx && x.s <= best.s + 0.5; })[0] || best;
 		var curBlk = null;
 		if (r && r.width === w) { var sp = spanOf(r.center, r.width); curBlk = scored.filter(function (x) { return x.b[0] === sp[0]; })[0] || null; }
 		rows.push({ w: w, best: best, nonDfs: nonDfs, cur: curBlk });
@@ -955,10 +970,11 @@ function renderBest(L, ch, r) {
 		if (x.dfs) { anyDfs = true; return '<span class="pill dfs" title="' + WX_DFS + '.">DFS</span>'; }
 		return '';
 	};
-	var h = '<table class="t"><tr><th style="width:80px">Width</th><th>Quietest channel</th><th class="num">' + lh + '</th><th>Quietest without DFS</th><th class="num">' + lh + '</th><th>Your current</th></tr>';
+	var dfsBand = WI.band === '5g';   /* 2.4 and 6 GHz have no DFS channels: no "without DFS" columns */
+	var h = '<table class="t"><tr><th style="width:80px">Width</th><th>Quietest channel</th><th class="num">' + lh + '</th>' + (dfsBand ? '<th>Quietest without DFS</th><th class="num">' + lh + '</th>' : '') + '<th>Your current</th></tr>';
 	rows.forEach(function (x) {
 		h += '<tr><td>' + x.w + ' MHz</td><td>' + name(x.best) + tag(x.best) + '</td><td class="num">' + x.best.s + '%</td>' +
-			'<td>' + (x.nonDfs ? name(x.nonDfs) : '<span style="color:var(--muted)">–</span>') + '</td><td class="num">' + (x.nonDfs ? x.nonDfs.s + '%' : '') + '</td>' +
+			(dfsBand ? '<td>' + (x.nonDfs ? name(x.nonDfs) : '<span style="color:var(--muted)">–</span>') + '</td><td class="num">' + (x.nonDfs ? x.nonDfs.s + '%' : '') + '</td>' : '') +
 			'<td>' + (x.cur ? name(x.cur) + ' · ' + x.cur.s + '%' + (x.cur.wx ? tag(x.cur) : '') + '<span class="pill cur">in use</span>' : '<span style="color:var(--muted)">–</span>') + '</td></tr>';
 	});
 	$('wiBest').innerHTML = h + '</table>' + (anyDfs ? '<div class="sub" style="margin:8px 8px 0">' + esc(anyWx ? WX[reg] : WX_DFS + '.') + '</div>' : '');
@@ -1486,9 +1502,9 @@ window.WiFiInsight = {
 			<div class="head">
 				<div class="grow"><h3>Spectrum</h3><div class="sub" id="wiHeatSub"></div></div>
 				<div class="legend">
-					<label><input type="checkbox" checked onchange="WiFiInsight.heatOption('showActive',this.checked)"/>Active channel</label>
-					<label><input type="checkbox" checked onchange="WiFiInsight.heatOption('showDfs',this.checked)"/>DFS</label>
 					<label id="wiMeshLbl"><input type="checkbox" id="wiMesh" onchange="WiFiInsight.setMesh(this.checked)"/>Include my mesh</label>
+					<label><input type="checkbox" checked onchange="WiFiInsight.heatOption('showActive',this.checked)"/>Active channel</label>
+					<label id="wiDfsLbl"><input type="checkbox" checked onchange="WiFiInsight.heatOption('showDfs',this.checked)"/>DFS</label>
 				</div>
 			</div>
 			<div class="legend srcrow" id="wiHeatSrc"></div>
@@ -1505,7 +1521,7 @@ window.WiFiInsight = {
 			</div>
 		</div>
 		<div class="card">
-			<div class="head"><div class="grow"><h3>Channel events</h3><div class="sub">Channel and bandwidth changes, radar detections and restarts.</div></div></div>
+			<div class="head"><div class="grow"><h3>Channel events</h3><div class="sub" id="wiEvSub">Channel and bandwidth changes and restarts.</div></div></div>
 			<div id="wiEvents"></div>
 		</div>
 	</div>
@@ -1538,13 +1554,13 @@ window.WiFiInsight = {
 		<div class="card">
 			<div class="head">
 				<div class="grow"><h3 id="wiLoadTitle">Estimated load per channel</h3><div class="sub" id="wiLoadSub"></div></div>
-				<div class="legend"><span class="li"><span class="sq" style="background:rgba(255,204,0,0.25);border:1px dashed #ffcc00"></span>Router's channel</span><label id="wiMeshLbl2"><input type="checkbox" id="wiMesh2" onchange="WiFiInsight.setMesh(this.checked)"/>Include my mesh</label></div>
+				<div class="legend"><label id="wiMeshLbl2"><input type="checkbox" id="wiMesh2" onchange="WiFiInsight.setMesh(this.checked)"/>Include my mesh</label><span class="li"><span class="sq" style="background:rgba(255,204,0,0.25);border:1px dashed #ffcc00"></span>Router's channel</span></div>
 			</div>
 			<div class="legend srcrow" id="wiLoadSrc"></div>
 			<div class="chartbox sm" id="wiLoadChart"></div>
 		</div>
 		<div class="card">
-			<div class="head"><div class="grow"><h3>Quietest options</h3><div class="sub">Best channel for each width, based on the load above. DFS channels can be forced to change if radar is detected.</div></div></div>
+			<div class="head"><div class="grow"><h3>Quietest options</h3><div class="sub" id="wiBestSub">Best channel for each width, based on the load above.</div></div></div>
 			<div id="wiBest"></div>
 		</div>
 		<div class="card" id="wiNzChCard" style="display:none">
@@ -1630,11 +1646,7 @@ window.WiFiInsight = {
 		</div>
 	</div>
 
-	<div class="note">
-		<b>Others Wi-Fi</b>: airtime used by networks that aren't yours, including your mesh node's separate access point when it shares the channel.
-		<b>Non-Wi-Fi</b>: energy from devices such as microwaves, baby monitors and Bluetooth. Spectrum and channel load come from periodic scans: measured by the radio on each channel where the driver reports it, otherwise estimated from the networks heard.
-		<br/><span id="wiFoot"></span>
-	</div>
+	<div class="note" id="wiFoot"></div>
 </div>
 
 </td>

@@ -87,6 +87,24 @@ expect "one row (the radio's own channel, not a scan): nothing" "" \
 expect "an error from wl: nothing" "" "$(parse 1800000000 5g "wl: Unsupported")"
 expect "values are clamped to 0-100%" "1800000000,'5g',36,100,0,1,0,0,-90" \
 	"$(parse 1800000000 5g "$(printf 'Stats during last scan:\n chanspec: 0xd024 crsglitch cnt: 0 bad plcp: 0 noise: -90\n\t cca_obss:250 cca_nocat: 0 cca_nopkt: 1\n chanspec: 0xd028 crsglitch cnt: 0 bad plcp: 0 noise: -90\n\t cca_obss:1 cca_nocat: 0 cca_nopkt: 1\n')" | rows | head -1)"
+# GT-AX6000 (3006.102, "version: 4") after single-channel scans of 36, 100 and 149, as posted in the
+# forum thread: the same blocks, but with no indentation. A heading after the blocks still ends them.
+V4_GTAX6000='version: 4
+CHAN Interference Measurement:
+Stats during last scan:
+chanspec: 0xd024 crsglitch cnt: 0 bad plcp: 0 noise: -97
+cca_txdur: 2 cca_inbss: 0 cca_obss:1 cca_nocat: 0 cca_nopkt: 0
+chanspec: 0xd064 crsglitch cnt: 6 bad plcp: 34 noise: -91
+cca_txdur: 1 cca_inbss: 0 cca_obss:0 cca_nocat: 2 cca_nopkt: 1
+chanspec: 0xd095 crsglitch cnt: 0 bad plcp: 0 noise: -97
+cca_txdur: 2 cca_inbss: 0 cca_obss:2 cca_nocat: 3 cca_nopkt: 2
+'
+want_v4="1800000000,'5g',36,1,0,0,0,0,-97 1800000000,'5g',100,0,2,1,6,34,-91 1800000000,'5g',149,2,3,2,0,0,-97"
+expect "3006.102 layout (GT-AX6000), unindented" "$want_v4" "$(parse 1800000000 5g "$V4_GTAX6000" | rows | tr '\n' ' ' | sed 's/ $//')"
+expect "3006.102 layout, indented like 3004.388" "$want_v4" \
+	"$(parse 1800000000 5g "$(printf '%s' "$V4_GTAX6000" | sed -e 's/^chanspec:/ chanspec:/' -e 's/^cca_/	 cca_/')" | rows | tr '\n' ' ' | sed 's/ $//')"
+expect "unindented: the next heading ends the blocks" "$want_v4" \
+	"$(parse 1800000000 5g "$(printf '%sStats during last 60 seconds:\nchanspec: 0xd02c crsglitch cnt: 0 bad plcp: 0 noise: -90\ncca_txdur: 2 cca_inbss: 0 cca_obss:50 cca_nocat: 0 cca_nopkt: 0\n' "$V4_GTAX6000")" | rows | tr '\n' ' ' | sed 's/ $//')"
 
 # ---- 2: a scan on a stand-in router --------------------------------------------------------------
 R=$t/root; F=$t/fix; D=$t/data
@@ -117,9 +135,9 @@ case "\$3" in
 	isup) echo 1 ;;
 	chanspec) [ "\$ifc" = eth6 ] && echo "1 (0x1001)" || echo "100l (0xd866)" ;;
 	channels) [ "\$ifc" = eth6 ] && echo "1 2 3 4 5 6 7 8 9 10 11 12 13" || echo "36 40 44 48 52 56 60 64 100 104 108 112 116 120 124 128 132 136 140" ;;
-	scan) : ;;
+	scan) touch "\$F/scanned_\$ifc"; if [ -f "\$F/chanim_\$ifc.next" ]; then mv "\$F/chanim_\$ifc.next" "\$F/chanim_\$ifc"; fi ;;   # a scan brings new figures
 	scanresults) printf 'SSID: "Neighbour"\nMode: Managed\tRSSI: -60 dBm\tChannel: %s\nBSSID: 02:00:00:00:00:01\tCapability: ESS\n' "\$( [ "\$ifc" = eth6 ] && echo 6 || echo 36)" ;;
-	chanim_stats) [ "\$4" = all ] && [ -f "\$F/chanim_\$ifc" ] && cat "\$F/chanim_\$ifc" ;;
+	chanim_stats) [ "\$4" = all ] && [ -f "\$F/scanned_\$ifc" ] && [ -f "\$F/chanim_\$ifc" ] && cat "\$F/chanim_\$ifc" ;;   # nothing until a scan, as after a reboot
 	country) [ -f "\$F/country" ] && cat "\$F/country" || { echo "wl: Unsupported" >&2; exit 1; } ;;
 	*) exit 1 ;;
 esac
@@ -161,8 +179,9 @@ row = {r[1]: r for r in d['scans']['2g']}
 assert row[3][7:13] == [0.0, 16.0, 16.0, -67.0, 3700.0, 1], row[3]
 assert len(row[13]) == 7, row[13]                              # channel 13 wasn't measured
 EOF
-# a router whose driver doesn't list channels: the scan works as before
+# a router whose driver doesn't list channels: the scan works as before (2.4 GHz measures new figures)
 rm -f "$F/chanim_eth7"; echo 1800001800 > "$F/clock"
+printf '%s' "$V3_2G" | sed 's/crsglitch cnt: \([0-9]*\)/crsglitch cnt: 1\1/' > "$F/chanim_eth6.next"
 out=$(run scan 2>&1) || true
 expect "no per-channel list: the scan reports no measurements" "ok, 1 network in 3 s" "$(printf '%s\n' "$out" | sed -n 's/^  5g (eth7): //p')"
 expect "no per-channel list: live.htm says 0 for that band" '{"2g": 3, "5g": 0}' "$(live_measured)"

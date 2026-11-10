@@ -33,7 +33,8 @@ printf '#!%s sh\nshift 2; echo "$*" >> "%s/log"\n' "$bb" "$F" > "$t/bin/logger"
 printf '#!/bin/sh\ncase "$2" in ntp_ready) echo 0 ;; esac\n' > "$t/bin/nvram"
 printf '#!/bin/sh\nexit 1\n' > "$t/bin/wl"
 printf '#!/bin/sh\nexit 0\n' > "$t/bin/cru"
-# Stand-in GitHub. $GH/branches/<name> holds a branch's commit; $GH/<commit or tag>/ its files;
+# Stand-in GitHub. $GH/branches/<name> holds a branch's commit (the branches API); $GH/<commit or tag>/
+# its files, which raw.githubusercontent.com also serves for commits that aren't on a branch here;
 # $GH/latest the latest release tag; $GH/api-down makes the API answer like a rate limit.
 cat > "$t/bin/curl" <<EOF
 #!$bb sh
@@ -46,9 +47,9 @@ case "\$url" in
 	*api.github.com/*) [ -f "$GH/api-down" ] && { echo '{"message":"API rate limit exceeded"}'; exit 22; } ;;
 esac
 case "\$url" in
-	*api.github.com/repos/*/commits/*)
-		b=\${url##*/commits/}; [ -f "$GH/branches/\$b" ] || exit 22
-		cat "$GH/branches/\$b"; exit 0 ;;
+	*api.github.com/repos/*/branches/*)   # one line, as GitHub may send it: the commit's sha comes first
+		b=\${url##*/branches/}; [ -f "$GH/branches/\$b" ] || exit 22
+		printf '{"name":"%s","commit":{"sha":"%s","node_id":"x","commit":{"tree":{"sha":"0000000000000000000000000000000000000000"}}},"protected":false}' "\$b" "\$(cat "$GH/branches/\$b")"; exit 0 ;;
 	*api.github.com/repos/*/releases/latest)
 		[ -f "$GH/latest" ] || exit 22; printf '{"tag_name": "%s"}' "\$(cat "$GH/latest")"; exit 0 ;;
 	*/releases/latest) [ -f "$GH/latest" ] || exit 22; [ "\$fmt" = '%{redirect_url}' ] && printf 'https://github.com/x/y/releases/tag/%s' "\$(cat "$GH/latest")"; exit 0 ;;
@@ -103,10 +104,20 @@ expect "update dev <branch>: another branch" "0|branch feature/x|dev feature/x 9
 
 reset_install; touch "$GH/api-down"
 rc=0; out=$(run update dev 2>&1) || rc=$?
-expect "update dev, GitHub API down: falls back to the branch's files" "0|branch main|dev main unknown" "$rc|$(label)|$(buildfile)"
-case "$out" in *"may be up to 5 minutes old"*) ok "update dev, API down: says the files may be a few minutes old" ;; *) bad "API-down note missing" ;; esac
+expect "update dev, GitHub API down: nothing changed (no guessing from raw files)" "1||none" "$rc|$(label)|$(buildfile)"
+case "$out" in *"GitHub has no branch 'main' in IfSugar/wifiinsight, or couldn't be reached"*) ok "update dev, API down: says why" ;; *) bad "API-down message: $out" ;; esac
 
-for b in 'main;reboot' '../etc' '-x' 'a b' 'main..x' 'x$(id)'; do
+# Code that isn't on a branch here: a pull request from someone's fork, or a commit by its hash.
+# raw.githubusercontent.com serves both under this repository's address; update dev must refuse them.
+FORK=feedfacefeedfacefeedfacefeedfacefeedface; build "$GH/$FORK" "$ver" "a fork's pull request"
+mkdir -p "$GH/refs/pull/7/head"; cp "$GH/$FORK/"* "$GH/refs/pull/7/head/"
+for b in refs/pull/7/head pull/7/head "$FORK"; do
+	reset_install
+	rc=0; out=$(run update dev "$b" 2>&1) || rc=$?
+	expect "update dev '$b' (not a branch here): refused, nothing changed" "1||none" "$rc|$(label)|$(buildfile)"
+done
+
+for b in 'main;reboot' '../etc' '-x' 'a b' 'main..x' 'x$(id)' 'main/' 'refs/heads/main'; do
 	reset_install
 	rc=0; out=$(run update dev "$b" 2>&1) || rc=$?
 	case "$out" in *"isn't a branch name; nothing was changed."*) said=refused ;; *) said="$out" ;; esac
@@ -115,7 +126,7 @@ done
 reset_install
 rc=0; out=$(run update dev nosuch 2>&1) || rc=$?
 expect "update dev to a branch that doesn't exist: nothing changed" "1||none" "$rc|$(label)|$(buildfile)"
-case "$out" in *"no such branch, or no connection to GitHub"*) ok "missing branch: says why" ;; *) bad "missing branch message: $out" ;; esac
+case "$out" in *"GitHub has no branch 'nosuch' in IfSugar/wifiinsight"*) ok "missing branch: says why" ;; *) bad "missing branch message: $out" ;; esac
 
 reset_install; branch broken 0000000000000000000000000000000000000001 "$ver"
 sed -i "s/wifiinsight-version: [0-9.]* /wifiinsight-version: 0.0.1 /" "$GH/0000000000000000000000000000000000000001/wifiinsight.asp"
