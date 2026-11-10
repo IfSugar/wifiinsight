@@ -1486,9 +1486,9 @@ window.WiFiInsight = {
 			<div class="head">
 				<div class="grow"><h3>Spectrum</h3><div class="sub" id="wiHeatSub"></div></div>
 				<div class="legend">
+					<label id="wiMeshLbl"><input type="checkbox" id="wiMesh" onchange="WiFiInsight.setMesh(this.checked)"/>Include my mesh</label>
 					<label><input type="checkbox" checked onchange="WiFiInsight.heatOption('showActive',this.checked)"/>Active channel</label>
 					<label><input type="checkbox" checked onchange="WiFiInsight.heatOption('showDfs',this.checked)"/>DFS</label>
-					<label id="wiMeshLbl"><input type="checkbox" id="wiMesh" onchange="WiFiInsight.setMesh(this.checked)"/>Include my mesh</label>
 				</div>
 			</div>
 			<div class="legend srcrow" id="wiHeatSrc"></div>
@@ -1538,7 +1538,7 @@ window.WiFiInsight = {
 		<div class="card">
 			<div class="head">
 				<div class="grow"><h3 id="wiLoadTitle">Estimated load per channel</h3><div class="sub" id="wiLoadSub"></div></div>
-				<div class="legend"><span class="li"><span class="sq" style="background:rgba(255,204,0,0.25);border:1px dashed #ffcc00"></span>Router's channel</span><label id="wiMeshLbl2"><input type="checkbox" id="wiMesh2" onchange="WiFiInsight.setMesh(this.checked)"/>Include my mesh</label></div>
+				<div class="legend"><label id="wiMeshLbl2"><input type="checkbox" id="wiMesh2" onchange="WiFiInsight.setMesh(this.checked)"/>Include my mesh</label><span class="li"><span class="sq" style="background:rgba(255,204,0,0.25);border:1px dashed #ffcc00"></span>Router's channel</span></div>
 			</div>
 			<div class="legend srcrow" id="wiLoadSrc"></div>
 			<div class="chartbox sm" id="wiLoadChart"></div>
