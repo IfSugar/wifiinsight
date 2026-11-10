@@ -1630,11 +1630,7 @@ window.WiFiInsight = {
 		</div>
 	</div>
 
-	<div class="note">
-		<b>Others Wi-Fi</b>: airtime used by networks that aren't yours, including your mesh node's separate access point when it shares the channel.
-		<b>Non-Wi-Fi</b>: energy from devices such as microwaves, baby monitors and Bluetooth. Spectrum and channel load come from periodic scans: measured by the radio on each channel where the driver reports it, otherwise estimated from the networks heard.
-		<br/><span id="wiFoot"></span>
-	</div>
+	<div class="note" id="wiFoot"></div>
 </div>
 
 </td>
