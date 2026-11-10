@@ -1,23 +1,24 @@
 #!/bin/bash
-# Regression test: scans the driver stops early, and per-channel figures it keeps between scans.
+# Regression test: neighbour scans go a few channels at a time, and only what they measure is stored.
 #
-# On an RT-AX86U (3004.388) with traffic on its 5 GHz channel, the driver's full scan stopped after
-# 36-104 of 36-140, every daytime scan, while `wl scan -c 108,...,140` scanned the rest fine. And the
-# driver keeps each channel's last figures in `wl chanim_stats all` until a scan reaches it again,
-# so a short scan still lists 108-140 with old figures. WiFi Insight now:
-#  - stores figures only for channels the scan reached (changed since before it, or before one that did),
-#  - scans the channels it didn't reach, and merges the networks heard,
-#  - doesn't repeat a follow-up that reached nothing, and leaves drivers without per-channel figures alone.
+# A whole-band scan kept the radio off its channel long enough for apps on an iPhone to stall for
+# 20-30 s, and on a busy channel the driver could stop it partway (an RT-AX86U stopped at 104 of
+# 36-140). WiFi Insight now scans two channels at a time on 5 GHz (four on 2.4 GHz) with a pause
+# back on the router's channel in between:
+#  - every channel is scanned, in groups, and never the whole band at once;
+#  - the driver keeps each channel's last figures, so only channels whose figures changed (or that
+#    come before one that did, in the group) are stored: a refused group's old figures aren't;
+#  - a refused group is retried for 20 s, then skipped and reported; all refused: "busy".
 #
-# A stand-in driver keeps per-channel figures between scans and can stop a full scan after N channels.
+# A stand-in driver keeps per-channel figures between scans and updates only the channels it visits.
 # Runs with Merlin's BusyBox commands only, and [, printf and echo as separate programs, on a fake clock.
-# Usage: .github/tests/short-scans.sh [path/to/wifiinsight.sh]   (needs busybox, sqlite3)
+# Usage: .github/tests/gentle-scans.sh [path/to/wifiinsight.sh]   (needs busybox, sqlite3)
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 script=${1:-$here/../../wifiinsight.sh}
 case "$script" in /*) ;; *) script=$PWD/$script ;; esac
-bb=$(command -v busybox) || { echo "::error::short-scans.sh needs busybox installed"; exit 1; }
-sqlite=$(command -v sqlite3) || { echo "::error::short-scans.sh needs sqlite3 installed"; exit 1; }
+bb=$(command -v busybox) || { echo "::error::gentle-scans.sh needs busybox installed"; exit 1; }
+sqlite=$(command -v sqlite3) || { echo "::error::gentle-scans.sh needs sqlite3 installed"; exit 1; }
 bash_bin=$(command -v bash)
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
 fail=0
@@ -47,9 +48,8 @@ cat > "$t/bin/nvram" <<'EOF'
 case "$2" in ntp_ready) echo 1 ;; wl0_ifname) echo eth6 ;; wl1_ifname) echo eth7 ;; wl0_ssid|wl1_ssid) echo HomeNet ;; esac
 EOF
 # Stand-in driver. Per interface, in $F: <ifc>.list (the figures it keeps: channel|obss|nocat|noise),
-# <ifc>.cut (a full scan stops after this many channels), <ifc>.reject_rest (refuses `scan -c`),
-# <ifc>.noop_rest (accepts `scan -c` but reaches nothing), <ifc>.stuck (a channel whose figures don't
-# change), <ifc>.nolist (no per-channel figures), <ifc>.nets (channel bssid ssid), <ifc>.scans (log).
+# <ifc>.reject (a channel list it refuses, or "all"), <ifc>.stuck (a channel whose figures don't change),
+# <ifc>.nolist (no per-channel figures), <ifc>.nets (channel bssid ssid), <ifc>.scans (each scan's channels).
 cat > "$t/bin/wl" <<'EOF'
 #!@BB@ sh
 F=@F@; ifc=$2; cmd=$3
@@ -71,12 +71,11 @@ case "$cmd" in
 	scan)
 		if [ "$4" = -c ]; then
 			echo "$5" >> "$F/$ifc.scans"
-			if [ -f "$F/$ifc.reject_rest" ]; then echo "wl: Scan Rejected" >&2; exit 1; fi
-			if [ -f "$F/$ifc.noop_rest" ]; then : > "$F/$ifc.heard"; exit 0; fi
+			r=$(cat "$F/$ifc.reject" 2>/dev/null || true)
+			if [ "$r" = all ] || [ "$r" = "$5" ]; then echo "wl: Scan Rejected" >&2; exit 1; fi
 			visit $(echo "$5" | tr ',' ' ')
 		else
-			echo full >> "$F/$ifc.scans"
-			visit $(all | tr ' ' '\n' | head -n "$(cat "$F/$ifc.cut" 2>/dev/null || echo 99)")
+			echo full >> "$F/$ifc.scans"; visit $(all)
 		fi ;;
 	scanresults)
 		while read -r c b s; do
@@ -111,56 +110,54 @@ measured() { q "SELECT count(*) FROM chanim WHERE band='5g' AND ts=$ts"; }
 nets() { q "SELECT count(*) FROM aps WHERE band='5g' AND ts=$ts"; }
 fig() { q "SELECT obss || ',' || nocat || ',' || noise FROM chanim WHERE band='5g' AND ts=$ts AND ch=$1"; }
 calls() { tail -n +"$1" "$F/eth7.scans" | tr '\n' ' ' | sed 's/ $//'; }
-REST=108,112,116,120,124,128,132,136,140
+G5="36,40 44,48 52,56 60,64 100,104 108,112 116,120 124,128 132,136 140"; G2="1,2,3,4 5,6,7,8 9,10,11,12 13"
+calls2() { tail -n +"$1" "$F/eth6.scans" | tr '\n' ' ' | sed 's/ $//'; }
+uniq_calls() { sort "$F/eth7.scans" | uniq -d | wc -l | tr -d ' '; }
 
-# 1: a full scan, the first since a reboot: every channel is new
+# 1: the first scan since a reboot: every group once, never the whole band; every channel measured
 scan
-expect "full scan: 5 GHz" "ok, 2 networks in 3 s, 19 channels measured" "$r5"
-expect "full scan: 2.4 GHz" "ok, 1 network in 3 s, 13 channels measured" "$r2"
-expect "full scan: no follow-up" "full" "$(calls 1)"
+expect "5 GHz: two channels at a time" "$G5" "$(calls 1)"
+expect "2.4 GHz: four at a time" "$G2" "$(calls2 1)"
+like "5 GHz: every channel measured" "ok, 2 networks in * s, 19 channels measured" "$r5"
+like "2.4 GHz: every channel measured" "ok, 1 network in * s, 13 channels measured" "$r2"
+expect "networks from every group (36 and 124)" "2" "$(nets)"
 
-# 2: the driver stops at 104 (a busy channel). The rest is scanned, and what it hears there counts.
-# Channel 52's figures happen not to change: it's before 104, so it was reached and still counts.
-echo 10 > "$F/eth7.cut"; echo 52 > "$F/eth7.stuck"; n=$(wc -l < "$F/eth7.scans")
-scan
-like "stopped at 104: finished with a second scan" "ok, 2 networks in * s, stopped at 104 and finished with a second scan, 19 channels measured" "$r5"
-expect "stopped at 104: the follow-up asked for 108-140" "full $REST" "$(calls $((n + 1)))"
-expect "stopped at 104: every channel measured, both networks kept" "19|2" "$(measured)|$(nets)"
-expect "stopped at 104: 124 has the follow-up's figures (3rd visit), not the first scan's" "14,3,-91" "$(fig 124)"
-expect "stopped at 104: 36 has this scan's figures (2nd visit)" "8,2,-90" "$(fig 36)"
-expect "stopped at 104: 52 (same figures, before 104) counts" "1" "$(q "SELECT count(*) FROM chanim WHERE band='5g' AND ts=$ts AND ch=52")"
-expect "stopped at 104: 2.4 GHz unaffected" "ok, 1 network in 3 s, 13 channels measured" "$r2"
-rm -f "$F/eth7.stuck"
-
-# 3: the follow-up is refused: only what the scan reached is stored, not 108-140's old figures
-touch "$F/eth7.reject_rest"
-scan
-expect "follow-up refused: 10 channels, not the 19 the driver lists" "ok, 1 network in 3 s, 10 channels measured" "$r5"
-expect "follow-up refused: no rows for 108-140" "10|0" "$(measured)|$(q "SELECT count(*) FROM chanim WHERE band='5g' AND ts=$ts AND ch>=108")"
-rm -f "$F/eth7.reject_rest"
-
-# 4: a follow-up that reaches nothing isn't repeated for the same channels (until a reboot)
-touch "$F/eth7.noop_rest"; n=$(wc -l < "$F/eth7.scans")
-scan
-expect "follow-up reached nothing: tried once" "full $REST" "$(calls $((n + 1)))"
-expect "follow-up reached nothing: 10 channels" "ok, 1 network in 3 s, 10 channels measured" "$r5"
+# 2: the next scan: this scan's figures (2nd visit), for every channel
 n=$(wc -l < "$F/eth7.scans")
 scan
-expect "...and not tried again" "full" "$(calls $((n + 1)))"
-rm -f "$F/eth7.noop_rest" "$R/tmp/wifiinsight/rest_5g.skip"
+expect "next scan: the same groups" "$G5" "$(calls $((n + 1)))"
+# (the stand-in counts every group it scans: 36 is its 11th visit and 124 its 18th)
+expect "next scan: 19 channels, this scan's figures" "19|1,1,-91|8,3,-90" "$(measured)|$(fig 36)|$(fig 124)"
 
-# 5: a driver without per-channel figures: no way to tell what was reached, so no follow-up
-touch "$F/eth7.nolist"; n=$(wc -l < "$F/eth7.scans")
+# 3: a group the radio refuses: retried for 20 s, then skipped. Its channels keep their old figures in
+# the driver's list, and those aren't stored for this scan; nor is the network only heard there.
+echo 124,128 > "$F/eth7.reject"
 scan
-expect "no per-channel figures: the scan as before" "ok, 1 network in 3 s" "$r5"
-expect "no per-channel figures: no follow-up" "full" "$(calls $((n + 1)))"
+like "refused group: reported" "ok, 1 network in * s, 1 of 10 channel groups not scanned (wl said \"Scan Rejected\" for 2? s), 17 channels measured" "$r5"
+expect "refused group: no rows for 124 and 128, the rest stored" "17|0|1" "$(measured)|$(q "SELECT count(*) FROM chanim WHERE band='5g' AND ts=$ts AND ch IN (124, 128)")|$(nets)"
+rm -f "$F/eth7.reject"
+
+# 4: a channel whose figures happen not to change: it comes before one that did, so it was measured
+echo 124 > "$F/eth7.stuck"
+scan
+like "unchanged figures before a changed channel still count" "ok, 2 networks in * s, 19 channels measured" "$r5"
+rm -f "$F/eth7.stuck"
+
+# 5: a driver without per-channel figures: networks from every group, no measurements
+touch "$F/eth7.nolist"
+scan
+like "no per-channel figures: networks only" "ok, 2 networks in * s" "$r5"
+case "$r5" in *measured*) bad "no per-channel figures: nothing measured" ;; *) ok "no per-channel figures: nothing measured" ;; esac
 rm -f "$F/eth7.nolist"
 
-# 6: back to a full scan: no follow-up, every channel measured
-rm -f "$F/eth7.cut"; n=$(wc -l < "$F/eth7.scans")
+# 6: every group refused: busy, and the previous scan stays
+echo all > "$F/eth7.reject"; before=$ts
 scan
-expect "full scan again" "ok, 2 networks in 3 s, 19 channels measured" "$r5"
-expect "full scan again: no follow-up" "full" "$(calls $((n + 1)))"
-grep -q 'scan 5g (eth7): ok, 2 networks in .* s, stopped at 104 and finished with a second scan, 19 channels measured' "$F/log" && ok "syslog says when a scan was finished" || bad "syslog line for the finished scan"
+like "every group refused: busy" "busy, wl said \"Scan Rejected\" for 2? s" "$r5"
+expect "every group refused: no new 5 GHz scan stored" "$before" "$ts"
+rm -f "$F/eth7.reject"
 
-[ $fail -eq 0 ] && echo "Short scans: all checks passed." || { echo "::error::Short scans: some checks failed."; exit 1; }
+expect "never a whole-band scan" "0" "$(grep -c '^full$' "$F/eth7.scans" "$F/eth6.scans" | awk -F: '{ s += $2 } END { print s }')"
+grep -q 'scan 5g (eth7): ok, 2 networks in .* s, 19 channels measured' "$F/log" && ok "syslog lines" || bad "syslog lines"
+
+[ $fail -eq 0 ] && echo "Gentle scans: all checks passed." || { echo "::error::Gentle scans: some checks failed."; exit 1; }

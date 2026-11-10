@@ -23,6 +23,7 @@ fail=0
 ok()  { echo "ok    $*"; }
 bad() { echo "FAIL  $*"; fail=1; }
 expect() { if [ "$3" = "$2" ]; then ok "$1"; else bad "$1"; echo "      want: $2"; echo "      got:  $3"; fi; }
+like() { case "$3" in $2) ok "$1" ;; *) bad "$1"; echo "      want: $2"; echo "      got:  $3" ;; esac; }
 
 # RT-AX86U, 3004.388.12_2, `wl -i eth7 chanim_stats all` after a scan (first 11 of 19 channels)
 V3_5G='version: 3
@@ -127,7 +128,18 @@ cat > "$t/bin/nvram" <<'EOF'
 #!/bin/sh
 case "$2" in ntp_ready) echo 1 ;; wl0_ifname) echo eth6 ;; wl1_ifname) echo eth7 ;; wl0_ssid|wl1_ssid) echo HomeNet ;; esac
 EOF
-printf '%s' "$V3_2G" > "$F/chanim_eth6"; printf '%s' "$V3_5G" > "$F/chanim_eth7"
+# The stand-in radio keeps each channel's figures (list_<ifc>/<channel>) and, like a real one, updates
+# only the channels a scan visits, from what it would measure there now (src_<ifc>/<channel>).
+src() {   # ifc text: one file per channel in src_<ifc>, from `wl chanim_stats all` output
+	rm -rf "$F/src_$1"; mkdir -p "$F/src_$1"
+	printf '%s\n' "$2" | while IFS= read -r l; do
+		case "$l" in
+			*"chanspec: 0x"*) h=${l#*chanspec: }; h=${h%% *}; c=$(( h & 255 )); printf '%s\n' "$l" > "$F/src_$1/$c" ;;
+			*cca_*) [ -n "${c:-}" ] && printf '%s\n' "$l" >> "$F/src_$1/$c" ;;
+		esac
+	done
+}
+src eth6 "$V3_2G"; src eth7 "$V3_5G"
 cat > "$t/bin/wl" <<EOF
 #!$bb sh
 F="$F"; ifc=\$2
@@ -135,9 +147,14 @@ case "\$3" in
 	isup) echo 1 ;;
 	chanspec) [ "\$ifc" = eth6 ] && echo "1 (0x1001)" || echo "100l (0xd866)" ;;
 	channels) [ "\$ifc" = eth6 ] && echo "1 2 3 4 5 6 7 8 9 10 11 12 13" || echo "36 40 44 48 52 56 60 64 100 104 108 112 116 120 124 128 132 136 140" ;;
-	scan) touch "\$F/scanned_\$ifc"; if [ -f "\$F/chanim_\$ifc.next" ]; then mv "\$F/chanim_\$ifc.next" "\$F/chanim_\$ifc"; fi ;;   # a scan brings new figures
+	scan)   # gentle scans: "scan -c 36,40"; the visited channels get new figures
+		mkdir -p "\$F/list_\$ifc"
+		for c in \$(echo "\$5" | tr ',' ' '); do if [ -f "\$F/src_\$ifc/\$c" ]; then cp "\$F/src_\$ifc/\$c" "\$F/list_\$ifc/\$c"; fi; done ;;
 	scanresults) printf 'SSID: "Neighbour"\nMode: Managed\tRSSI: -60 dBm\tChannel: %s\nBSSID: 02:00:00:00:00:01\tCapability: ESS\n' "\$( [ "\$ifc" = eth6 ] && echo 6 || echo 36)" ;;
-	chanim_stats) [ "\$4" = all ] && [ -f "\$F/scanned_\$ifc" ] && [ -f "\$F/chanim_\$ifc" ] && cat "\$F/chanim_\$ifc" ;;   # nothing until a scan, as after a reboot
+	chanim_stats)   # nothing until a scan, as after a reboot
+		[ "\$4" = all ] || exit 1
+		echo "version: 3"; echo "CHAN Interference Measurement:"; echo "Stats during last scan:"
+		for c in \$(ls "\$F/list_\$ifc" 2>/dev/null | sort -n); do cat "\$F/list_\$ifc/\$c"; done ;;
 	country) [ -f "\$F/country" ] && cat "\$F/country" || { echo "wl: Unsupported" >&2; exit 1; } ;;
 	*) exit 1 ;;
 esac
@@ -152,8 +169,8 @@ q() { "$sqlite" "$D/wifiinsight.db" "$1"; }
 live_measured() { run export > /dev/null 2>&1 || true; python3 -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1]))["measured"], sort_keys=True))' "$R/www/user/wifiinsight/live.htm" 2>&1; }
 expect "live.htm before a scan with this version: no figures yet (the page says they start with the next scan)" "{}" "$(live_measured)"
 out=$(run scan 2>&1) || true
-expect "scan: 5 GHz says how many channels were measured" "ok, 1 network in 3 s, 11 channels measured" "$(printf '%s\n' "$out" | sed -n 's/^  5g (eth7): //p')"
-expect "scan: 2.4 GHz too" "ok, 1 network in 3 s, 3 channels measured" "$(printf '%s\n' "$out" | sed -n 's/^  2g (eth6): //p')"
+like "scan: 5 GHz says how many channels were measured" "ok, 1 network in * s, 11 channels measured" "$(printf '%s\n' "$out" | sed -n 's/^  5g (eth7): //p')"
+like "scan: 2.4 GHz too" "ok, 1 network in * s, 3 channels measured" "$(printf '%s\n' "$out" | sed -n 's/^  2g (eth6): //p')"
 expect "scan: measurements stored with each band's scan time" "14|14" "$(q "SELECT count(*) FROM chanim;")|$(q "SELECT count(*) FROM chanim c JOIN scans s ON s.ts=c.ts AND s.band=c.band AND s.ch=c.ch;")"
 python3 - "$R/www/user/wifiinsight/scans.htm" <<'EOF' && ok "scans.htm: measured values next to the estimate" || bad "scans.htm measured values"
 import json, sys
@@ -180,10 +197,10 @@ assert row[3][7:13] == [0.0, 16.0, 16.0, -67.0, 3700.0, 1], row[3]
 assert len(row[13]) == 7, row[13]                              # channel 13 wasn't measured
 EOF
 # a router whose driver doesn't list channels: the scan works as before (2.4 GHz measures new figures)
-rm -f "$F/chanim_eth7"; echo 1800001800 > "$F/clock"
-printf '%s' "$V3_2G" | sed 's/crsglitch cnt: \([0-9]*\)/crsglitch cnt: 1\1/' > "$F/chanim_eth6.next"
+rm -rf "$F/src_eth7" "$F/list_eth7"; echo 1800001800 > "$F/clock"
+src eth6 "$(printf '%s' "$V3_2G" | sed 's/crsglitch cnt: \([0-9]*\)/crsglitch cnt: 1\1/')"
 out=$(run scan 2>&1) || true
-expect "no per-channel list: the scan reports no measurements" "ok, 1 network in 3 s" "$(printf '%s\n' "$out" | sed -n 's/^  5g (eth7): //p')"
+like "no per-channel list: the scan reports no measurements" "ok, 1 network in * s" "$(printf '%s\n' "$out" | sed -n 's/^  5g (eth7): //p')"
 expect "no per-channel list: live.htm says 0 for that band" '{"2g": 3, "5g": 0}' "$(live_measured)"
 # prune keeps the retention for measurements too
 echo $(( 1800000000 + 31 * 86400 )) > "$F/clock"

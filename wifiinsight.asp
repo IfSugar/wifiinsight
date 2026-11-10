@@ -1344,7 +1344,7 @@ function scanNow() {
 		});
 		return out.length ? out.join('; ') + '. Kept the previous scan.' : '';
 	};
-	btn.disabled = true; btn.textContent = 'Scanning…'; say('About 15 seconds, up to a minute on some routers');
+	btn.disabled = true; btn.textContent = 'Scanning…'; say('About half a minute: a few channels at a time, so Wi-Fi barely notices');
 	getJSON('scanstate.htm').then(function (s) { s0 = s; }, function () { s0 = { seq: -1, state: 'none' }; }).then(function () {
 		document.formScriptActions.action_script.value = 'start_wifiinsightscan';
 		document.formScriptActions.submit();
@@ -1356,7 +1356,7 @@ function scanNow() {
 					if (waited > 15000) finish('The router didn\'t start the scan. Check that WiFi Insight is installed (wifiinsight.sh status).', true);
 					return;
 				}
-				if (s.state === 'running') { if (waited > 150000) finish('The scan is taking longer than expected. Results will appear when it finishes.', true); return; }
+				if (s.state === 'running') { if (waited > 300000) finish('The scan is taking longer than expected. Results will appear when it finishes.', true); return; }
 				if (s.state === 'error') { finish(s.msg || 'The scan failed.', true); return; }
 				loadAll({ scans: 1 }).then(function () { var p = problems(s.bands, s.notes); finish(p || 'Scan complete', !!p); });
 			}, function () { if (waited > 15000) finish('The router didn\'t start the scan.', true); });
@@ -1484,7 +1484,7 @@ window.WiFiInsight = {
 		<div class="grow"></div>
 		<span class="qmark" id="wiQuietMark"></span>
 		<span class="scannote" id="wiScanNote"></span>
-		<button type="button" class="btn" id="wiScanBtn" onclick="WiFiInsight.scanNow()" title="Scans every channel on every radio now (about 15 seconds, up to a minute on some routers). Wi-Fi may pause for about a second on each radio.">Scan now</button>
+		<button type="button" class="btn" id="wiScanBtn" onclick="WiFiInsight.scanNow()" title="Scans every channel on every radio now, a few channels at a time (about half a minute, longer on some routers).">Scan now</button>
 	</div>
 	<div class="warn" id="wiQuiet"></div>
 
@@ -1612,7 +1612,7 @@ window.WiFiInsight = {
 					<div class="hint">How often the router's own channel is measured. Reading these counters doesn't affect Wi-Fi.</div></div>
 				<div class="lbl">Neighbour scans</div>
 				<div><select id="setScan"><option value="0">Off</option><option value="15">Every 15 minutes</option><option value="30">Every 30 minutes</option><option value="60">Every hour</option><option value="120">Every 2 hours</option><option value="180">Every 3 hours</option><option value="360">Every 6 hours</option></select>
-					<div class="hint">Feeds the spectrum map, site survey and channel statistics. Each scan pauses Wi-Fi for about a second; quiet hours below skip scheduled scans.</div></div>
+					<div class="hint">Feeds the spectrum map, site survey and channel statistics. Scans visit a few channels at a time and return to yours in between, so Wi-Fi barely notices; quiet hours below skip scheduled scans.</div></div>
 				<div class="lbl">Keep history for</div>
 				<div><select id="setRetain"><option value="7">7 days</option><option value="14">14 days</option><option value="30">30 days</option><option value="60">60 days</option><option value="90">90 days</option><option value="180">180 days</option></select>
 					<div class="hint">Channel events are kept for a year.</div></div>
@@ -1626,7 +1626,7 @@ window.WiFiInsight = {
 			</div>
 		</div>
 		<div class="card">
-			<div class="head"><div class="grow"><h3>Quiet hours</h3><div class="sub">No scheduled scans in the marked half hours, so no Wi-Fi blips. Sampling and Scan now still work. Click or drag to mark or clear.</div></div></div>
+			<div class="head"><div class="grow"><h3>Quiet hours</h3><div class="sub">No scheduled scans in the marked half hours. Sampling and Scan now still work. Click or drag to mark or clear.</div></div></div>
 			<div class="qpresets" id="qPresets"></div>
 			<div class="qgrid" id="qGrid"></div>
 			<div class="foot" style="margin-top:10px">

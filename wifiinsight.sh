@@ -581,9 +581,8 @@ scan_next_seq() {
 }
 
 # The driver keeps each channel's last figures between scans and overwrites only the channels a scan
-# reaches, and on a busy channel it can stop a scan early (an RT-AX86U on 3004.388 reached 36-104 of
-# 36-140 in the daytime). So compare the radio's list before and after: a channel whose figures changed
-# was measured, and as scans go through the channels in order, so was every channel before it.
+# reaches, so compare the radio's list before and after: a channel whose figures changed was measured,
+# and as scans go through the channels in order, so was every channel before it.
 chanim_reached() {   # "channels in scan order" before-file after-file band -> "reached|not reached"
 	parse_chanim_all 0 "$4" raw < "$2" > "$2.raw"
 	parse_chanim_all 0 "$4" raw < "$3" > "$3.raw"
@@ -601,30 +600,6 @@ chanim_reached() {   # "channels in scan order" before-file after-file band -> "
 	}'
 	rm -f "$2.raw" "$3.raw"
 }
-# Finish a scan the driver stopped early: scan the channels it didn't reach. Appends what it hears to
-# the scan's results and leaves the radio's list in after-file.
-scan_rest() {   # ifc band "channels" before-file after-file results-file
-	t0=$(now)
-	until wl -i "$1" scan -c "$(echo $3 | tr ' ' ',')" > /dev/null 2>&1; do
-		[ $(( $(now) - t0 )) -ge 10 ] && return 1
-		sleep 2
-	done
-	t1=$(now); sleep 2
-	while :; do   # done when the last channel has new figures (passive DFS channels take a moment each)
-		wl -i "$1" chanim_stats all > "$5" 2>/dev/null
-		p=$(chanim_reached "$3" "$4" "$5" "$2")
-		[ -z "${p#*|}" ] && break
-		[ $(( $(now) - t1 )) -ge 12 ] && break
-		sleep 1
-	done
-	for i in 1 2 3; do
-		if wl -i "$1" scanresults > "$TMPD/scan_rest.txt" 2>/dev/null; then cat "$TMPD/scan_rest.txt" >> "$6"; break; fi
-		sleep 1
-	done
-	rm -f "$TMPD/scan_rest.txt"
-	return 0
-}
-
 scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in quiet hours
 	if [ "$1" = "--delay" ]; then
 		[ "$COLLECTION" = on ] || return 0
@@ -650,29 +625,12 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 		band=$(band_of_hex "$hex"); chs=$(radio_channels "$ifc" "$band")
 		m0="$TMPD/chanim_$band.before"; m1="$TMPD/chanim_$band.after"; all="$TMPD/scan_$band.all"
 		wl -i "$ifc" chanim_stats all > "$m0" 2>/dev/null   # the figures the radio still holds from earlier scans
-		ts0=$(now)
-		scan_radio "$ifc" "$band"
+		cp "$m0" "$m1"
+		scan_band "$ifc" "$band" "$chs" "$m0" "$m1" "$all"
 		if [ "$result" = ok ]; then
-			sts=$(now); cp "$res" "$all"
-			wl -i "$ifc" chanim_stats all > "$m1" 2>/dev/null
-			p=$(chanim_reached "$chs" "$m0" "$m1" "$band"); got=${p%%|*}; rest=${p#*|}
-			# stopped early: scan the channels it didn't reach (twice at most), so every scan covers them all.
-			# If that reached none of them, don't try the same channels again until a reboot.
-			more=0; stop=${got##* }; skip="$TMPD/rest_$band.skip"
-			[ -n "$rest" ] && [ "$(cat "$skip" 2>/dev/null)" = "$rest" ] && rest=""
-			while [ -n "$got" ] && [ -n "$rest" ] && [ $more -lt 2 ]; do
-				cp "$m1" "$m0"
-				scan_rest "$ifc" "$band" "$rest" "$m0" "$m1" "$all" || break
-				p=$(chanim_reached "$rest" "$m0" "$m1" "$band")
-				if [ -z "${p%%|*}" ]; then [ $more -eq 0 ] && echo "$rest" > "$skip"; break; fi
-				more=$((more + 1)); got="$got ${p%%|*}"; rest=${p#*|}
-			done
-			if [ $more -gt 0 ]; then
-				nn=$(grep '^BSSID' "$all" | awk '{ print $2 }' | sort -u | wc -l | tr -d ' ')
-				detail="$nn network$( [ "$nn" = 1 ] || printf s) in $(( $(now) - ts0 )) s, stopped at $stop and finished with $( [ $more = 1 ] && echo 'a second scan' || echo "$more more scans")"
-			fi
+			sts=$(now)
 			parse_scan "$sts" "$band" "$chs" "$ownf" < "$all" | sql
-			# what the radio measured on each channel this scan reached, where the driver reports it
+			# what the radio measured on each channel the scan reached, where the driver reports it
 			msql="$TMPD/chanim_$band.sql"
 			parse_chanim_all "$sts" "$band" < "$m1" | awk -v got="$got" '
 				BEGIN { n = split(got, G, " "); for (i = 1; i <= n; i++) K[G[i]] = 1 }
@@ -680,11 +638,11 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 				{ print }' > "$msql"
 			mc=$(grep -c '^INSERT' "$msql")
 			if [ "$mc" -gt 0 ] 2>/dev/null && sql < "$msql"; then detail="$detail, $mc channels measured"; else mc=0; fi
-			rm -f "$msql" "$m1" "$all"
+			rm -f "$msql"
 			# the page says "starts with the next scan" until a scan has run with this version
 			[ "$(cat "$DATA_DIR/measured_$band" 2>/dev/null)" = "$mc" ] || echo "$mc" > "$DATA_DIR/measured_$band"
 		fi
-		rm -f "$m0"
+		rm -f "$m0" "$m1" "$all"
 		bands="$bands${bands:+,}\"$band\":\"$result\""
 		notes="$notes${notes:+,}\"$band\":\"$(js "$detail")\""
 		log "scan $band ($ifc): $result${detail:+, $detail}"
@@ -702,37 +660,62 @@ wl_said() {   # errfile seconds fallback -> 'wl said "Not Ready" for 45 s', or '
 	if [ -n "$m" ]; then printf 'wl said "%s" for %s s' "$m" "$2"; else printf '%s after %s s' "$3" "$2"; fi
 }
 
-# One radio's neighbour scan. Sets result (ok, busy, empty or off) and detail; the results are in $res.
-# The driver answers "Not Ready" until the scan ends, so poll for the results instead of guessing how
-# long a scan takes: 2.4 GHz scans take a few seconds, 5 GHz ones longer (more channels, and DFS channels
-# are listened to rather than probed), and much longer on some drivers (3006.102 / 17.10).
-scan_radio() {   # ifc band
-	result=ok; detail=""; res="$TMPD/scan_$2.txt"; err="$TMPD/scan_$2.err"; : > "$res"
+# One band's neighbour scan, done gently: two channels at a time (four on 2.4 GHz), back on the router's
+# channel in between. Each absence is a fraction of a second, which connections ride out: a whole-band
+# scan kept the radio away long enough for apps on an iPhone to stall for 20-30 s, and on a busy channel
+# the driver could stop one partway (an RT-AX86U stopped at 104 of 36-140). Each group is polled until
+# the radio has measured it or its results are in (some drivers answer "Not Ready" until then), and a
+# group the radio refuses (busy with another scan, or "Scan Rejected") is retried for up to 20 s.
+# Sets result (ok, busy, empty or off), detail and got (the channels the radio measured), writes the
+# networks heard to results-file and leaves the radio's per-channel list in after-file.
+scan_band() {   # ifc band "channels" before-file after-file results-file
+	result=ok; detail=""; got=""; : > "$6"
 	if [ "$(wl -i "$1" isup 2>/dev/null)" != "1" ]; then result=off; return 0; fi
-	# The radio refuses a scan while it's already scanning (Smart Connect, AiMesh, acsd): retry for up to 20 s.
-	t0=$(now)
-	until wl -i "$1" scan > /dev/null 2> "$err"; do
-		if [ $(( $(now) - t0 )) -ge 20 ]; then
-			result=busy; detail=$(wl_said "$err" 20 "still busy"); return 0
-		fi
-		sleep 2
-	done
-	limit=45; [ "$2" = 2g ] && limit=20
-	t1=$(now); sleep 3
-	while :; do
-		el=$(( $(now) - t1 ))
-		if wl -i "$1" scanresults > "$res" 2> "$err"; then
-			if grep -q '^BSSID' "$res"; then
-				nn=$(grep -c '^BSSID' "$res"); detail="$nn network$( [ "$nn" = 1 ] || printf s) in ${el} s"; return 0
+	n=2; [ "$2" = 2g ] && n=4
+	err="$TMPD/scan_$2.err"; out="$TMPD/scan_$2.txt"; t0=$(now)
+	total=0; scanned=0; missed=0; why=""
+	for g in $(echo $3 | awk -v n=$n '{ for (i = 1; i <= NF; i += n) { g = $i; for (j = i + 1; j < i + n && j <= NF; j++) g = g "," $j; print g } }'); do
+		total=$((total + 1))
+		if [ $(( $(now) - t0 )) -ge 200 ]; then missed=$((missed + 1)); continue; fi   # out of time
+		[ $total -gt 1 ] && sleep 1   # back on the router's channel between groups
+		t1=$(now); ok=0
+		while :; do
+			if wl -i "$1" scan -c "$g" > /dev/null 2> "$err"; then ok=1; break; fi
+			[ $(( $(now) - t1 )) -ge 20 ] && break
+			sleep 2
+		done
+		if [ $ok = 0 ]; then missed=$((missed + 1)); why=$(wl_said "$err" $(( $(now) - t1 )) "refused"); continue; fi
+		scanned=$((scanned + 1)); gl=$(echo "$g" | tr ',' ' '); t2=$(now); ok=0
+		sleep 1
+		while :; do
+			el=$(( $(now) - t2 ))
+			if wl -i "$1" scanresults > "$out" 2> "$err"; then
+				wl -i "$1" chanim_stats all > "$5" 2>/dev/null
+				p=$(chanim_reached "$gl" "$4" "$5" "$2")
+				# done when the radio has new figures for the whole group, or a moment later (drivers
+				# without per-channel figures, or a channel whose figures came out the same)
+				if [ -z "${p#*|}" ] || [ $el -ge 2 ]; then ok=1; break; fi
 			fi
-			# Finished with nothing heard, or a driver that answers before the scan ends: give it 12 s.
-			if [ $el -ge 12 ]; then result=empty; detail="no networks heard in ${el} s"; return 0; fi
-		fi
-		if [ $el -ge $limit ]; then
-			result=empty; detail=$(wl_said "$err" "$el" "no results"); return 0
-		fi
-		sleep 2
+			[ $el -ge 15 ] && break
+			sleep 1
+		done
+		if [ $ok = 0 ]; then missed=$((missed + 1)); why=$(wl_said "$err" "$el" "no results"); continue; fi
+		cat "$out" >> "$6"
+		got=$(echo $got ${p%%|*})
+		cp "$5" "$4"
 	done
+	rm -f "$out"
+	el=$(( $(now) - t0 ))
+	nn=$(grep '^BSSID' "$6" | awk '{ print $2 }' | sort -u | wc -l | tr -d ' ')
+	if [ $scanned -eq 0 ]; then result=busy; detail=$why; return 0; fi
+	if [ "$nn" -eq 0 ] && [ -z "$got" ]; then
+		result=empty
+		if [ $missed -ge $scanned ] && [ -n "$why" ]; then detail=$why; else detail="no networks heard in $el s"; fi
+		return 0
+	fi
+	detail="$nn network$( [ "$nn" = 1 ] || printf s) in $el s"
+	[ $missed -gt 0 ] && detail="$detail, $missed of $total channel groups not scanned${why:+ ($why)}"
+	return 0
 }
 
 # A scan pauses sampling; a flag left behind by a killed scan is ignored after 5 minutes.
@@ -1337,7 +1320,7 @@ install() {
 	if ready; then
 		collect --once
 		if [ "$(sql "SELECT count(*) FROM scans;" 2>/dev/null)" = "0" ]; then
-			say "Running the first neighbour scan (Wi-Fi may hiccup for a second)..."
+			say "Running the first neighbour scan (about half a minute, a few channels at a time)..."
 			scan
 		else
 			say "Kept your history: neighbour scans carry on as scheduled."   # an update: no extra scan

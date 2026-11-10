@@ -1,9 +1,10 @@
 #!/bin/bash
 # Regression test: neighbour scans wait for the driver instead of a fixed time.
 #
-# Until a scan ends, `wl scanresults` answers "Not Ready". On 3006.102 (driver 17.10) routers the
-# 5 GHz scan takes longer than the 9 s WiFi Insight used to wait, so 5 GHz never got a scan. The
-# script now polls: up to 20 s for 2.4 GHz and 45 s for 5/6 GHz, and up to 20 s for a busy radio.
+# Scans go a few channels at a time (see gentle-scans.sh). Until each one ends, `wl scanresults` may
+# answer "Not Ready" (3006.102 / driver 17.10 routers are slow), so each group is polled for up to 15 s;
+# a group the radio refuses (busy with another scan) is retried for up to 20 s, and a band stops
+# starting new groups after 200 s. Results are read 2 s into a group at the earliest.
 #
 # A stand-in wl simulates slow, busy, silent and switched-off radios, on a fake clock (date +%s and
 # sleep), so the test takes seconds. Runs with Merlin's BusyBox commands only, like large-history.sh.
@@ -47,7 +48,7 @@ case "$2" in ntp_ready) echo 1 ;; wl0_ifname) echo eth6 ;; wl1_ifname) echo eth7
 EOF
 # Stand-in driver. Per interface, in $F: <ifc>.ready (seconds from the scan until results, or "never"),
 # <ifc>.busy (scan refused until this clock time), <ifc>.empty (scan ends with nothing heard),
-# <ifc>.down (radio off).
+# <ifc>.down (radio off), <ifc>.reject (a channel group it always refuses).
 cat > "$t/bin/wl" <<EOF
 #!$bb sh
 F="$F"; ifc=\$2; now=\$(cat "\$F/clock")
@@ -57,6 +58,7 @@ case "\$3" in
 	channels) [ "\$ifc" = eth6 ] && echo "1 2 3 4 5 6 7 8 9 10 11" || echo "36 40 44 48 52 56 60 64 100 104 108 112 116 120 124 128 132 136 140" ;;
 	scan)
 		if [ -f "\$F/\$ifc.busy" ] && [ "\$now" -lt "\$(cat "\$F/\$ifc.busy")" ]; then echo "wl: Busy" >&2; exit 1; fi
+		if [ -f "\$F/\$ifc.reject" ] && [ "\$5" = "\$(cat "\$F/\$ifc.reject")" ]; then echo "wl: Scan Rejected" >&2; exit 1; fi
 		echo "\$now" > "\$F/\$ifc.started" ;;
 	scanresults)
 		r=\$(cat "\$F/\$ifc.ready" 2>/dev/null || echo 2); s=\$(cat "\$F/\$ifc.started" 2>/dev/null || echo 0)
@@ -103,25 +105,27 @@ r, _, note = want.partition(', ')
 sys.exit(0 if s['state'] == 'done' and s['bands']['5g'] == r and s['notes']['5g'] == note else 1)
 EOF
 }
-reset() { rm -f "$F"/*.ready "$F"/*.busy "$F"/*.empty "$F"/*.down; }
+reset() { rm -f "$F"/*.ready "$F"/*.busy "$F"/*.empty "$F"/*.down "$F"/*.reject; }
 
-reset; echo 2 > "$F/eth6.ready"; echo 4 > "$F/eth7.ready"
-case_ "a quick scan (RT-AX86U-like)" "ok, 2 networks in 3 s" "ok, 2 networks in 5 s"
-reset; echo 3 > "$F/eth6.ready"; echo 20 > "$F/eth7.ready"
-case_ "a 5 GHz scan that takes 20 s (17.10 driver)" "ok, 2 networks in 3 s" "ok, 2 networks in 21 s"
-reset; echo 40 > "$F/eth7.ready"
-case_ "a 5 GHz scan that takes 40 s" "ok, 2 networks in 3 s" "ok, 2 networks in 41 s"
-reset; echo $(( $(cat "$F/clock") + 15 )) > "$F/eth7.busy"; echo 6 > "$F/eth7.ready"
-case_ "5 GHz busy for a while (acsd, Smart Connect)" "ok, 2 networks in 3 s" "ok, 2 networks in 7 s"
-reset; echo never > "$F/eth7.ready"
-case_ "5 GHz never finishes" "ok, 2 networks in 3 s" "empty, wl said \"Not Ready\" for 45 s"
+# 2.4 GHz: 3 groups (1-4, 5-8, 9-11); 5 GHz: 10 groups of two. A group takes max(2 s, its scan), plus
+# 1 s back on the router's channel before each group after the first.
+reset; echo 2 > "$F/eth6.ready"; echo 2 > "$F/eth7.ready"
+case_ "a quick driver (RT-AX86U-like)" "ok, 2 networks in 8 s" "ok, 2 networks in 29 s"
+reset; echo 6 > "$F/eth7.ready"
+case_ "a slow driver: 6 s per group (17.10)" "ok, 2 networks in 8 s" "ok, 2 networks in 69 s"
+reset; echo 20 > "$F/eth7.ready"
+case_ "5 GHz groups never finish in time" "ok, 2 networks in 8 s" "empty, wl said \"Not Ready\" for 15 s"
+reset; echo $(( $(cat "$F/clock") + 15 )) > "$F/eth7.busy"
+case_ "5 GHz busy for a while (acsd, Smart Connect)" "ok, 2 networks in 8 s" "ok, 2 networks in 37 s"
 reset; echo 99999999999 > "$F/eth7.busy"
-case_ "5 GHz always busy" "ok, 2 networks in 3 s" "busy, wl said \"Busy\" for 20 s"
+case_ "5 GHz always busy" "ok, 2 networks in 8 s" "busy, wl said \"Busy\" for 20 s"
+reset; echo 100,104 > "$F/eth7.reject"
+case_ "one 5 GHz group refused" "ok, 2 networks in 8 s" "ok, 2 networks in 47 s, 1 of 10 channel groups not scanned (wl said \"Scan Rejected\" for 20 s)"
 reset; touch "$F/eth7.empty"
-case_ "5 GHz hears nothing" "ok, 2 networks in 3 s" "empty, no networks heard in 13 s"
+case_ "5 GHz hears nothing" "ok, 2 networks in 8 s" "empty, no networks heard in 29 s"
 reset; touch "$F/eth7.down"
-case_ "5 GHz radio off" "ok, 2 networks in 3 s" "off"
+case_ "5 GHz radio off" "ok, 2 networks in 8 s" "off"
 reset; echo never > "$F/eth6.ready"
-case_ "2.4 GHz gives up after 20 s" "empty, wl said \"Not Ready\" for 21 s" "ok, 2 networks in 3 s"
+case_ "2.4 GHz groups never finish" "empty, wl said \"Not Ready\" for 15 s" "ok, 2 networks in 29 s"
 
 [ $fail -eq 0 ] && echo "Scan wait: all checks passed." || { echo "::error::Scan wait: some checks failed."; exit 1; }

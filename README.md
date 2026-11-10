@@ -122,7 +122,8 @@ It only ever removes a page whose `.title` file says `WiFi Insight`, so other ad
   - **Measured** (where the driver reports it: the RT-AX86U on 3004.388, and the GT-AX6000 on 3006.102 reports them too): while scanning, the radio records each channel's airtime used by other networks (`obss`), non-Wi-Fi energy (`nocat`) and energy it couldn't decode (`nopkt`), plus glitches and the noise floor. WiFi Insight reads them with `wl chanim_stats all` right after the scan. The driver keeps each channel's last figures until a scan reaches it again, so WiFi Insight compares the list before and after, and stores only the channels the scan reached. Each figure comes from a short listen on that channel, so single readings are noisy; the longer ranges average them.
   - **Estimated** (always available, and the fallback): built from the networks heard on each channel.
 
-  For the estimate, each network contributes according to how much it overlaps the channel, how strong its signal is, and the load it advertises (QBSS). Networks with your SSIDs, including your AiMesh node, are listed as yours and kept out of the estimate. Tick **Include my mesh** to add them back. Each scan takes the radio off-channel briefly, so expect a hiccup of about a second. A scan takes a few seconds on 2.4 GHz and longer on 5 and 6 GHz (tens of seconds on some 3006.102 drivers): WiFi Insight waits for the driver to finish, and if a band still fails, Scan now and the syslog say why. With traffic on the router's channel, some drivers stop a 5 GHz scan partway through the band; where the driver reports per-channel figures, WiFi Insight notices and scans the remaining channels right away (a second short hiccup, only then).
+  For the estimate, each network contributes according to how much it overlaps the channel, how strong its signal is, and the load it advertises (QBSS). Networks with your SSIDs, including your AiMesh node, are listed as yours and kept out of the estimate. Tick **Include my mesh** to add them back.
+- **Scans are gentle:** two channels at a time on 5 and 6 GHz, four on 2.4 GHz, back on the router's channel in between. Each absence is a fraction of a second, which connections ride out; a whole-band scan (before 1.2.0) kept the radio away long enough for apps on a phone to stall for 20–30 seconds, and on a busy channel the driver could stop it partway. A scan takes about half a minute. WiFi Insight waits for each group (slow on some 3006.102 drivers), retries a busy radio for up to 20 seconds, and if a band still fails, Scan now and the syslog say why.
 - **Channel events** are detected by comparing the channel and width on every sample:
   - a changed setting in nvram → *Manually configured*
   - a radar line in syslog within 10 minutes → *Regulatory (RADAR)*
@@ -133,7 +134,7 @@ It only ever removes a page whose `.title` file says `WiFi Insight`, so other ad
 
 ## Quiet hours and pausing
 
-If a scan's one-second hiccup gets in the way at certain times (gaming, calls, streaming), mark those half hours as **quiet hours** in Settings: click or drag on the week grid, or start from a preset (evenings, work hours, weekends). No scheduled scans run then. Sampling carries on, since reading the counters doesn't touch Wi-Fi, and **Scan now** still works. Times are the router's local time. While it's quiet, Insight shows *Quiet until …* next to Scan now.
+If scans get in the way at certain times (gaming, calls, streaming), mark those half hours as **quiet hours** in Settings: click or drag on the week grid, or start from a preset (evenings, work hours, weekends). No scheduled scans run then. Sampling carries on, since reading the counters doesn't touch Wi-Fi, and **Scan now** still works. Times are the router's local time. While it's quiet, Insight shows *Quiet until …* next to Scan now.
 
 **Collection** in Settings switches everything:
 
@@ -217,7 +218,7 @@ For amtm's maintainer, the details of a module:
 - **Settings:** the only router setting it may change is *JFFS custom scripts and configs*, switched on if it's off.
 - **Wi-Fi:** it only reads the driver's counters, except for the neighbour scan. No wireless setting is ever changed.
 - **RAM only (gone after a reboot, recreated at boot):** the web page, the menu entry, the cron jobs and the JSON data files (about 1 MB). The menu is edited on a copy and swapped in only if the result is exactly the one expected line.
-- **Load:** the per-minute job takes about 0.5 s of CPU on a 2.1 GHz x86 core with 30 days of history (expect a few times that on the router's ARM cores), at the lowest CPU priority (`nice 19`). Each scan takes the radio off-channel briefly; see *How the numbers are made*.
+- **Load:** the per-minute job takes about 0.5 s of CPU on a 2.1 GHz x86 core with 30 days of history (expect a few times that on the router's ARM cores), at the lowest CPU priority (`nice 19`). Scans take the radio off its channel for a fraction of a second at a time; see *How the numbers are made*.
 
 To remove everything: `wifiinsight.sh uninstall`. If the web UI ever looks wrong, a reboot clears all RAM-side changes.
 

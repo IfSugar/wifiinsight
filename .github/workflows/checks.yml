@@ -53,14 +53,14 @@ jobs:
         # cron jobs for each mode, and scheduled scans must skip quiet hours.
         run: bash .github/tests/quiet-hours.sh
 
-      - name: Check scans wait for the driver (slow 5 GHz scans on 3006.102)
+      - name: Check scans wait for slow and busy radios (3006.102)
         run: bash .github/tests/scan-wait.sh
 
       - name: Check the radio's per-channel measurements are stored and exported
         run: bash .github/tests/measured.sh
 
-      - name: Check scans the driver stops early are finished, and old per-channel figures aren't stored
-        run: bash .github/tests/short-scans.sh
+      - name: Check scans go a few channels at a time, and old per-channel figures aren't stored
+        run: bash .github/tests/gentle-scans.sh
 
       - name: Check bands and widths are read correctly (2.4, 5 and 6 GHz)
         run: bash .github/tests/radio-bands.sh
