@@ -435,7 +435,7 @@ function drawChart(key, boxId, type, datasets, o) {
 		options: {
 			animation: false, responsive: true, maintainAspectRatio: false, parsing: type === 'bar', normalized: true,
 			interaction: { mode: 'index', intersect: false },
-			layout: { padding: { top: 4, right: 6 } },
+			layout: { padding: { top: 4, right: 6, bottom: o.padBottom || 0 } },
 			scales: scales,
 			plugins: {
 				legend: { display: false },
@@ -867,7 +867,7 @@ function renderChannels() {
 	drawChart('cnt', 'wiCntChart', 'bar', [
 		Object.assign({ label: 'Other networks', data: others, backgroundColor: C.others }, barBase),
 		Object.assign({ label: 'Yours', data: mine, backgroundColor: C.yours }, barBase)
-	], { labels: labels, x: xCat, stacked: true, yMin: 0, yStep: 1, plugins: [curBand(ch.map(function (c, i) { return cur.indexOf(c) >= 0 ? i : -1; }).filter(function (i) { return i >= 0; }))], yFmt: function (v) { return Number.isInteger(v) ? v : ''; },
+	], { labels: labels, x: xCat, stacked: true, yMin: 0, yStep: 1, plugins: [curBand(ch.map(function (c, i) { return cur.indexOf(c) >= 0 ? i : -1; }).filter(function (i) { return i >= 0; })), dfsAxis(ch)], padBottom: WI.band === '5g' ? 22 : 0, yFmt: function (v) { return Number.isInteger(v) ? v : ''; },
 		ttTitle: function (it) { return 'Channel ' + it[0].label + (isDfs(+it[0].label) ? ' (' + chanTags(+it[0].label) + ')' : ''); } });
 
 	var L = channelLoads(), meas = L.src === 'measured';
@@ -887,12 +887,12 @@ function renderChannels() {
 		var sets = MEAS.filter(function (m) { return !WI.hidden['meas:' + m[0]]; }).map(function (m) {
 			return Object.assign({ label: m[0], data: ch.map(function (c) { return L.comp[m[0]][c]; }), backgroundColor: m[2], borderWidth: { top: 1 }, borderColor: C.surface }, bar);
 		});
-		drawChart('load', 'wiLoadChart', 'bar', sets, { labels: labels, x: xCat, stacked: true, yMin: 0, plugins: [curBand(curIdx)], yMax: yMax, yFmt: pctFmt, ttTitle: title,
+		drawChart('load', 'wiLoadChart', 'bar', sets, { labels: labels, x: xCat, stacked: true, yMin: 0, plugins: [curBand(curIdx), dfsAxis(ch)], padBottom: WI.band === '5g' ? 22 : 0, yMax: yMax, yFmt: pctFmt, ttTitle: title,
 			ttLabel: function (it) { return ' ' + it.dataset.label + ': ' + (it.parsed.y == null ? '–' : it.parsed.y + '%'); } });
 	} else {
 		var colors = data.map(function (v) { return rampColor(v == null ? 0 : Math.max(8, v)); });
 		drawChart('load', 'wiLoadChart', 'bar', [Object.assign({ label: 'Estimated load', data: data, backgroundColor: colors, borderRadius: { topLeft: 4, topRight: 4 } }, bar)],
-			{ labels: labels, x: xCat, yMin: 0, plugins: [curBand(curIdx)], yMax: yMax, yFmt: pctFmt, ttTitle: title,
+			{ labels: labels, x: xCat, yMin: 0, plugins: [curBand(curIdx), dfsAxis(ch)], padBottom: WI.band === '5g' ? 22 : 0, yMax: yMax, yFmt: pctFmt, ttTitle: title,
 				ttLabel: function (it) { var c = +it.label; return [' Average: ' + (it.parsed.y == null ? '–' : it.parsed.y + '%'), ' Peak: ' + (L.peak[c] == null ? '–' : L.peak[c] + '%')]; } });
 	}
 	/* Noise floor of every channel, where the radio measures it while scanning */
@@ -902,10 +902,19 @@ function renderChannels() {
 		var nzMin = Math.min.apply(null, nz.filter(function (v) { return v != null; })), nzMax = Math.max.apply(null, nz.filter(function (v) { return v != null; }));
 		drawChart('nzch', 'wiNzChChart', 'bar', [Object.assign({ label: 'Noise floor', data: nz.map(function (v) { return v == null ? null : [-110, v]; }), backgroundColor: '#5f7d87',
 			borderRadius: { topLeft: 4, topRight: 4 } }, bar)],
-			{ labels: labels, x: xCat, yMin: Math.max(-110, Math.floor((nzMin - 5) / 5) * 5), yMax: Math.min(-40, Math.ceil((nzMax + 5) / 5) * 5), plugins: [curBand(curIdx)],
+			{ labels: labels, x: xCat, yMin: Math.max(-110, Math.floor((nzMin - 5) / 5) * 5), yMax: Math.min(-40, Math.ceil((nzMax + 5) / 5) * 5), plugins: [curBand(curIdx), dfsAxis(ch)], padBottom: WI.band === '5g' ? 22 : 0,
 				yStep: 5, yFmt: function (v) { return v + ' dBm'; }, ttTitle: title, ttLabel: function (it) { return ' Noise floor: ' + nz[it.dataIndex] + ' dBm'; } });
 	}
 	renderBest(L, ch, r);
+}
+function dfsAxis(ch) {   // the Spectrum's DFS / weather-radar bracket, under a channel chart's labels (5 GHz)
+	return { id: 'wiDfs', afterDraw: function (chart) {
+		if (WI.band !== '5g') return;
+		var x = chart.scales.x, half = (x.getPixelForValue(1) - x.getPixelForValue(0)) / 2, ctx = chart.ctx;
+		ctx.save(); ctx.font = '11px system-ui, -apple-system, Segoe UI, sans-serif';
+		dfsBracket(ctx, ch, function (c) { var p = x.getPixelForValue(ch.indexOf(c)); return [p - half, p + half]; }, x.bottom + 6);
+		ctx.restore();
+	} };
 }
 function curBand(idx) {   // translucent band behind the router's channel(s), like the signal map
 	return { id: 'wiCur', beforeDatasetsDraw: function (chart) {
