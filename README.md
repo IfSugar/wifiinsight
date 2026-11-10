@@ -48,12 +48,12 @@ Time ranges: 10 minutes, 1 hour, 12 hours, 1 day, 7 days and 30 days. Short rang
 
 ## Supported routers
 
-Tested on an RT-AX86U with 3004.388.12_2. Every model current Merlin supports uses Broadcom Wi-Fi on all its radios; what differs is the radio layout and the driver. Models on Merlin 3006.102 have a newer driver (17.10) that prints its airtime statistics differently: they need WiFi Insight 1.0.11 or later. On some of them the driver rejects full 5 GHz scans ("Scan Rejected"), which is being looked into.
+Tested on an RT-AX86U with 3004.388.13_0. Every model current Merlin supports uses Broadcom Wi-Fi on all its radios; what differs is the radio layout and the driver. Models on Merlin 3006.102 have a newer driver (17.10) that prints its airtime statistics differently: they need WiFi Insight 1.0.11 or later. On some of them the driver rejects full 5 GHz scans ("Scan Rejected"), which is being looked into.
 
 | Router | Radios | Status |
 |---|---|---|
 | RT-AX86U | 2.4 + 5 GHz | Tested, including the measured spectrum |
-| RT-AX88U | 2.4 + 5 GHz | Works, scans on both bands (user report) |
+| RT-AX88U | 2.4 + 5 GHz | Works (user report); 5 GHz scans are sometimes refused on a DFS channel, being looked into |
 | RT-AX86U Pro | 2.4 + 5 GHz | Works (user report); one report of 5 GHz scans failing, being looked into |
 | GT-AX6000 | 2.4 + 5 GHz | Charts and 2.4 GHz scans work; the driver rejects full 5 GHz scans ("Scan Rejected"), being looked into |
 | RT-BE88U | 2.4 + 5 GHz | Charts and 2.4 GHz scans work (user report); 5 GHz scans not yet confirmed |
