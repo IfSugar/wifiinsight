@@ -1,6 +1,7 @@
 # BusyBox commands available on Asuswrt-Merlin 3004.388 (BusyBox 1.25.1), one per line.
 # From release/src/router/busybox/config_base plus the build edits every Merlin model gets
 # (release/src-rt/Makefile BusyboxOptions: FLOCK, SPLIT, UNIQ, SEQ, LSOF, XXD on).
+# Left out: seq, which an RT-AX86U on 3004.388.13 doesn't have despite that list.
 # Left out on purpose: sha256sum (only on BCM6756/BCM4916 builds). [, test, printf and echo are
 # separate programs on Merlin (no ash builtins), and .github/tests/large-history.sh runs them that way.
 # That test runs the script with only these commands (and stand-ins for nvram and wl) on PATH.
@@ -92,7 +93,6 @@ rmdir
 rmmod
 route
 sed
-seq
 sh
 sleep
 sort
