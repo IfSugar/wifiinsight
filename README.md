@@ -48,17 +48,18 @@ Time ranges: 10 minutes, 1 hour, 12 hours, 1 day, 7 days and 30 days. Short rang
 
 ## Supported routers
 
-Tested on an RT-AX86U with 3004.388.13_0. Every model current Merlin supports uses Broadcom Wi-Fi on all its radios; what differs is the radio layout and the driver. Models on Merlin 3006.102 have a newer driver (17.10) that prints its airtime statistics differently: they need WiFi Insight 1.0.11 or later. On some of them the driver rejects full 5 GHz scans ("Scan Rejected"), which is being looked into.
+Tested on an RT-AX86U with 3004.388.13_0. Every model current Merlin supports uses Broadcom Wi-Fi on all its radios; what differs is the radio layout and the driver. Models on Merlin 3006.102 have a newer driver (17.10) that prints its airtime statistics differently: they need WiFi Insight 1.0.11 or later. Some drivers refuse 5 GHz scans ("Scan Rejected") while the router is on a DFS channel, and accept them on a non-DFS one: reported on an RT-AX88U, a GT-AX6000 and an RT-BE88U, while the RT-AX86U it's tested on scans fine on DFS channels. Scan now and the syslog then say "busy", and the Spectrum and Site Survey stay empty for 5 GHz.
 
 | Router | Radios | Status |
 |---|---|---|
 | RT-AX86U | 2.4 + 5 GHz | Tested, including the measured spectrum |
-| RT-AX88U | 2.4 + 5 GHz | Works (user report); 5 GHz scans are sometimes refused on a DFS channel, being looked into |
+| RT-AX88U | 2.4 + 5 GHz | Works (user report); the driver refuses 5 GHz scans while on a DFS channel |
 | RT-AX86U Pro | 2.4 + 5 GHz | Works (user report); one report of 5 GHz scans failing, being looked into |
-| GT-AX6000 | 2.4 + 5 GHz | Charts and 2.4 GHz scans work; the driver rejects full 5 GHz scans ("Scan Rejected"), being looked into |
-| RT-BE88U | 2.4 + 5 GHz | Charts and 2.4 GHz scans work (user report); 5 GHz scans not yet confirmed |
+| GT-AX6000 | 2.4 + 5 GHz | Works (user report); the driver refuses 5 GHz scans while on a DFS channel |
+| RT-BE88U | 2.4 + 5 GHz | Charts and 2.4 GHz scans work (user report); the driver refused 5 GHz scans on a DFS channel |
 | RT-AX58U (V1), RT-AX68U, RT-AX88U Pro, RT-BE86U, RT-BE58 Go | 2.4 + 5 GHz | Should work |
-| GT-AXE11000, RT-BE92U, RT-BE96U, GT-BE19000AI | 2.4 + 5 + 6 GHz | Should work since 1.2.0 (6 GHz untested). Up to 1.1.0 the check took the 6 GHz radio for a second 5 GHz one |
+| RT-BE96U | 2.4 + 5 + 6 GHz | Works, including 6 GHz (user report) |
+| GT-AXE11000, RT-BE92U, GT-BE19000AI | 2.4 + 5 + 6 GHz | Should work since 1.2.0. Up to 1.1.0 the check took the 6 GHz radio for a second 5 GHz one |
 | GT-AX11000, GT-AX11000 Pro, ZenWiFi Pro XT12 | 2.4 + 5 + 5 GHz | Not yet: two 5 GHz radios |
 | GT-AXE16000, GT-BE98 Pro | four radios | Not yet: four radios |
 
