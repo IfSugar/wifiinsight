@@ -15,7 +15,7 @@
 #              -o /tmp/wifiinsight.sh && sh /tmp/wifiinsight.sh install
 ###############################################################################
 
-VERSION="1.2.1"
+VERSION="1.2.2"
 NAME="wifiinsight"
 TITLE="WiFi Insight"
 
@@ -369,7 +369,8 @@ own_ssids_file() {
 	{
 		for r in $(radios); do
 			nvram get wl${r}_ssid
-			for g in 1 2 3; do [ "$(nvram get wl${r}.${g}_bss_enabled)" = "1" ] && nvram get wl${r}.${g}_ssid; done
+			# guest networks: wlX.1-3, and higher on 3006.102 (Guest Network Pro)
+			for g in 1 2 3 4 5 6 7; do [ "$(nvram get wl${r}.${g}_bss_enabled)" = "1" ] && nvram get wl${r}.${g}_ssid; done
 		done
 		[ -n "$EXTRA_OWN_SSIDS" ] && printf '%s\n' "$EXTRA_OWN_SSIDS" | tr '|' '\n'
 	} | grep -v '^$' | sort -u > "$f"
@@ -594,15 +595,17 @@ scan_next_seq() {
 # The driver keeps each channel's last figures between scans and overwrites only the channels a scan
 # reaches, and on a busy channel it can stop a scan early (an RT-AX86U on 3004.388 reached 36-104 of
 # 36-140 in the daytime). So compare the radio's list before and after: a channel whose figures changed
-# was measured, and as scans go through the channels in order, so was every channel before it.
-chanim_reached() {   # "channels in scan order" before-file after-file band -> "reached|not reached"
+# was measured, and as scans go through the channels in order, so was every channel before it. A quiet
+# channel can give the same figures twice, so one where the scan heard a network counts as reached too.
+chanim_reached() {   # "channels in scan order" before-file after-file band ["channels heard"] -> "reached|not reached"
 	parse_chanim_all 0 "$4" raw < "$2" > "$2.raw"
 	parse_chanim_all 0 "$4" raw < "$3" > "$3.raw"
-	awk -v order="$1" -v bf="$2.raw" -v af="$3.raw" 'BEGIN {
+	awk -v order="$1" -v bf="$2.raw" -v af="$3.raw" -v heard="$5" 'BEGIN {
 		while ((getline l < bf) > 0) { i = index(l, "\t"); B[substr(l, 1, i - 1)] = substr(l, i + 1) }
 		while ((getline l < af) > 0) { i = index(l, "\t"); A[substr(l, 1, i - 1)] = substr(l, i + 1) }
+		n = split(heard, HL, " "); for (i = 1; i <= n; i++) H[HL[i]] = 1
 		k = split(order, O, " "); last = 0
-		for (j = 1; j <= k; j++) if ((O[j] in A) && (!(O[j] in B) || A[O[j]] != B[O[j]])) last = j
+		for (j = 1; j <= k; j++) if (((O[j] in A) && (!(O[j] in B) || A[O[j]] != B[O[j]])) || (O[j] in H)) last = j
 		v = ""; r = ""
 		for (j = 1; j <= k; j++) {
 			if (j > last) r = r (r == "" ? "" : " ") O[j]
@@ -612,6 +615,14 @@ chanim_reached() {   # "channels in scan order" before-file after-file band -> "
 	}'
 	rm -f "$2.raw" "$3.raw"
 }
+# The primary channels of the networks in `wl scanresults` (stdin), one per line.
+heard_channels() {
+	awk '/^SSID: / { if (c != "") print c; c = ""; next }
+		/^Mode: / && match($0, /Channel: (6g)?[0-9]+/) { t = substr($0, RSTART + 9, RLENGTH - 9); sub(/^6g/, "", t); c = t + 0; next }
+		/Primary channel: / { t = $0; sub(/.*Primary channel: */, "", t); c = t + 0; next }
+		END { if (c != "") print c }' | sort -un | tr '\n' ' '
+}
+
 # Finish a scan the driver stopped early: scan the channels it didn't reach. Appends what it hears to
 # the scan's results and leaves the radio's list in after-file.
 scan_rest() {   # ifc band "channels" before-file after-file results-file
@@ -637,39 +648,40 @@ scan_rest() {   # ifc band "channels" before-file after-file results-file
 }
 
 # Some drivers refuse a full scan but take one channel at a time: an RT-BE88U on a DFS channel took
-# every single-channel scan, and an RT-AX88U and a GT-AX6000 took the odd one. So when the full scan
-# is refused, scan the channels one by one: each retried for up to 20 s, as a GT-AX6000 took one about
-# every 16 s ("Bad Channel", a channel radar put off limits, isn't retried), giving up after three refused
-# in a row or 150 s. The next scan starts where this one stopped, so the band is covered over a few scans.
-# Sets each_got (channels measured), each_did (channels scanned), each_all, each_why (wl's last refusal)
-# and each_cap (1 if the 150 s ran out).
+# every single-channel scan, while an RT-AX88U and a GT-AX6000 took one only now and then (the GT-AX6000
+# about every 16 s). So when the full scan is refused, scan the channels one by one, in order, waiting
+# on each until the driver takes it. "Bad Channel" (a channel radar put off limits) is skipped. Stop when
+# nothing has been taken for 60 s, or after 150 s; the next scan starts at the first channel not scanned,
+# so the band is covered over a few scans. Sampling carries on meanwhile: each visit is a moment.
+# Sets each_list (channels scanned), each_got (of those, measured), each_did, each_all, each_why (wl's
+# last refusal) and each_more (1 if it stopped before the end of the band).
 scan_each() {   # ifc band "channels" before-file after-file results-file
-	each_got=""; each_did=0; each_why=""; each_cap=""; : > "$6"
+	each_list=""; each_got=""; each_did=0; each_why=""; each_more=""; : > "$6"
 	nxt="$TMPD/each_$2.next"; err="$TMPD/scan_$2.err"; out="$TMPD/scan_$2.one"
 	each_all=$(echo $3 | wc -w | tr -d ' ')
 	off=$(cat "$nxt" 2>/dev/null); case "$off" in ''|*[!0-9]*) off=0 ;; esac
 	[ "$off" -lt "$each_all" ] || off=0
-	t0=$(now); row=0; tried=0
+	rm -f "$SCAN_FLAG"
+	t0=$(now); last=$t0; adv=0
 	for c in $(echo $3 | awk -v o="$off" '{ for (i = 0; i < NF; i++) printf "%s ", $((i + o) % NF + 1) }'); do
-		[ $row -ge 3 ] && break
-		if [ $(( $(now) - t0 )) -ge 150 ]; then each_cap=1; break; fi
-		tried=$((tried + 1)); t1=$(now); ok=0
+		ok=0
 		while :; do
 			if wl -i "$1" scan -c "$c" > /dev/null 2> "$err"; then ok=1; break; fi
 			grep -q 'Bad Channel' "$err" && break
-			[ $(( $(now) - t1 )) -ge 20 ] && break
+			[ $(( $(now) - last )) -ge 60 ] && break
+			[ $(( $(now) - t0 )) -ge 150 ] && break
 			sleep 2
 		done
 		if [ $ok = 0 ]; then
-			grep -q 'Bad Channel' "$err" || row=$((row + 1))
-			each_why=$(wl_said "$err" $(( $(now) - t1 )) "refused"); continue
+			if grep -q 'Bad Channel' "$err"; then each_why=$(wl_said "$err" 0 "refused"); adv=$((adv + 1)); continue; fi
+			each_why=$(wl_said "$err" $(( $(now) - last )) "refused"); each_more=1; break
 		fi
-		row=0; t2=$(now); p=""; sleep 1
-		while :; do   # done when the channel has new figures, or the results are in (drivers without figures)
-			el=$(( $(now) - t2 ))
+		last=$(now); p=""; sleep 1
+		while :; do   # done when the channel has new figures or a network, or the results are in (drivers without figures)
+			el=$(( $(now) - last ))
 			if wl -i "$1" scanresults > "$out" 2>/dev/null; then
 				wl -i "$1" chanim_stats all > "$5" 2>/dev/null
-				p=$(chanim_reached "$c" "$4" "$5" "$2")
+				p=$(chanim_reached "$c" "$4" "$5" "$2" "$(heard_channels < "$out")")
 				[ -n "${p%%|*}" ] && break
 				[ $el -ge 3 ] && break
 			else : > "$out"
@@ -678,11 +690,13 @@ scan_each() {   # ifc band "channels" before-file after-file results-file
 			sleep 1
 		done
 		cat "$out" >> "$6"
-		each_did=$((each_did + 1))
+		adv=$((adv + 1)); each_did=$((each_did + 1)); each_list="$each_list${each_list:+ }$c"
 		[ -n "${p%%|*}" ] && each_got="$each_got${each_got:+ }$c"
 		[ -s "$5" ] && cp "$5" "$4"
+		if [ $adv -lt "$each_all" ] && [ $(( $(now) - t0 )) -ge 150 ]; then each_more=1; break; fi
 	done
-	echo $(( (off + tried) % each_all )) > "$nxt"
+	echo $(( (off + adv) % each_all )) > "$nxt"
+	touch "$SCAN_FLAG"
 	rm -f "$out"
 }
 
@@ -711,8 +725,8 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 		band=$(band_of_hex "$hex"); chs=$(radio_channels "$ifc" "$band")
 		m0="$TMPD/chanim_$band.before"; m1="$TMPD/chanim_$band.after"; all="$TMPD/scan_$band.all"
 		wl -i "$ifc" chanim_stats all > "$m0" 2>/dev/null   # the figures the radio still holds from earlier scans
-		ts0=$(now)
-		scan_radio "$ifc" "$band"
+		ts0=$(now); touch "$SCAN_FLAG"
+		scan_radio "$ifc" "$band" "$hex"
 		each=0
 		if [ "$result" = busy ] && [ -n "$chs" ]; then   # the full scan was refused: try one channel at a time
 			full=$detail
@@ -720,7 +734,7 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 			if [ $each_did -gt 0 ]; then
 				each=1; nn=$(grep '^BSSID' "$all" | awk '{ print $2 }' | sort -u | wc -l | tr -d ' ')
 				detail="$nn network$( [ "$nn" = 1 ] || printf s) in $(( $(now) - ts0 )) s, one channel at a time (full scan refused: $full)"
-				[ $each_did -lt $each_all ] && detail="$detail, $each_did of $each_all channels${each_why:+ ($each_why)}${each_cap:+, the rest next time}"
+				[ $each_did -lt $each_all ] && detail="$detail, $each_did of $each_all channels${each_why:+ ($each_why)}${each_more:+, the rest next time}"
 				if [ "$nn" -gt 0 ] || [ -n "$each_got" ]; then result=ok; else result=empty; fi
 			else
 				detail="$detail; single channels refused too"
@@ -728,19 +742,19 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 		fi
 		if [ "$result" = ok ]; then
 			sts=$(now)
-			if [ $each = 1 ]; then got=$each_got
+			if [ $each = 1 ]; then got=$each_got; covered=$each_list
 			else
 				cp "$res" "$all"
 				wl -i "$ifc" chanim_stats all > "$m1" 2>/dev/null
-				p=$(chanim_reached "$chs" "$m0" "$m1" "$band"); got=${p%%|*}; rest=${p#*|}
+				p=$(chanim_reached "$chs" "$m0" "$m1" "$band" "$(heard_channels < "$all")"); got=${p%%|*}; rest=${p#*|}
 				# stopped early: scan the channels it didn't reach (twice at most), so every scan covers them all.
 				# If that reached none of them, don't try the same channels again until a reboot.
-				more=0; stop=${got##* }; skip="$TMPD/rest_$band.skip"
-				[ -n "$rest" ] && [ "$(cat "$skip" 2>/dev/null)" = "$rest" ] && rest=""
-				while [ -n "$got" ] && [ -n "$rest" ] && [ $more -lt 2 ]; do
+				more=0; stop=${got##* }; skip="$TMPD/rest_$band.skip"; again=1
+				[ -n "$rest" ] && [ "$(cat "$skip" 2>/dev/null)" = "$rest" ] && again=0
+				while [ $again = 1 ] && [ -n "$got" ] && [ -n "$rest" ] && [ $more -lt 2 ]; do
 					cp "$m1" "$m0"
 					scan_rest "$ifc" "$band" "$rest" "$m0" "$m1" "$all" || break
-					p=$(chanim_reached "$rest" "$m0" "$m1" "$band")
+					p=$(chanim_reached "$rest" "$m0" "$m1" "$band" "$(heard_channels < "$all")")
 					if [ -z "${p%%|*}" ]; then [ $more -eq 0 ] && echo "$rest" > "$skip"; break; fi
 					more=$((more + 1)); got="$got ${p%%|*}"; rest=${p#*|}
 				done
@@ -748,8 +762,15 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 					nn=$(grep '^BSSID' "$all" | awk '{ print $2 }' | sort -u | wc -l | tr -d ' ')
 					detail="$nn network$( [ "$nn" = 1 ] || printf s) in $(( $(now) - ts0 )) s, stopped at $stop and finished with $( [ $more = 1 ] && echo 'a second scan' || echo "$more more scans")"
 				fi
+				# store only the channels the scan covered, so the rest don't show up as empty and quiet
+				# (no per-channel figures: no way to tell, so all of them, as before)
+				if [ -n "$got" ]; then
+					covered=$(echo "$chs|$rest" | awk -F'|' '{ n = split($2, R, " "); for (i = 1; i <= n; i++) X[R[i]] = 1
+						m = split($1, C, " "); for (i = 1; i <= m; i++) if (!(C[i] in X)) printf "%s ", C[i] }')
+				else covered=$chs
+				fi
 			fi
-			parse_scan "$sts" "$band" "$chs" "$ownf" < "$all" | sql
+			parse_scan "$sts" "$band" "$covered" "$ownf" < "$all" | sql
 			# what the radio measured on each channel this scan reached, where the driver reports it
 			msql="$TMPD/chanim_$band.sql"
 			parse_chanim_all "$sts" "$band" < "$m1" | awk -v got="$got" '
@@ -784,17 +805,25 @@ wl_said() {   # errfile seconds fallback -> 'wl said "Not Ready" for 45 s', or '
 # The driver answers "Not Ready" until the scan ends, so poll for the results instead of guessing how
 # long a scan takes: 2.4 GHz scans take a few seconds, 5 GHz ones longer (more channels, and DFS channels
 # are listened to rather than probed), and much longer on some drivers (3006.102 / 17.10).
-scan_radio() {   # ifc band
+scan_radio() {   # ifc band chanspec
 	result=ok; detail=""; res="$TMPD/scan_$2.txt"; err="$TMPD/scan_$2.err"; : > "$res"
 	if [ "$(wl -i "$1" isup 2>/dev/null)" != "1" ]; then result=off; return 0; fi
 	# The radio refuses a scan while it's already scanning (Smart Connect, AiMesh, acsd): retry for up to 20 s.
-	t0=$(now)
+	# Some drivers refuse every full scan on a DFS channel ("Scan Rejected"): after that, on the same
+	# chanspec, try once and go straight to one channel at a time; retry for the full 20 s every 6 hours.
+	t0=$(now); rf="$TMPD/refused_$2"; quick=0
+	set -- "$1" "$2" "$3" $(cat "$rf" 2>/dev/null)
+	[ -n "$3" ] && [ "$4" = "$3" ] && [ $(( t0 - ${5:-0} )) -lt 21600 ] 2>/dev/null && quick=1
 	until wl -i "$1" scan > /dev/null 2> "$err"; do
+		if [ $quick = 1 ]; then result=busy; detail=$(wl_said "$err" 0 "refused" | sed 's/ for 0 s$/ again/'); return 0; fi
 		if [ $(( $(now) - t0 )) -ge 20 ]; then
-			result=busy; detail=$(wl_said "$err" 20 "still busy"); return 0
+			result=busy; detail=$(wl_said "$err" 20 "still busy")
+			[ -n "$3" ] && grep -q 'Scan Rejected' "$err" && echo "$3 $(now)" > "$rf"
+			return 0
 		fi
 		sleep 2
 	done
+	rm -f "$rf"
 	limit=45; [ "$2" = 2g ] && limit=20
 	t1=$(now); sleep 3
 	while :; do
@@ -984,7 +1013,10 @@ export_scans() {
 		# [..., 1, others, non-Wi-Fi, unclassified, noise, glitches]
 		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json(CASE WHEN obss IS NULL THEN json_array(ts,ch,score,aps,best,own) ELSE json_array(ts,ch,score,aps,best,own,1,obss,nocat,nopkt,noise,glitch) END)) AS a FROM (SELECT s.ts, s.band, s.ch, s.score, s.aps, s.best, s.own, m.obss, m.nocat, m.nopkt, m.noise, m.glitch FROM scans s LEFT JOIN chanim m ON m.band=s.band AND m.ts=s.ts AND m.ch=s.ch WHERE s.ts>=$since ORDER BY s.band, s.ts, s.ch) GROUP BY band);"
 		printf ',"aps":'
-		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT x.band, json_group_array(json_object('ssid',x.ssid,'bssid',x.bssid,'rssi',x.rssi,'ctl',x.ctl,'center',x.center,'width',x.width,'util',x.util,'own',x.own,'phy',x.phy,'sec',x.sec,'snr',x.snr)) AS a FROM (SELECT p.* FROM aps p JOIN (SELECT band, max(ts) AS mt FROM aps GROUP BY band) l ON p.band=l.band AND p.ts=l.mt ORDER BY p.band, p.rssi DESC) x GROUP BY x.band);"
+		# The networks of the latest scan, and, for channels it didn't cover (a scan that took one channel at
+		# a time, or stopped early), those of the newest scan in the last 6 hours that did. Each with its time.
+		t6=$((t - 6 * 3600))
+		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT x.band, json_group_array(json_object('ssid',x.ssid,'bssid',x.bssid,'rssi',x.rssi,'ctl',x.ctl,'center',x.center,'width',x.width,'util',x.util,'own',x.own,'phy',x.phy,'sec',x.sec,'snr',x.snr,'ts',x.ts)) AS a FROM (SELECT * FROM (SELECT u.*, row_number() OVER (PARTITION BY u.band, u.bssid ORDER BY u.ts DESC) AS rn FROM (SELECT p.* FROM aps p JOIN (SELECT band, ch, max(ts) AS ct FROM scans WHERE ts>=$t6 GROUP BY band, ch) c ON p.band=c.band AND p.ctl=c.ch AND p.ts=c.ct UNION SELECT p.* FROM aps p JOIN (SELECT band, max(ts) AS mt FROM aps GROUP BY band) l ON p.band=l.band AND p.ts=l.mt) u) WHERE rn=1 ORDER BY band, rssi DESC) x GROUP BY x.band);"
 		printf '}\n'
 	} | write_atomic "$wd/scans.htm"
 }
@@ -1026,7 +1058,15 @@ prune() {
 	i=0; until flock -n 6; do i=$((i + 1)); [ $i -gt 60 ] && exit 0; sleep 2; done
 	t=$(now); cut=$((t - RETAIN_DAYS * 86400)); evcut=$((t - 365 * 86400))
 	sql "DELETE FROM samples WHERE ts<$cut; DELETE FROM scans WHERE ts<$cut; DELETE FROM chanim WHERE ts<$cut; DELETE FROM aps WHERE ts<$cut; DELETE FROM events WHERE ts<$evcut; PRAGMA optimize;"
-	[ "$(date +%w)" = "0" ] && sql "VACUUM;"
+	# Once a week, compact the file, but only when a quarter or more of it is free pages: it rewrites the
+	# whole file, which is the riskiest write if the power goes. Its temporary copy goes on the same drive,
+	# not in /tmp (the router's RAM).
+	if [ "$(date +%w)" = "0" ]; then
+		fl=$(sql "PRAGMA freelist_count;"); pc=$(sql "PRAGMA page_count;")
+		if [ "${fl:-0}" -gt 0 ] 2>/dev/null && [ $((fl * 4)) -ge "${pc:-0}" ]; then
+			SQLITE_TMPDIR="$DATA_DIR" "$SQLITE" -batch -cmd ".timeout 8000" "$DB" "VACUUM;" && log "database compacted ($fl of $pc pages were free)"
+		fi
+	fi
 	export_all
 }
 
@@ -1603,8 +1643,9 @@ repair() {   # [force]: rebuild even when the check finds nothing wrong
 	i=0; until flock -n 7; do i=$((i + 1)); [ $i -gt 150 ] && die "A scan is still running. Try again in a few minutes."; sleep 2; done
 	exec 6>"$TMPD/collect.lock"
 	i=0; until flock -n 6; do i=$((i + 1)); [ $i -gt 60 ] && die "Sampling is still running. Try again in a minute."; sleep 2; done
-	say "Checking $DB..."
-	chk=$("$SQLITE" "$DB" "PRAGMA quick_check;" 2>&1 | head -3)
+	say "Checking $DB (a minute or so on a large one)..."
+	# the full check: quick_check doesn't compare indexes with their tables, and that's damage too
+	chk=$("$SQLITE" "$DB" "PRAGMA integrity_check;" 2>&1 | head -3)
 	if [ "$chk" = ok ] && [ "$1" != force ]; then
 		rm -f "$DATA_DIR/damaged"; say "The database is fine: nothing to repair."; return 0
 	fi
