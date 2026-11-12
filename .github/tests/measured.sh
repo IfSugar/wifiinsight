@@ -160,7 +160,7 @@ import json, sys
 d = json.load(open(sys.argv[1]))
 row = {r[1]: r for r in d['scans']['5g']}
 assert row[60][6:12] == [1, 4, 8, 1, -91, 22], row[60]       # scans, others, non-Wi-Fi, unclassified, noise, glitches
-assert len(row[140]) == 6, row[140]                            # channel 140 wasn't in the list: estimate only
+assert 140 not in row, row[140]                                # channel 140 wasn't reached (not in the radio's list): no row, not an empty one
 assert len(row[36]) == 12
 EOF
 expect "live.htm: channels measured in each band's last scan" '{"2g": 3, "5g": 11}' "$(live_measured)"
@@ -177,7 +177,7 @@ import json, sys
 d = json.load(open(sys.argv[1]))
 row = {r[1]: r for r in d['scans']['2g']}
 assert row[3][7:13] == [0.0, 16.0, 16.0, -67.0, 3700.0, 1], row[3]
-assert len(row[13]) == 7, row[13]                              # channel 13 wasn't measured
+assert 13 not in row, row[13]                                  # channel 13 wasn't reached: no row
 EOF
 # a router whose driver doesn't list channels: the scan works as before (2.4 GHz measures new figures)
 rm -f "$F/chanim_eth7"; echo 1800001800 > "$F/clock"

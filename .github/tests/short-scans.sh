@@ -163,4 +163,17 @@ expect "full scan again" "ok, 2 networks in 3 s, 19 channels measured" "$r5"
 expect "full scan again: no follow-up" "full" "$(calls $((n + 1)))"
 grep -q 'scan 5g (eth7): ok, 2 networks in .* s, stopped at 104 and finished with a second scan, 19 channels measured' "$F/log" && ok "syslog says when a scan was finished" || bad "syslog line for the finished scan"
 
+# 7: the last channel is quiet and gives the same figures twice, but a network was heard on it: the scan
+# reached it, so no follow-up and every channel measured (without the network it would look unreached)
+cp "$F/eth7.nets" "$F/eth7.nets.keep"; printf '140 02:00:00:00:05:03 Edge140\n' >> "$F/eth7.nets"
+echo 140 > "$F/eth7.stuck"; n=$(wc -l < "$F/eth7.scans")
+scan
+expect "quiet last channel, network heard: reached" "ok, 3 networks in 3 s, 19 channels measured" "$r5"
+expect "quiet last channel, network heard: no follow-up" "full" "$(calls $((n + 1)))"
+mv "$F/eth7.nets.keep" "$F/eth7.nets"; n=$(wc -l < "$F/eth7.scans")
+scan
+expect "quiet last channel, nothing heard: looks unreached, so a follow-up" "full 140" "$(calls $((n + 1)))"
+expect "quiet last channel, nothing heard: not stored" "18|0" "$(measured)|$(q "SELECT count(*) FROM scans WHERE band='5g' AND ts=$ts AND ch=140")"
+rm -f "$F/eth7.stuck" "$R/tmp/wifiinsight/rest_5g.skip"
+
 [ $fail -eq 0 ] && echo "Short scans: all checks passed." || { echo "::error::Short scans: some checks failed."; exit 1; }

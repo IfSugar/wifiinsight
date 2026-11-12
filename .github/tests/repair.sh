@@ -36,8 +36,11 @@ grep -v '^#' "$here/merlin-applets.txt" | while IFS= read -r a; do
 	elif p=$(command -v -- "$a"); then ln -s "$p" "$t/bin/$a"
 	fi
 done
-rm -f "$t/bin/logger"
+rm -f "$t/bin/logger" "$t/bin/date"
 printf '#!%s sh\nshift 2; echo "$*" >> "%s/log"\n' "$bb" "$F" > "$t/bin/logger"
+# date +%w (the weekday prune compacts on) can be set in $F/wday
+printf '#!%s sh\nif [ "$*" = "+%%w" ] && [ -f "%s/wday" ]; then cat "%s/wday"; else exec "%s" date "$@"; fi\n' "$bb" "$F" "$F" "$bb" > "$t/bin/date"
+chmod +x "$t/bin/date"
 printf '#!/bin/sh\ncase "$2" in ntp_ready) echo 1 ;; wl0_ifname) echo eth6 ;; wl1_ifname) echo eth7 ;; esac\n' > "$t/bin/nvram"
 printf '#!/bin/sh\nexit 1\n' > "$t/bin/wl"
 chmod +x "$t/bin/logger" "$t/bin/nvram" "$t/bin/wl"
@@ -109,5 +112,35 @@ m=$(ls -l "$D/wifiinsight.db.bad" | awk '{ print $5 }')
 out=$(run repair 2>&1) || true
 has "again: nothing to repair" "The database is fine: nothing to repair." "$out"
 expect "again: .bad untouched" "$m" "$(ls -l "$D/wifiinsight.db.bad" | awk '{ print $5 }')"
+
+# 5: damage only the full check finds (an index that no longer matches its table): quick_check says ok,
+# so repair has to run integrity_check
+python3 - "$D/wifiinsight.db" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1]); c.execute('PRAGMA writable_schema=ON')
+c.execute("UPDATE sqlite_master SET sql='CREATE INDEX sa_ts ON samples(obss)' WHERE name='sa_ts'"); c.commit(); c.close()
+PY
+expect "index damage: quick_check misses it" "ok" "$(q "PRAGMA quick_check")"
+out=$(run repair 2>&1) || true
+has "index damage: found" "It's damaged:" "$out"
+has "index damage: repaired" "Repaired: kept " "$out"
+expect "index damage: sound afterwards" "ok" "$(q "PRAGMA integrity_check")"
+
+# 6: the weekly compaction: only on Sunday, only when a quarter or more of the file is free pages
+python3 - "$D/wifiinsight.db" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.executemany('insert into samples(ts,band,obss) values(?,?,?)', [(i, '9g', 1) for i in range(40000)])
+c.commit(); c.execute("delete from samples where band='9g'"); c.commit(); c.close()
+PY
+free() { q "PRAGMA freelist_count"; }
+echo 3 > "$F/wday"; run prune > /dev/null 2>&1 || true
+[ "$(free)" -gt 0 ] && ok "compaction: not on a Wednesday" || bad "compaction ran on a Wednesday"
+echo 0 > "$F/wday"; run prune > /dev/null 2>&1 || true
+expect "compaction: on Sunday with many free pages" "0" "$(free)"
+grep -q '^database compacted (.* of .* pages were free)$' "$F/log" && ok "compaction: logged" || bad "compaction: syslog"
+n=$(grep -c 'database compacted' "$F/log"); run prune > /dev/null 2>&1 || true
+expect "compaction: not again when there's little to gain" "$n" "$(grep -c 'database compacted' "$F/log")"
+expect "compaction: still sound" "ok" "$(q "PRAGMA integrity_check")"
 
 [ $fail -eq 0 ] && echo "Repair: all checks passed." || { echo "::error::Repair: some checks failed."; exit 1; }

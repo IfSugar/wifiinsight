@@ -2,6 +2,15 @@
 
 What changed in each release of WiFi Insight. The release workflow copies a version's section into its GitHub release notes, so write for people running the addon.
 
+## 1.3.0
+
+- **Scans that cover only part of the band are stored as such.** A scan taken one channel at a time, or one the driver stopped early, used to be saved as if every channel had been scanned, so the channels it missed showed up as empty and quiet, and *Quietest options* could suggest them. Now only the channels a scan covered are stored. Where the latest scans didn't cover a channel, *Load per channel* and *Quietest options* use the newest scan within the previous 6 hours that did, and Site Survey and *Networks per channel* keep the networks it heard there. The page says when it does.
+- **One channel at a time, without skipping channels.** On routers that take a single-channel scan only every so often, WiFi Insight now waits on each channel until the driver takes it, instead of moving on after 20 seconds, so no channel is left out. It stops when nothing has been taken for a minute, or after 150 seconds, and the next scan carries on from there. Once the driver has refused a full scan on a channel, WiFi Insight tries a full scan just once on later scans there, not for 20 seconds, and gives it the full 20 seconds again every 6 hours. Sampling carries on during one-channel scans.
+- **Quiet channels count as scanned.** A channel can give exactly the same figures twice when nothing is on it, which looked like a channel the scan never reached: its figures weren't stored, and at the end of the band it set off a needless second scan. Now a channel where the scan heard a network counts as reached too.
+- **`repair` runs the full check.** It used SQLite's quick check, which doesn't compare indexes with their tables, so some damage passed as fine. It now runs the full integrity check (a minute or so on a large database).
+- **Safer weekly compaction.** The weekly VACUUM rewrites the whole database, the riskiest write if the power goes. It now runs only when a quarter or more of the file is free space, and keeps its temporary copy on the USB drive instead of in the router's memory.
+- Guest networks on more slots (3006.102's Guest Network Pro) are recognised as yours.
+
 ## 1.2.1
 
 - **5 GHz scans on routers that refuse a full scan.** On a DFS channel, some drivers refuse every full 5 GHz scan ("Scan Rejected"), so the Spectrum, Site Survey and Channel Statistics stayed empty on 5 GHz. Some of them still take one channel at a time: an RT-BE88U took every single-channel scan. WiFi Insight now falls back to that when the full scan is refused: one channel after another, each retried for up to 20 seconds, giving up after three refused in a row or 150 seconds. Where the driver only takes one now and then, the next scan carries on where this one stopped, so the band fills in over a few scans. `scan`, Scan now and the syslog say so, for example "one channel at a time (full scan refused: wl said "Scan Rejected" for 20 s)". Routers whose full scans work aren't affected. Thanks to SashaSolitaire, EmeraldDeer and ColDen for the tests!

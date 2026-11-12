@@ -8,7 +8,7 @@
 <link rel="shortcut icon" href="images/favicon.png"/>
 <link rel="icon" href="images/favicon.png"/>
 <title>WiFi Insight</title>
-<!-- wifiinsight-version: 1.2.1 (must match VERSION in wifiinsight.sh) -->
+<!-- wifiinsight-version: 1.3.0 (must match VERSION in wifiinsight.sh) -->
 <link rel="stylesheet" type="text/css" href="index_style.css"/>
 <link rel="stylesheet" type="text/css" href="form_style.css"/>
 <script type="text/javascript" src="/js/jquery.js"></script>
@@ -547,9 +547,10 @@ function scanRows() {
 		}
 		byT[t].src[r[0]] = n;   // scans behind this row
 	}
-	var r1 = function (v) { return Math.round(v * 10) / 10; }, need = Math.max(2, Math.ceil(chans().length / 2)), measured = false;
+	var r1 = function (v) { return Math.round(v * 10) / 10; }, measured = false;
 	order.forEach(function (t) {
-		var got = 0, mx = 0;
+		/* measured: at least half the channels this row covers (a scan one channel at a time covers only some) */
+		var got = 0, mx = 0, need = Math.max(2, Math.ceil(Object.keys(byT[t].cells).length / 2));
 		Object.keys(byT[t].cells).forEach(function (k) {
 			var c = byT[t].cells[k]; c[2] = r1(c[2] / c[6]); c[5] = r1(c[5] / c[6]);
 			if (c[12]) { c[7] = r1(c[7] / c[12]); c[8] = r1(c[8] / c[12]); c[9] = r1(c[9] / c[12]); c[11] = Math.round(c[11] / c[12]); got++; if (c[12] > mx) mx = c[12]; }
@@ -567,7 +568,10 @@ function scanRows() {
 		var n = 0; Object.keys(byT[t].src).forEach(function (k) { n += byT[t].src[k]; }); scans += n; mscans += Math.min(n, byT[t].mscans);
 		return { ts: t, cells: byT[t].cells, n: n };
 	});
-	return { rows: rows, latestOnly: latestOnly, scans: scans, mscans: mscans, bucket: H, measured: measured };
+	/* the 6 hours before the range, newest first: for channels the scans in range didn't cover */
+	var oldest = inRange.length ? inRange[inRange.length - 1] : 0;
+	var older = order.filter(function (t) { return t < oldest && t >= oldest - 21600; }).map(function (t) { return { ts: t, cells: byT[t].cells }; });
+	return { rows: rows, older: older, latestOnly: latestOnly, scans: scans, mscans: mscans, bucket: H, measured: measured };
 }
 /* Measured: what the radio recorded on each channel while scanning (wl chanim_stats all), where the
    driver reports it. Estimated: built from the networks heard (signal, overlap, advertised load). */
@@ -742,7 +746,10 @@ function aps() { return ((WI.scans && WI.scans.aps && WI.scans.aps[WI.band]) || 
 function renderSurvey() {
 	var list = aps(), last = WI.scans && WI.scans.last_scan && WI.scans.last_scan[WI.band];
 	var others = list.filter(function (a) { return !a.own; }).length;
-	$('wiSurveySub').textContent = list.length ? (others + ' other network' + (others === 1 ? '' : 's') + ' and ' + (list.length - others) + ' of yours, from the scan ' + ago(nowTs() - last) + '.') : '';
+	/* networks from earlier scans fill in channels the latest didn't cover (one channel at a time, or stopped early) */
+	var older = list.filter(function (a) { return a.ts && last && a.ts < last; }).length;
+	$('wiSurveySub').textContent = list.length ? (others + ' other network' + (others === 1 ? '' : 's') + ' and ' + (list.length - others) + ' of yours, from the scan ' + ago(nowTs() - last)
+		+ (older ? ' (' + older + ' from earlier scans, on channels it didn\'t cover)' : '') + '.') : '';
 	renderSignalMap(list);
 	renderApTable(list);
 }
@@ -854,7 +861,7 @@ function sortBy(k) { if (WI.sortKey === k) WI.sortDir = -WI.sortDir; else { WI.s
 
 /* =================== CHANNEL STATISTICS =================== */
 function channelLoads() {   // average and peak load per channel across scans in range (measured or estimated)
-	var info = scanRows(), ch = chans(), src = heatSrc(info), avg = {}, peak = {}, comp = {}, noise = {};
+	var info = scanRows(), ch = chans(), src = heatSrc(info), avg = {}, peak = {}, comp = {}, noise = {}, filled = 0;
 	MEAS.forEach(function (m) { comp[m[0]] = {}; });
 	ch.forEach(function (c) {
 		var sum = 0, n = 0, pk = 0, parts = [0, 0, 0], nz = 0, nzn = 0;
@@ -866,11 +873,19 @@ function channelLoads() {   // average and peak load per channel across scans in
 			sum += v * w; n += w; if (v > pk) pk = v;
 			if (src === 'measured') MEAS.forEach(function (m, i) { parts[i] += (x[m[1]] || 0) * w; });
 		});
+		if (!n) {   /* not covered by the scans in range (one channel at a time, or stopped early): the newest scan before that did */
+			var o = (info.older || []).filter(function (r) { return cellVal(r.cells[c], src) != null; })[0];
+			if (o) {
+				var x = o.cells[c]; sum = pk = cellVal(x, src); n = 1; filled++;
+				if (src === 'measured') MEAS.forEach(function (m, i) { parts[i] = x[m[1]] || 0; });
+				if (x[10] != null && !nzn) { nz = x[10]; nzn = 1; }
+			}
+		}
 		avg[c] = n ? Math.round(sum / n * 10) / 10 : null; peak[c] = n ? Math.round(pk) : null;
 		MEAS.forEach(function (m, i) { comp[m[0]][c] = n ? Math.round(parts[i] / n * 10) / 10 : null; });
 		noise[c] = nzn ? Math.round(nz / nzn) : null;
 	});
-	return { avg: avg, peak: peak, comp: comp, noise: noise, src: src, info: info, n: info.scans, latestOnly: info.latestOnly };
+	return { avg: avg, peak: peak, comp: comp, noise: noise, src: src, info: info, n: info.scans, latestOnly: info.latestOnly, filled: filled };
 }
 function renderChannels() {
 	$('wiBestSub').textContent = 'Best channel for each width, based on the load above.' + (WI.band === '5g' ? ' DFS channels can be forced to change if radar is detected.' : '');
@@ -886,7 +901,9 @@ function renderChannels() {
 	/* A router doesn't hear its own networks when it scans: "Yours" counts mesh nodes and other access points of yours. */
 	var anyMine = mine.some(function (n) { return n > 0; });
 	$('wiCntLegend').innerHTML = legendHTML('cnt', anyMine ? [['Other networks', C.others, 0], ['Yours', C.yours, 0]] : [['Other networks', C.others, 0]]);
-	$('wiCntSub').textContent = 'Counted by primary channel in the latest scan.' + (anyMine ? '' : ' Your router doesn\'t hear its own network; the shaded area is its channel.');
+	var lastTs = WI.scans && WI.scans.last_scan && WI.scans.last_scan[WI.band], olderN = list.filter(function (a) { return a.ts && lastTs && a.ts < lastTs; }).length;
+	$('wiCntSub').textContent = 'Counted by primary channel in the latest scan' + (olderN ? ', and in earlier scans for channels it didn\'t cover' : '') + '.'
+		+ (anyMine ? '' : ' Your router doesn\'t hear its own network; the shaded area is its channel.');
 	var barBase = { borderRadius: { topLeft: 4, topRight: 4 }, borderSkipped: 'bottom', categoryPercentage: 0.72, barPercentage: 0.9, borderWidth: { top: 2 }, borderColor: C.surface };
 	var xCat = { type: 'category', grid: { display: false }, border: { color: '#4a585d' }, ticks: { color: C.tick, font: { size: 11 }, autoSkip: ch.length > 30, autoSkipPadding: 6, maxRotation: 0 } };   /* 6 GHz has 59 channels */
 	drawChart('cnt', 'wiCntChart', 'bar', [
@@ -901,7 +918,8 @@ function renderChannels() {
 	var mn = L.info.mscans, part = meas && !L.latestOnly && mn < L.n;   /* scans from before the update have no measurements */
 	var sc = function (n) { return n + ' scan' + (n === 1 ? '' : 's'); };
 	$('wiLoadSub').textContent = (meas ? 'Measured by the radio' : 'Estimated from the networks heard')
-		+ (L.latestOnly ? ' in the latest scan' : part ? ' in ' + mn + ' of the ' + sc(L.n) + ' in range' : ', averaged over ' + sc(L.n)) + '. Lower is better.';
+		+ (L.latestOnly ? ' in the latest scan' : part ? ' in ' + mn + ' of the ' + sc(L.n) + ' in range' : ', averaged over ' + sc(L.n)) + '. Lower is better.'
+		+ (L.filled ? ' ' + L.filled + ' channel' + (L.filled === 1 ? '' : 's') + ' the ' + (L.latestOnly || L.n === 1 ? 'scan' : 'scans') + ' didn\'t cover: from the newest earlier scan that did.' : '');
 	var data = ch.map(function (c) { return L.avg[c]; });
 	var maxV = Math.max.apply(null, data.map(function (v) { return v || 0; }));
 	var curIdx = ch.map(function (c, i) { return cur.indexOf(c) >= 0 ? i : -1; }).filter(function (i) { return i >= 0; });
