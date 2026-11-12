@@ -2,7 +2,7 @@
 
 What changed in each release of WiFi Insight. The release workflow copies a version's section into its GitHub release notes, so write for people running the addon.
 
-## 1.2.2
+## 1.3.0
 
 - **Scans that cover only part of the band are stored as such.** A scan taken one channel at a time, or one the driver stopped early, used to be saved as if every channel had been scanned, so the channels it missed showed up as empty and quiet, and *Quietest options* could suggest them. Now only the channels a scan covered are stored. Where the latest scans didn't cover a channel, *Load per channel* and *Quietest options* use the newest scan within the previous 6 hours that did, and Site Survey and *Networks per channel* keep the networks it heard there. The page says when it does.
 - **One channel at a time, without skipping channels.** On routers that take a single-channel scan only every so often, WiFi Insight now waits on each channel until the driver takes it, instead of moving on after 20 seconds, so no channel is left out. It stops when nothing has been taken for a minute, or after 150 seconds, and the next scan carries on from there. Once the driver has refused a full scan on a channel, WiFi Insight tries a full scan just once on later scans there, not for 20 seconds, and gives it the full 20 seconds again every 6 hours. Sampling carries on during one-channel scans.

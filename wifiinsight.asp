@@ -8,7 +8,7 @@
 <link rel="shortcut icon" href="images/favicon.png"/>
 <link rel="icon" href="images/favicon.png"/>
 <title>WiFi Insight</title>
-<!-- wifiinsight-version: 1.2.2 (must match VERSION in wifiinsight.sh) -->
+<!-- wifiinsight-version: 1.3.0 (must match VERSION in wifiinsight.sh) -->
 <link rel="stylesheet" type="text/css" href="index_style.css"/>
 <link rel="stylesheet" type="text/css" href="form_style.css"/>
 <script type="text/javascript" src="/js/jquery.js"></script>
