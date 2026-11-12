@@ -4,6 +4,7 @@
 # Until a scan ends, `wl scanresults` answers "Not Ready". On 3006.102 (driver 17.10) routers the
 # 5 GHz scan takes longer than the 9 s WiFi Insight used to wait, so 5 GHz never got a scan. The
 # script now polls: up to 20 s for 2.4 GHz and 45 s for 5/6 GHz, and up to 20 s for a busy radio.
+# A radio that stays busy then gets one channel at a time (one-channel.sh); here it refuses those too.
 #
 # A stand-in wl simulates slow, busy, silent and switched-off radios, on a fake clock (date +%s and
 # sleep), so the test takes seconds. Runs with Merlin's BusyBox commands only, like large-history.sh.
@@ -116,7 +117,7 @@ case_ "5 GHz busy for a while (acsd, Smart Connect)" "ok, 2 networks in 3 s" "ok
 reset; echo never > "$F/eth7.ready"
 case_ "5 GHz never finishes" "ok, 2 networks in 3 s" "empty, wl said \"Not Ready\" for 45 s"
 reset; echo 99999999999 > "$F/eth7.busy"
-case_ "5 GHz always busy" "ok, 2 networks in 3 s" "busy, wl said \"Busy\" for 20 s"
+case_ "5 GHz always busy, single channels too" "ok, 2 networks in 3 s" "busy, wl said \"Busy\" for 20 s; single channels refused too"
 reset; touch "$F/eth7.empty"
 case_ "5 GHz hears nothing" "ok, 2 networks in 3 s" "empty, no networks heard in 13 s"
 reset; touch "$F/eth7.down"

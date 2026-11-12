@@ -15,7 +15,7 @@
 #              -o /tmp/wifiinsight.sh && sh /tmp/wifiinsight.sh install
 ###############################################################################
 
-VERSION="1.2.0"
+VERSION="1.2.1"
 NAME="wifiinsight"
 TITLE="WiFi Insight"
 
@@ -98,7 +98,18 @@ chart_ok() {   # the downloaded Chart.js is byte-identical to the published npm 
 	[ "$h" = "$CHART_SHA256" ]
 }
 
-sql() { "$SQLITE" -batch -noheader -cmd ".timeout 8000" "$DB" "$@"; }
+# sqlite's errors still go to stderr. "malformed" or "not a database" also marks the database as damaged
+# (a power cut while the USB drive was writing, say), which status and the page report until 'repair'.
+sql() {
+	{ _sqe=$("$SQLITE" -batch -noheader -cmd ".timeout 8000" "$DB" "$@" 2>&1 1>&3 3>&-); _sqr=$?; } 3>&1
+	if [ -n "$_sqe" ]; then
+		printf '%s\n' "$_sqe" >&2
+		case "$_sqe" in *malformed*|*"not a database"*)
+			[ -f "$DATA_DIR/damaged" ] || { now > "$DATA_DIR/damaged"; log "the database is damaged ($(printf '%s' "$_sqe" | head -1 | cut -c1-80)): run '$SCRIPT repair'"; } 2>/dev/null ;;
+		esac
+	fi
+	return $_sqr
+}
 
 # Big query results (a day of samples is ~350 KB of JSON) must never sit in a shell variable or
 # be passed as an argument. Merlin's BusyBox runs [, printf and echo as separate programs, and
@@ -625,6 +636,56 @@ scan_rest() {   # ifc band "channels" before-file after-file results-file
 	return 0
 }
 
+# Some drivers refuse a full scan but take one channel at a time: an RT-BE88U on a DFS channel took
+# every single-channel scan, and an RT-AX88U and a GT-AX6000 took the odd one. So when the full scan
+# is refused, scan the channels one by one: each retried for up to 20 s, as a GT-AX6000 took one about
+# every 16 s ("Bad Channel", a channel radar put off limits, isn't retried), giving up after three refused
+# in a row or 150 s. The next scan starts where this one stopped, so the band is covered over a few scans.
+# Sets each_got (channels measured), each_did (channels scanned), each_all, each_why (wl's last refusal)
+# and each_cap (1 if the 150 s ran out).
+scan_each() {   # ifc band "channels" before-file after-file results-file
+	each_got=""; each_did=0; each_why=""; each_cap=""; : > "$6"
+	nxt="$TMPD/each_$2.next"; err="$TMPD/scan_$2.err"; out="$TMPD/scan_$2.one"
+	each_all=$(echo $3 | wc -w | tr -d ' ')
+	off=$(cat "$nxt" 2>/dev/null); case "$off" in ''|*[!0-9]*) off=0 ;; esac
+	[ "$off" -lt "$each_all" ] || off=0
+	t0=$(now); row=0; tried=0
+	for c in $(echo $3 | awk -v o="$off" '{ for (i = 0; i < NF; i++) printf "%s ", $((i + o) % NF + 1) }'); do
+		[ $row -ge 3 ] && break
+		if [ $(( $(now) - t0 )) -ge 150 ]; then each_cap=1; break; fi
+		tried=$((tried + 1)); t1=$(now); ok=0
+		while :; do
+			if wl -i "$1" scan -c "$c" > /dev/null 2> "$err"; then ok=1; break; fi
+			grep -q 'Bad Channel' "$err" && break
+			[ $(( $(now) - t1 )) -ge 20 ] && break
+			sleep 2
+		done
+		if [ $ok = 0 ]; then
+			grep -q 'Bad Channel' "$err" || row=$((row + 1))
+			each_why=$(wl_said "$err" $(( $(now) - t1 )) "refused"); continue
+		fi
+		row=0; t2=$(now); p=""; sleep 1
+		while :; do   # done when the channel has new figures, or the results are in (drivers without figures)
+			el=$(( $(now) - t2 ))
+			if wl -i "$1" scanresults > "$out" 2>/dev/null; then
+				wl -i "$1" chanim_stats all > "$5" 2>/dev/null
+				p=$(chanim_reached "$c" "$4" "$5" "$2")
+				[ -n "${p%%|*}" ] && break
+				[ $el -ge 3 ] && break
+			else : > "$out"
+			fi
+			[ $el -ge 10 ] && break
+			sleep 1
+		done
+		cat "$out" >> "$6"
+		each_did=$((each_did + 1))
+		[ -n "${p%%|*}" ] && each_got="$each_got${each_got:+ }$c"
+		[ -s "$5" ] && cp "$5" "$4"
+	done
+	echo $(( (off + tried) % each_all )) > "$nxt"
+	rm -f "$out"
+}
+
 scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in quiet hours
 	if [ "$1" = "--delay" ]; then
 		[ "$COLLECTION" = on ] || return 0
@@ -652,24 +713,41 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 		wl -i "$ifc" chanim_stats all > "$m0" 2>/dev/null   # the figures the radio still holds from earlier scans
 		ts0=$(now)
 		scan_radio "$ifc" "$band"
+		each=0
+		if [ "$result" = busy ] && [ -n "$chs" ]; then   # the full scan was refused: try one channel at a time
+			full=$detail
+			scan_each "$ifc" "$band" "$chs" "$m0" "$m1" "$all"
+			if [ $each_did -gt 0 ]; then
+				each=1; nn=$(grep '^BSSID' "$all" | awk '{ print $2 }' | sort -u | wc -l | tr -d ' ')
+				detail="$nn network$( [ "$nn" = 1 ] || printf s) in $(( $(now) - ts0 )) s, one channel at a time (full scan refused: $full)"
+				[ $each_did -lt $each_all ] && detail="$detail, $each_did of $each_all channels${each_why:+ ($each_why)}${each_cap:+, the rest next time}"
+				if [ "$nn" -gt 0 ] || [ -n "$each_got" ]; then result=ok; else result=empty; fi
+			else
+				detail="$detail; single channels refused too"
+			fi
+		fi
 		if [ "$result" = ok ]; then
-			sts=$(now); cp "$res" "$all"
-			wl -i "$ifc" chanim_stats all > "$m1" 2>/dev/null
-			p=$(chanim_reached "$chs" "$m0" "$m1" "$band"); got=${p%%|*}; rest=${p#*|}
-			# stopped early: scan the channels it didn't reach (twice at most), so every scan covers them all.
-			# If that reached none of them, don't try the same channels again until a reboot.
-			more=0; stop=${got##* }; skip="$TMPD/rest_$band.skip"
-			[ -n "$rest" ] && [ "$(cat "$skip" 2>/dev/null)" = "$rest" ] && rest=""
-			while [ -n "$got" ] && [ -n "$rest" ] && [ $more -lt 2 ]; do
-				cp "$m1" "$m0"
-				scan_rest "$ifc" "$band" "$rest" "$m0" "$m1" "$all" || break
-				p=$(chanim_reached "$rest" "$m0" "$m1" "$band")
-				if [ -z "${p%%|*}" ]; then [ $more -eq 0 ] && echo "$rest" > "$skip"; break; fi
-				more=$((more + 1)); got="$got ${p%%|*}"; rest=${p#*|}
-			done
-			if [ $more -gt 0 ]; then
-				nn=$(grep '^BSSID' "$all" | awk '{ print $2 }' | sort -u | wc -l | tr -d ' ')
-				detail="$nn network$( [ "$nn" = 1 ] || printf s) in $(( $(now) - ts0 )) s, stopped at $stop and finished with $( [ $more = 1 ] && echo 'a second scan' || echo "$more more scans")"
+			sts=$(now)
+			if [ $each = 1 ]; then got=$each_got
+			else
+				cp "$res" "$all"
+				wl -i "$ifc" chanim_stats all > "$m1" 2>/dev/null
+				p=$(chanim_reached "$chs" "$m0" "$m1" "$band"); got=${p%%|*}; rest=${p#*|}
+				# stopped early: scan the channels it didn't reach (twice at most), so every scan covers them all.
+				# If that reached none of them, don't try the same channels again until a reboot.
+				more=0; stop=${got##* }; skip="$TMPD/rest_$band.skip"
+				[ -n "$rest" ] && [ "$(cat "$skip" 2>/dev/null)" = "$rest" ] && rest=""
+				while [ -n "$got" ] && [ -n "$rest" ] && [ $more -lt 2 ]; do
+					cp "$m1" "$m0"
+					scan_rest "$ifc" "$band" "$rest" "$m0" "$m1" "$all" || break
+					p=$(chanim_reached "$rest" "$m0" "$m1" "$band")
+					if [ -z "${p%%|*}" ]; then [ $more -eq 0 ] && echo "$rest" > "$skip"; break; fi
+					more=$((more + 1)); got="$got ${p%%|*}"; rest=${p#*|}
+				done
+				if [ $more -gt 0 ]; then
+					nn=$(grep '^BSSID' "$all" | awk '{ print $2 }' | sort -u | wc -l | tr -d ' ')
+					detail="$nn network$( [ "$nn" = 1 ] || printf s) in $(( $(now) - ts0 )) s, stopped at $stop and finished with $( [ $more = 1 ] && echo 'a second scan' || echo "$more more scans")"
+				fi
 			fi
 			parse_scan "$sts" "$band" "$chs" "$ownf" < "$all" | sql
 			# what the radio measured on each channel this scan reached, where the driver reports it
@@ -684,7 +762,7 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 			# the page says "starts with the next scan" until a scan has run with this version
 			[ "$(cat "$DATA_DIR/measured_$band" 2>/dev/null)" = "$mc" ] || echo "$mc" > "$DATA_DIR/measured_$band"
 		fi
-		rm -f "$m0"
+		rm -f "$m0" "$m1" "$all"
 		bands="$bands${bands:+,}\"$band\":\"$result\""
 		notes="$notes${notes:+,}\"$band\":\"$(js "$detail")\""
 		log "scan $band ($ifc): $result${detail:+, $detail}"
@@ -854,7 +932,8 @@ export_live() {
 		printf '"data_dir":"%s","db_bytes":%s,"own_ssids":[%s],"extra_own":"%s",' \
 			"$(js "$DATA_DIR")" "$(jnum "$dbb")" "$ownj" "$(js "$EXTRA_OWN_SSIDS")"
 		printf '"collection":"%s","quiet":"%s","tz_off":%s,"build":"%s",' "$COLLECTION" "$QUIET" "$(tz_off)" "$(js "$( [ -f "$BUILD_FILE" ] && awk '$1 == "dev" { print $2 "@" $3 }' "$BUILD_FILE")")"
-		printf '"measured":{%s},"country":"%s","territory":"%s","radios":%s,"samples":' "$mj" "$(js "$(country_code)")" "$(js "$(territory_code)")" "$(radios_json)"
+		printf '"measured":{%s},"country":"%s","territory":"%s","radios":%s,' "$mj" "$(js "$(country_code)")" "$(js "$(territory_code)")" "$(radios_json)"
+		printf '"damaged":%s,"samples":' "$(jnum "$(cat "$DATA_DIR/damaged" 2>/dev/null)")"   # when sqlite first said the database is damaged; null = fine
 		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(ts,obss,nocat,tx,inbss,idle,glitch,noise,ctl,width,center,nopkt,doze,txop,goodtx,badtx,badplcp,knoise)) AS a FROM (SELECT * FROM samples WHERE ts>=$since ORDER BY band, ts) GROUP BY band);"
 		printf ',"events":'
 		json_out '[]' "SELECT json_group_array(json_array(ts,band,tag,old,new,detail)) FROM (SELECT * FROM events WHERE ts>=$evsince ORDER BY ts DESC LIMIT 500);"
@@ -1487,7 +1566,7 @@ uninstall() {
 	if [ "$1" = "--keep-data" ]; then
 		say "History kept in $DATA_DIR"
 	else
-		case "$DATA_DIR" in */$NAME) rm -rf "$DATA_DIR" ;; *) rm -f "$DB"; say "Left $DATA_DIR in place (deleted only the database)." ;; esac
+		case "$DATA_DIR" in */$NAME) rm -rf "$DATA_DIR" ;; *) rm -f "$DB" "$DB.bad" "$DATA_DIR/damaged"; say "Left $DATA_DIR in place (deleted only the database)." ;; esac
 	fi
 	rm -rf "$ADDON_DIR"
 	say "Removed."
@@ -1509,6 +1588,43 @@ status() {
 		say "Recent events:"
 		sql "SELECT '  ' || datetime(ts,'unixepoch','localtime') || '  ' || band || '  ' || tag || '  ' || coalesce(old,'') || ' -> ' || coalesce(new,'') FROM events ORDER BY ts DESC LIMIT 8;"
 	fi
+	if [ -f "$DATA_DIR/damaged" ]; then
+		say "Database:    DAMAGED (noticed $(date -d "@$(cat "$DATA_DIR/damaged")" '+%Y-%m-%d %H:%M' 2>/dev/null || echo earlier)). Run '$SCRIPT repair'."
+	fi
+}
+
+# Rebuild a damaged database from everything still readable (sqlite3 .dump; .recover isn't in every
+# build), with sampling and scans held off meanwhile. The damaged copy is kept next to it as .bad.
+repair() {   # [force]: rebuild even when the check finds nothing wrong
+	[ -x "$SQLITE" ] || die "sqlite3 isn't installed ($SQLITE)."
+	[ -f "$DB" ] || die "There's no database at $DB."
+	mkdir -p "$TMPD"
+	exec 7>"$TMPD/scan.lock"
+	i=0; until flock -n 7; do i=$((i + 1)); [ $i -gt 150 ] && die "A scan is still running. Try again in a few minutes."; sleep 2; done
+	exec 6>"$TMPD/collect.lock"
+	i=0; until flock -n 6; do i=$((i + 1)); [ $i -gt 60 ] && die "Sampling is still running. Try again in a minute."; sleep 2; done
+	say "Checking $DB..."
+	chk=$("$SQLITE" "$DB" "PRAGMA quick_check;" 2>&1 | head -3)
+	if [ "$chk" = ok ] && [ "$1" != force ]; then
+		rm -f "$DATA_DIR/damaged"; say "The database is fine: nothing to repair."; return 0
+	fi
+	[ "$chk" = ok ] || say "It's damaged: $(printf '%s' "$chk" | head -1 | cut -c1-100)"
+	kb=$(du -k "$DB" | cut -f1); free=$(df -k "$DATA_DIR" | tail -1 | awk '{ print $(NF-2) }')
+	[ "$free" -gt $((kb * 2)) ] 2>/dev/null || die "Not enough free space on the drive for a copy (${kb} KB needed twice); nothing was changed."
+	new="$DB.new"; bad="$DB.bad"; rm -f "$new" "$new-journal"
+	say "Copying everything still readable into a new database..."
+	"$SQLITE" "$DB" .dump 2>/dev/null | sed 's/^ROLLBACK;.*/COMMIT;/' | "$SQLITE" "$new" > /dev/null 2>&1
+	nchk=$("$SQLITE" "$new" "PRAGMA integrity_check;" 2>&1 | head -1)
+	[ "$nchk" = ok ] || { rm -f "$new"; die "The new copy isn't sound either ($nchk); nothing was changed."; }
+	rm -f "$bad" "$bad-journal"
+	mv "$DB" "$bad" || { rm -f "$new"; die "Couldn't move the damaged database aside; nothing was changed."; }
+	[ -f "$DB-journal" ] && mv "$DB-journal" "$bad-journal"
+	mv "$new" "$DB" || { mv "$bad" "$DB"; die "Couldn't put the new copy in place; the database is as it was."; }
+	init_db   # tables or indexes the damage took
+	rm -f "$DATA_DIR/damaged"
+	kept=$(sql "SELECT (SELECT count(*) FROM samples) || ' samples and ' || (SELECT count(DISTINCT band || ts) FROM scans) || ' scans';")
+	say "Repaired: kept $kept. The damaged copy is $bad: delete it once everything looks right."
+	log "database repaired, kept $kept; the damaged copy is $bad"
 }
 
 fw_version() {   # e.g. 3004.388.12_2
@@ -1576,7 +1692,7 @@ amtm_update() {   # [check]
 
 usage() {
 	say "Usage: $0 [menu] | install | check | update [force | dev [branch]] | uninstall [--keep-data] | status | scan |"
-	say "       collection [on|paused|off] | debug | amtmupdate [check] | export | version"
+	say "       collection [on|paused|off] | repair | debug | amtmupdate [check] | export | version"
 }
 menu_pause() { printf '\n Press Enter to go back to the menu '; read -r dummy || exit 0; }
 menu_collection() {
@@ -1665,6 +1781,7 @@ case "$1" in
 	export)        lowprio; ready && export_all ;;
 	prune)         prune ;;
 	status)        status ;;
+	repair)        repair "$2" ;;
 	debug)         debug ;;
 	service_event) service_event "$2" "$3" ;;
 	version)       say "$VERSION" ;;
