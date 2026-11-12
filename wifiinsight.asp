@@ -8,7 +8,7 @@
 <link rel="shortcut icon" href="images/favicon.png"/>
 <link rel="icon" href="images/favicon.png"/>
 <title>WiFi Insight</title>
-<!-- wifiinsight-version: 1.2.0 (must match VERSION in wifiinsight.sh) -->
+<!-- wifiinsight-version: 1.2.1 (must match VERSION in wifiinsight.sh) -->
 <link rel="stylesheet" type="text/css" href="index_style.css"/>
 <link rel="stylesheet" type="text/css" href="form_style.css"/>
 <script type="text/javascript" src="/js/jquery.js"></script>
@@ -299,9 +299,10 @@ function loadAll(what) {
 	if (!what || what.live) jobs.push(getJSON('live.htm').then(function (d) { WI.live = d; }));
 	/* scans and week files can be missing for a minute after a reboot: keep what we have */
 	if (!what || what.scans) jobs.push(getJSON('scans.htm').then(function (d) { WI.scans = d; }, function () {}));
+	if (!what || what.scans) jobs.push(getJSON('scanstate.htm').then(function (d) { WI.scanState = d; }, function () {}));   /* the last scan's result per band */
 	if (!what || what.week) jobs.push(getJSON('week.htm').then(function (d) { WI.week = d; }, function () {}));
 	if (what && what.month) jobs.push(getJSON('month.htm').then(function (d) { WI.month = d; }, function () {}));
-	return Promise.all(jobs).then(function () { $('wiWarn').style.display = 'none'; render(); })
+	return Promise.all(jobs).then(function () { dbWarn(); render(); })
 		.catch(function () {
 			var w = $('wiWarn');
 			w.innerHTML = 'No data yet. If you just installed, give it a minute. Otherwise check that the USB drive is mounted and run <code>/jffs/addons/wifiinsight/wifiinsight.sh status</code> over SSH.';
@@ -586,7 +587,8 @@ function srcControls(info, src, meshId) {   /* the Measured / Estimated switch a
 	$(meshId).style.display = src === 'estimated' ? '' : 'none';
 	if (!info.measured) {   /* no scan since this version yet (after one, the router reports how many channels it measured) */
 		var m = (WI.live && WI.live.measured) || {};
-		return m[WI.band] == null ? '<span class="li" style="color:var(--muted)">Measured airtime starts with the next neighbour scan, or press Scan now.</span>' : '';
+		/* not while this band's scans fail: the card says why instead */
+		return m[WI.band] == null && !lastScanTrouble() ? '<span class="li" style="color:var(--muted)">Measured airtime starts with the next neighbour scan, or press Scan now.</span>' : '';
 	}
 	return '<span class="seg sm">' + [['measured', 'Measured'], ['estimated', 'Estimated']].map(function (x) {
 		return '<button type="button" class="' + (x[0] === src ? 'on' : '') + '" onclick="WiFiInsight.setSrc(\'' + x[0] + '\')" title="' +
@@ -594,8 +596,27 @@ function srcControls(info, src, meshId) {   /* the Measured / Estimated switch a
 	}).join('') + '</span>' + (src === 'measured' ? legendHTML('meas', MEAS.map(function (m) { return [m[0], m[2], 1]; })) : '');
 }
 function setSrc(s) { WI.src = s; store('src', s); renderView(); }
+/* Why this band's last scan got nothing (refused, nothing heard, radio off), from scanstate.htm, as plain text; '' if it didn't fail. */
+function lastScanTrouble() {
+	var s = WI.scanState, r = s && s.state === 'done' && s.bands ? s.bands[WI.band] : null;
+	if (!r || r === 'ok') return '';
+	var note = s.notes && s.notes[WI.band] ? ' (' + s.notes[WI.band] + ')' : '', at = s.ts ? ' at ' + hm(s.ts) : '';
+	if (r === 'off') return 'The ' + BAND_NAME[WI.band] + ' radio was off at the last scan' + at + '.';
+	if (r === 'busy') return 'The radio refused the last scan' + at + note + '.' + (WI.band === '5g' ? ' Some routers refuse 5 GHz scans while on a DFS channel.' : '');
+	return 'The last scan' + at + ' heard no networks' + note + '.';
+}
 function noScansMsg() {
-	return (WI.scans && WI.scans.scan_interval === 0) ? 'Neighbour scans are switched off. Turn them on in Settings, or press <b>Scan now</b>.' : 'No scans yet. Press <b>Scan now</b> or wait for the next scheduled scan.';
+	if (WI.scans && WI.scans.scan_interval === 0) return 'Neighbour scans are switched off. Turn them on in Settings, or press <b>Scan now</b>.';
+	var why = lastScanTrouble();
+	return why ? esc(why) + ' Press <b>Scan now</b> to try again, or wait for the next scheduled scan.' : 'No scans yet. Press <b>Scan now</b> or wait for the next scheduled scan.';
+}
+/* The database on the USB drive is damaged (a power cut mid-write): say so until it's repaired. */
+function dbWarn() {
+	var w = $('wiWarn'), d = WI.live && WI.live.damaged;
+	if (!d) { w.style.display = 'none'; return; }
+	w.innerHTML = 'The history database is damaged (noticed ' + new Date(d * 1000).toLocaleString() + '), so some charts may have gaps or stop updating. ' +
+		'To repair it, run <code>/jffs/addons/wifiinsight/wifiinsight.sh repair</code> over SSH.';
+	w.style.display = 'block';
 }
 function prepCanvas(cv, cssH) {
 	var cssW = cv.parentNode.clientWidth || 700, dpr = window.devicePixelRatio || 1;
@@ -648,7 +669,8 @@ function renderHeat() {
 	var how = src !== 'measured' ? 'estimated from the networks heard' : (info.mscans < info.scans && !info.latestOnly ? info.mscans + ' measured' : 'measured') + ' by the radio';
 	$('wiHeatSub').textContent = (info.latestOnly ? 'Latest scan, ' + ago(nowTs() - rows[0].ts)
 		: info.scans + ' scan' + (info.scans > 1 ? 's' : '') + (info.bucket ? ', shown as ' + bucketName(info.bucket) + ' averages' : ', newest ' + ago(nowTs() - rows[0].ts)))
-		+ ', ' + how + '.' + (qshow ? ' No scheduled scans in quiet hours.' : '');
+		+ ', ' + how + '.' + (qshow ? ' No scheduled scans in quiet hours.' : '')
+		+ (WI.scanState && WI.scanState.ts > rows[0].ts && lastScanTrouble() ? ' ' + lastScanTrouble() : '');
 }
 function axisChannels(ctx, ch, padL, colW, y0) {
 	ctx.fillStyle = C.tick; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
@@ -853,7 +875,7 @@ function channelLoads() {   // average and peak load per channel across scans in
 function renderChannels() {
 	$('wiBestSub').textContent = 'Best channel for each width, based on the load above.' + (WI.band === '5g' ? ' DFS channels can be forced to change if radar is detected.' : '');
 	var ch = chans(), list = aps(), r = radio(), cur = r ? spanOf(r.center, r.width) : [];
-	if (!ch.length || !list.length && !(WI.scans && WI.scans.scans && WI.scans.scans[WI.band])) {
+	if (!ch.length || !list.length && !(WI.scans && WI.scans.scans && (WI.scans.scans[WI.band] || []).length)) {
 		drawChart('cnt', 'wiCntChart', 'bar', [], { empty: noScansMsg() });
 		drawChart('load', 'wiLoadChart', 'bar', [], { empty: noScansMsg() });
 		$('wiNzChCard').style.display = 'none'; $('wiLoadSrc').innerHTML = '';
@@ -861,7 +883,10 @@ function renderChannels() {
 	}
 	var labels = ch.map(String), others = ch.map(function () { return 0; }), mine = ch.map(function () { return 0; });
 	list.forEach(function (a) { var i = ch.indexOf(a.ctl); if (i < 0) return; if (a.own) mine[i]++; else others[i]++; });
-	$('wiCntLegend').innerHTML = legendHTML('cnt', [['Other networks', C.others, 0], ['Yours', C.yours, 0]]);
+	/* A router doesn't hear its own networks when it scans: "Yours" counts mesh nodes and other access points of yours. */
+	var anyMine = mine.some(function (n) { return n > 0; });
+	$('wiCntLegend').innerHTML = legendHTML('cnt', anyMine ? [['Other networks', C.others, 0], ['Yours', C.yours, 0]] : [['Other networks', C.others, 0]]);
+	$('wiCntSub').textContent = 'Counted by primary channel in the latest scan.' + (anyMine ? '' : ' Your router doesn\'t hear its own network; the shaded area is its channel.');
 	var barBase = { borderRadius: { topLeft: 4, topRight: 4 }, borderSkipped: 'bottom', categoryPercentage: 0.72, barPercentage: 0.9, borderWidth: { top: 2 }, borderColor: C.surface };
 	var xCat = { type: 'category', grid: { display: false }, border: { color: '#4a585d' }, ticks: { color: C.tick, font: { size: 11 }, autoSkip: ch.length > 30, autoSkipPadding: 6, maxRotation: 0 } };   /* 6 GHz has 59 channels */
 	drawChart('cnt', 'wiCntChart', 'bar', [
@@ -1344,7 +1369,7 @@ function scanNow() {
 		});
 		return out.length ? out.join('; ') + '. Kept the previous scan.' : '';
 	};
-	btn.disabled = true; btn.textContent = 'Scanning…'; say('About 15 seconds, up to a minute on some routers');
+	btn.disabled = true; btn.textContent = 'Scanning…'; say('About 15 seconds; up to a few minutes on routers that scan one channel at a time');
 	getJSON('scanstate.htm').then(function (s) { s0 = s; }, function () { s0 = { seq: -1, state: 'none' }; }).then(function () {
 		document.formScriptActions.action_script.value = 'start_wifiinsightscan';
 		document.formScriptActions.submit();
@@ -1356,7 +1381,7 @@ function scanNow() {
 					if (waited > 15000) finish('The router didn\'t start the scan. Check that WiFi Insight is installed (wifiinsight.sh status).', true);
 					return;
 				}
-				if (s.state === 'running') { if (waited > 150000) finish('The scan is taking longer than expected. Results will appear when it finishes.', true); return; }
+				if (s.state === 'running') { if (waited > 420000) finish('The scan is taking longer than expected. Results will appear when it finishes.', true); return; }
 				if (s.state === 'error') { finish(s.msg || 'The scan failed.', true); return; }
 				loadAll({ scans: 1 }).then(function () { var p = problems(s.bands, s.notes); finish(p || 'Scan complete', !!p); });
 			}, function () { if (waited > 15000) finish('The router didn\'t start the scan.', true); });
@@ -1548,7 +1573,7 @@ window.WiFiInsight = {
 	<!-- ============ CHANNEL STATISTICS ============ -->
 	<div class="view" id="v-channels">
 		<div class="card">
-			<div class="head"><div class="grow"><h3>Networks per channel</h3><div class="sub">Counted by primary channel in the latest scan.</div></div><div class="legend" id="wiCntLegend"></div></div>
+			<div class="head"><div class="grow"><h3>Networks per channel</h3><div class="sub" id="wiCntSub">Counted by primary channel in the latest scan.</div></div><div class="legend" id="wiCntLegend"></div></div>
 			<div class="chartbox sm" id="wiCntChart"></div>
 		</div>
 		<div class="card">
