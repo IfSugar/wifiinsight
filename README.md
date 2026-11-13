@@ -48,7 +48,7 @@ Time ranges: 10 minutes, 1 hour, 12 hours, 1 day, 7 days and 30 days. Short rang
 
 ## Supported routers
 
-Tested on an RT-AX86U with 3004.388.13_0. Every model current Merlin supports uses Broadcom Wi-Fi on all its radios; what differs is the radio layout and the driver. Models on Merlin 3006.102 have a newer driver (17.10) that prints its airtime statistics differently: they need WiFi Insight 1.0.11 or later. Some drivers refuse full 5 GHz scans ("Scan Rejected") while the router is on a DFS channel, and accept them on a non-DFS one: reported on an RT-AX88U, a GT-AX6000 and an RT-BE88U, while the RT-AX86U it's tested on scans fine on DFS channels. Since 1.2.1 WiFi Insight then scans one channel at a time, which some of these drivers take (an RT-BE88U took them all); where the driver refuses those too, Scan now, the syslog and the page say so.
+Tested on an RT-AX86U with 3004.388.13_0. Every model current Merlin supports uses Broadcom Wi-Fi on all its radios; what differs is the radio layout and the driver. Models on Merlin 3006.102 have a newer driver (17.10) that prints its airtime statistics differently: they need WiFi Insight 1.0.11 or later. Some drivers refuse full 5 GHz scans ("Scan Rejected") while the router is on a DFS channel, and accept them on a non-DFS one: reported on an RT-AX88U, a GT-AX6000 and an RT-BE88U, while the RT-AX86U it's tested on scans fine on DFS channels. Since 1.2.1 WiFi Insight then scans one channel at a time, which some of these drivers take; where the driver refuses those too, Scan now, the syslog and the page say so. If you'd rather have full scans, a channel outside 52–144 avoids it: in Wireless → General, un-tick "Enable 160 MHz" and "Auto select channel including DFS channels" (or pick a channel). The cost: no 160 MHz in most regions, and the remaining channels may be busier. The page suggests this only when your router's scans were actually refused on a DFS channel.
 
 | Router | Radios | Status |
 |---|---|---|
@@ -56,7 +56,7 @@ Tested on an RT-AX86U with 3004.388.13_0. Every model current Merlin supports us
 | RT-AX88U | 2.4 + 5 GHz | Works (user report); on a DFS channel the driver refuses full 5 GHz scans and takes single channels only now and then |
 | RT-AX86U Pro | 2.4 + 5 GHz | Works, including 5 GHz scans since 1.2.0 (user reports) |
 | GT-AX6000 | 2.4 + 5 GHz | Works (user report); on a DFS channel the driver refuses full 5 GHz scans and takes single channels only now and then |
-| RT-BE88U | 2.4 + 5 GHz | Charts and 2.4 GHz scans work (user report); on a DFS channel the driver refuses full 5 GHz scans but takes single channels, which 1.2.1 uses (awaiting confirmation) |
+| RT-BE88U | 2.4 + 5 GHz | Works (user reports); on some, 5 GHz scans are refused while on a DFS channel |
 | RT-AX58U (V1), RT-AX68U, RT-AX88U Pro, RT-BE86U, RT-BE58 Go | 2.4 + 5 GHz | Should work |
 | RT-BE96U | 2.4 + 5 + 6 GHz | Works, including 6 GHz (user report) |
 | GT-AXE11000, RT-BE92U, GT-BE19000AI | 2.4 + 5 + 6 GHz | Should work since 1.2.0. Up to 1.1.0 the check took the 6 GHz radio for a second 5 GHz one |
@@ -211,7 +211,7 @@ For amtm's maintainer, the details of a module:
 | Version line | `^VERSION=` |
 | Remote script | `https://github.com/IfSugar/wifiinsight/releases/latest/download/wifiinsight.sh` (the latest release, never unreleased work) |
 | Check string | `IfSugar/wifiinsight` |
-| Install | download the remote script to `/tmp/wifiinsight.sh`, then `sh /tmp/wifiinsight.sh install` |
+| Install | download the remote script to `/tmp/wifiinsight.sh`, then `sh /tmp/wifiinsight.sh install` (which removes that copy when it's done) |
 | Open | `/jffs/addons/wifiinsight/wifiinsight.sh` |
 | Entware | required (`sqlite3`) |
 

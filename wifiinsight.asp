@@ -8,7 +8,7 @@
 <link rel="shortcut icon" href="images/favicon.png"/>
 <link rel="icon" href="images/favicon.png"/>
 <title>WiFi Insight</title>
-<!-- wifiinsight-version: 1.3.0 (must match VERSION in wifiinsight.sh) -->
+<!-- wifiinsight-version: 1.3.1 (must match VERSION in wifiinsight.sh) -->
 <link rel="stylesheet" type="text/css" href="index_style.css"/>
 <link rel="stylesheet" type="text/css" href="form_style.css"/>
 <script type="text/javascript" src="/js/jquery.js"></script>
@@ -606,8 +606,20 @@ function lastScanTrouble() {
 	if (!r || r === 'ok') return '';
 	var note = s.notes && s.notes[WI.band] ? ' (' + s.notes[WI.band] + ')' : '', at = s.ts ? ' at ' + hm(s.ts) : '';
 	if (r === 'off') return 'The ' + BAND_NAME[WI.band] + ' radio was off at the last scan' + at + '.';
-	if (r === 'busy') return 'The radio refused the last scan' + at + note + '.' + (WI.band === '5g' ? ' Some routers refuse 5 GHz scans while on a DFS channel.' : '');
+	if (r === 'busy') return 'The radio refused the last scan' + at + note + '.' + (dfsHint() ? ' ' + dfsHint() : '');
 	return 'The last scan' + at + ' heard no networks' + note + '.';
+}
+/* Some drivers refuse full 5 GHz scans while on a DFS channel; many don't (an RT-AX86U in Europe scans
+   them fine). Only when this router's last scan of the band was refused, or had to go one channel at a
+   time, while its radio is on a DFS channel: say so, and what avoids it, with the cost. Plain text. */
+function dfsHint() {
+	var s = WI.scanState, r = radio(), res = s && s.state === 'done' && s.bands ? s.bands[WI.band] : null, note = (s && s.notes && s.notes[WI.band]) || '';
+	if (WI.band !== '5g' || !r || !r.dfs_state || !/ISM|CAC/.test(r.dfs_state)) return '';
+	if (!(res === 'busy' || note.indexOf('one channel at a time') >= 0)) return '';
+	return (res === 'busy' ? 'It\'s on DFS channel ' + r.ctl + ': some routers refuse scans there, and many don\'t. '
+			: 'The radio refused full scans on DFS channel ' + r.ctl + ', so it scans one channel at a time: some routers do this on DFS channels, and many don\'t. ')
+		+ 'If you\'d rather have full scans, a channel outside 52\u2013144 avoids it (Wireless \u2192 General: un-tick "Enable 160 MHz" and "Auto select channel including DFS channels"). '
+		+ 'The cost: no 160 MHz in most regions, and the remaining channels may be busier.';
 }
 function noScansMsg() {
 	if (WI.scans && WI.scans.scan_interval === 0) return 'Neighbour scans are switched off. Turn them on in Settings, or press <b>Scan now</b>.';
@@ -674,7 +686,7 @@ function renderHeat() {
 	$('wiHeatSub').textContent = (info.latestOnly ? 'Latest scan, ' + ago(nowTs() - rows[0].ts)
 		: info.scans + ' scan' + (info.scans > 1 ? 's' : '') + (info.bucket ? ', shown as ' + bucketName(info.bucket) + ' averages' : ', newest ' + ago(nowTs() - rows[0].ts)))
 		+ ', ' + how + '.' + (qshow ? ' No scheduled scans in quiet hours.' : '')
-		+ (WI.scanState && WI.scanState.ts > rows[0].ts && lastScanTrouble() ? ' ' + lastScanTrouble() : '');
+		+ (WI.scanState && WI.scanState.ts > rows[0].ts && lastScanTrouble() ? ' ' + lastScanTrouble() : dfsHint() ? ' ' + dfsHint() : '');
 }
 function axisChannels(ctx, ch, padL, colW, y0) {
 	ctx.fillStyle = C.tick; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
@@ -1401,7 +1413,7 @@ function scanNow() {
 				}
 				if (s.state === 'running') { if (waited > 420000) finish('The scan is taking longer than expected. Results will appear when it finishes.', true); return; }
 				if (s.state === 'error') { finish(s.msg || 'The scan failed.', true); return; }
-				loadAll({ scans: 1 }).then(function () { var p = problems(s.bands, s.notes); finish(p || 'Scan complete', !!p); });
+				loadAll({ scans: 1, live: 1 }).then(function () { var p = problems(s.bands, s.notes); finish(p || 'Scan complete', !!p); });   /* live too: the channel may have changed */
 			}, function () { if (waited > 15000) finish('The router didn\'t start the scan.', true); });
 		}, 2000);
 	});

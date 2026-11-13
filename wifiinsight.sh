@@ -15,7 +15,7 @@
 #              -o /tmp/wifiinsight.sh && sh /tmp/wifiinsight.sh install
 ###############################################################################
 
-VERSION="1.3.0"
+VERSION="1.3.1"
 NAME="wifiinsight"
 TITLE="WiFi Insight"
 
@@ -493,6 +493,12 @@ parse_scan() {   # ts band "channels" ownfile
 	}
 	END {
 		flush()
+		# A hidden network from one of your own devices (an AiMesh node backhaul, Wi-Fi 7 links) is yours
+		# too: its BSSID matches the BSSID of one of your named networks in all but the first byte and the
+		# last 4 bits, which only the same device shares (variants of one base address).
+		for (i = 1; i <= n; i++) if (O[i] && length(B[i]) == 17) dev[tolower(substr(B[i], 4, 13))] = 1
+		for (i = 1; i <= n; i++)
+			if (!O[i] && S[i] !~ /[^\001-\040]/ && length(B[i]) == 17 && (tolower(substr(B[i], 4, 13)) in dev)) O[i] = 1
 		print "BEGIN;"
 		for (i = 1; i <= n; i++)
 			printf "INSERT INTO aps VALUES(%d,\047%s\047,\047%s\047,\047%s\047,%d,%d,%d,%d,%d,%d,\047%s\047,\047%s\047,%d);\n", ts, band, esc(B[i]), esc(S[i]), R[i], C[i], M[i], W[i], U[i], O[i], P[i], X[i], N[i]
@@ -1475,6 +1481,10 @@ install() {
 	fi
 	[ -n "$page" ] && say "Direct link: http://$(nvram get lan_ipaddr)/$page"
 	say "The interference chart fills in over the next few minutes."
+	# The install command downloads to /tmp/wifiinsight.sh: remove that copy, so it can't be run by
+	# mistake later (an old copy's 'scan' or 'status' runs old code).
+	[ "$0" = "$ROOT/tmp/$NAME.sh" ] && [ "$0" != "$SCRIPT" ] && rm -f "$0"
+	return 0
 }
 
 asp_matches() { [ -s "$1" ] && grep -q "wifiinsight-version: $VERSION " "$1"; }
@@ -1808,6 +1818,19 @@ menu() {
 		esac
 	done
 }
+
+# Run from a copy of another version than the one installed (an old /tmp/wifiinsight.sh from an earlier
+# install, say): hand over to the installed script, so old code doesn't run against the current data.
+case "${1:-menu}" in
+	install|update|uninstall|check|version) ;;
+	*)	if [ "$0" != "$SCRIPT" ] && [ -f "$SCRIPT" ]; then
+			iv=$(sed -n 's/^VERSION="\([0-9][0-9.]*\)".*/\1/p' "$SCRIPT" | head -1)
+			if [ -n "$iv" ] && [ "$iv" != "$VERSION" ]; then
+				say "This is WiFi Insight $VERSION at $0, but $iv is installed: running that instead."
+				exec sh "$SCRIPT" "$@"
+			fi
+		fi ;;
+esac
 
 case "$1" in
 	'')            if [ -t 0 ] && [ -t 1 ]; then menu; else usage; fi ;;

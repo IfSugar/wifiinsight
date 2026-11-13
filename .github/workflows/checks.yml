@@ -68,6 +68,9 @@ jobs:
       - name: Check a damaged database is noticed, reported and repaired
         run: bash .github/tests/repair.sh
 
+      - name: Check an old copy of the script hands over to the installed one
+        run: bash .github/tests/old-copy.sh
+
       - name: Check bands and widths are read correctly (2.4, 5 and 6 GHz)
         run: bash .github/tests/radio-bands.sh
 
