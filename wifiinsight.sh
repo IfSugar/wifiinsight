@@ -369,33 +369,34 @@ detect_radar() {
 	[ -s "$lf" ] || { rm -f "$lf"; return; }
 	sig=$(awk 'NR > 1 { printf "\n" } { printf "%s", $0 }' "$lf" | md5sum | cut -c1-32)
 	[ "$sig" = "$(state_get radar_sig)" ] && { rm -f "$lf"; return; }
-	year=$(date +%Y); nowts=$(now)
-	maps=""; for r in $(radios); do maps="$maps $(nvram get wl${r}_ifname)=$r wl$r=$r"; done
+	# Each radio once: the names the log may give it (ethN or wlN) and its key. Then one pass over the lines.
+	# The syslog's local time becomes epoch seconds in sqlite ('utc' reads it as local time, with the
+	# router's TZ, as date -d did); a date over a day ahead is from last year (logs carry no year). Up to
+	# 1.3.0 each line started a dozen small programs: a minute for a log with 1800 radar lines.
+	mf="$TMPD/radar.map.$$"; : > "$mf"
+	for r in $(radios); do
+		ifc=$(nvram get wl${r}_ifname)
+		h=$(wl -i "$ifc" chanspec 2>/dev/null | sed -n 's/.*(\(0x[0-9a-fA-F]*\)).*/\1/p')
+		k=5g; [ -n "$h" ] && k=$(radio_key "$r" "$h")
+		printf '%s %s %s\n%s %s %s\n' "$ifc" "$k" "$ifc" "wl$r" "$k" "$ifc" >> "$mf"
+	done
 	{
 	echo 'BEGIN;'
-	while IFS= read -r line; do
-		mon=$(printf '%s' "$line" | cut -c1-3); day=$(printf '%s' "$line" | cut -c5-6 | tr -d ' ')
-		hms=$(printf '%s' "$line" | cut -c8-15)
-		m=$(echo "JanFebMarAprMayJunJulAugSepOctNovDec" | awk -v m="$mon" '{ i = index($0, m); print (i ? (i + 2) / 3 : 0) }')
-		[ "$m" -gt 0 ] 2>/dev/null || continue
-		t=$(date -d "$year-$m-$day $hms" +%s 2>/dev/null) || continue
-		[ "$t" -gt $((nowts + 86400)) ] && t=$(date -d "$((year - 1))-$m-$day $hms" +%s 2>/dev/null)
-		band=5g; det="Radar detected"
-		for mp in $maps; do
-			ifn=${mp%=*}; r=${mp#*=}
-			case "$line" in *"$ifn:"*|*"$ifn "*)
-				ifc=$(nvram get wl${r}_ifname)   # the log may name the radio as ethN or wlN
-				det="Radar detected on $ifc"
-				h=$(wl -i "$ifc" chanspec 2>/dev/null | sed -n 's/.*(\(0x[0-9a-fA-F]*\)).*/\1/p')
-				[ -n "$h" ] && band=$(radio_key "$r" "$h") ;;
-			esac
-		done
-		ev_sql "$t" "$band" radar "" "" "$det"
-	done < "$lf"
+	awk -v y="$(date +%Y)" -v soon=$(( $(now) + 86400 )) -v mf="$mf" '
+		function ts(yr) { return sprintf("CAST(strftime(\047%%s\047, \047%04d-%02d-%02d %s\047, \047utc\047) AS INTEGER)", yr, m, d, hms) }
+		BEGIN { while ((getline l < mf) > 0) if (split(l, a, " ") == 3) { n++; P[n] = a[1]; K[n] = a[2]; I[n] = a[3] } }
+		{
+			m = index("JanFebMarAprMayJunJulAugSepOctNovDec", substr($0, 1, 3)); if (!m || (m - 1) % 3) next
+			m = (m + 2) / 3; d = substr($0, 5, 2) + 0; hms = substr($0, 8, 8)
+			if (d < 1 || d > 31 || hms !~ /^[0-9][0-9]:[0-9][0-9]:[0-9][0-9]$/) next
+			band = "5g"; det = "Radar detected"   # the radio the line names, else 5 GHz
+			for (i = 1; i <= n; i++) if (index($0, P[i] ":") || index($0, P[i] " ")) { band = K[i]; det = "Radar detected on " I[i] }
+			printf "INSERT OR IGNORE INTO events SELECT CASE WHEN a > %d THEN b ELSE a END, \047%s\047, \047radar\047, \047\047, \047\047, \047%s\047 FROM (SELECT %s AS a, %s AS b);\n", soon, band, det, ts(y), ts(y - 1)
+		}' "$lf"
 	state_sql radar_sig "$sig"
 	echo 'COMMIT;'
 	} | sql
-	rm -f "$lf"
+	rm -f "$lf" "$mf"
 }
 
 # ---- scanning ---------------------------------------------------------------
