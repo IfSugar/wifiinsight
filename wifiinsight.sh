@@ -493,6 +493,12 @@ parse_scan() {   # ts band "channels" ownfile
 	}
 	END {
 		flush()
+		# A hidden network from one of your own devices (an AiMesh node backhaul, Wi-Fi 7 links) is yours
+		# too: its BSSID matches the BSSID of one of your named networks in all but the first byte and the
+		# last 4 bits, which only the same device shares (variants of one base address).
+		for (i = 1; i <= n; i++) if (O[i] && length(B[i]) == 17) dev[tolower(substr(B[i], 4, 13))] = 1
+		for (i = 1; i <= n; i++)
+			if (!O[i] && S[i] !~ /[^\001-\040]/ && length(B[i]) == 17 && (tolower(substr(B[i], 4, 13)) in dev)) O[i] = 1
 		print "BEGIN;"
 		for (i = 1; i <= n; i++)
 			printf "INSERT INTO aps VALUES(%d,\047%s\047,\047%s\047,\047%s\047,%d,%d,%d,%d,%d,%d,\047%s\047,\047%s\047,%d);\n", ts, band, esc(B[i]), esc(S[i]), R[i], C[i], M[i], W[i], U[i], O[i], P[i], X[i], N[i]
@@ -701,6 +707,7 @@ scan_each() {   # ifc band "channels" before-file after-file results-file
 }
 
 scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in quiet hours
+	sched=0; [ "$1" = "--delay" ] && sched=1
 	if [ "$1" = "--delay" ]; then
 		[ "$COLLECTION" = on ] || return 0
 		if quiet_now; then log "scheduled scan skipped: quiet hours"; return 0; fi
@@ -726,9 +733,21 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 		m0="$TMPD/chanim_$band.before"; m1="$TMPD/chanim_$band.after"; all="$TMPD/scan_$band.all"
 		wl -i "$ifc" chanim_stats all > "$m0" 2>/dev/null   # the figures the radio still holds from earlier scans
 		ts0=$(now); touch "$SCAN_FLAG"
-		scan_radio "$ifc" "$band" "$hex"
+		# a scheduled scan of a radio whose full scans are refused here: trickle scans it one channel at a
+		# time, spread out; this only retries the full scan every 6 hours (scan_radio)
+		set -- $(cat "$TMPD/refused_$band" 2>/dev/null); pre=0; [ "$1" = "$hex" ] && pre=1
+		if [ $sched = 1 ] && [ $pre = 1 ] && [ $(( ts0 - ${2:-0} )) -lt 21600 ] 2>/dev/null; then
+			result=ok; detail="one channel at a time, spread out (full scans refused on this channel)"
+			: > "$TMPD/trickle_$band.due"   # trickle starts the next sweep
+		else
+			scan_radio "$ifc" "$band" "$hex"
+		fi
 		each=0
-		if [ "$result" = busy ] && [ -n "$chs" ]; then   # the full scan was refused: try one channel at a time
+		# refused again at the 6-hour retry: trickle carries on (the first refusal still gets a burst, below)
+		if [ "$result" = busy ] && [ $sched = 1 ] && [ $pre = 1 ]; then
+			result=ok; detail="$detail; one channel at a time, spread out"
+			: > "$TMPD/trickle_$band.due"
+		elif [ "$result" = busy ] && [ -n "$chs" ]; then   # the full scan was refused: try one channel at a time
 			full=$detail
 			scan_each "$ifc" "$band" "$chs" "$m0" "$m1" "$all"
 			if [ $each_did -gt 0 ]; then
@@ -740,7 +759,8 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 				detail="$detail; single channels refused too"
 			fi
 		fi
-		if [ "$result" = ok ]; then
+		case "$detail" in "one channel at a time, spread out"*|*"; one channel at a time, spread out") spread=1 ;; *) spread=0 ;; esac
+		if [ "$result" = ok ] && [ $spread = 0 ]; then
 			sts=$(now)
 			if [ $each = 1 ]; then got=$each_got; covered=$each_list
 			else
@@ -796,6 +816,111 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 	log "scan complete"
 }
 
+# For radios whose full scans are refused (refused_<band> holds the current chanspec): scan one channel
+# at a time, spread out, instead of a burst of up to 150 s at every scheduled scan. Each scheduled scan
+# starts a sweep of the band (trickle_<band>.due), and cron runs this every minute to carry it on: the
+# sweep takes about a third of the scan interval (10 minutes with 30-minute scans), up to 3 channels a
+# minute, or one every few minutes with long intervals; then it rests until the next scheduled scan.
+# Each channel is one short trip off the router's channel: a fraction of a second's delay, no loss, in a
+# ping test. A run is skipped while your own traffic is high (over 10% of the airtime in the latest
+# sample), but not for longer than the scan interval; none run in quiet hours, or with scans paused or
+# off. A sweep is stored as one scan whose time moves forward with each channel, so the page shows it
+# filling in; Scan now still scans the whole band at once.
+trickle() {
+	[ "$COLLECTION" = on ] && [ "$SCAN_INTERVAL" -gt 0 ] 2>/dev/null || return 0
+	quiet_now && return 0
+	ready || return 0
+	mkdir -p "$TMPD"
+	exec 7>"$TMPD/scan.lock"
+	flock -n 7 || return 0
+	lowprio
+	ownf=""; did=0
+	for r in $(radios); do
+		ifc=$(nvram get wl${r}_ifname)
+		hex=$(wl -i "$ifc" chanspec 2>/dev/null | sed -n 's/.*(\(0x[0-9a-fA-F]*\)).*/\1/p')
+		[ -n "$hex" ] || continue
+		band=$(band_of_hex "$hex")
+		set -- $(cat "$TMPD/refused_$band" 2>/dev/null)
+		[ "$1" = "$hex" ] || continue   # full scans work on this channel (or haven't been refused)
+		chs=$(radio_channels "$ifc" "$band"); nch=$(echo $chs | wc -w | tr -d ' ')
+		[ "$nch" -gt 0 ] || continue
+		t=$(now); lastf="$TMPD/trickle_$band.last"; last=$(cat "$lastf" 2>/dev/null); case "$last" in ''|*[!0-9]*) last=0 ;; esac
+		# seconds per channel for a sweep in a third of the scan interval; under a minute: several a run
+		g=$((SCAN_INTERVAL * 20 / nch)); k=1
+		if [ $g -ge 60 ]; then [ $((t - last)) -ge $((g - 15)) ] || continue
+		else [ $((t - last)) -ge 30 ] || continue   # one run a minute, however long the last one took
+			k=$(( (3 * nch + SCAN_INTERVAL - 1) / SCAN_INTERVAL )); [ $k -gt 3 ] && k=3   # channels a run
+		fi
+		# between sweeps: the next one starts after the next scheduled scan, from the start of the band
+		due="$TMPD/trickle_$band.due"; nxt="$TMPD/trickle_$band.next"; sw="$TMPD/sweep_$band"
+		sts=$(cat "$sw" 2>/dev/null); case "$sts" in ''|*[!0-9]*) sts="" ;; esac
+		[ -n "$sts" ] && [ $((t - sts)) -gt $((SCAN_INTERVAL * 120)) ] && { rm -f "$sw"; sts=""; }   # left too long: dropped
+		if [ -z "$sts" ]; then [ -f "$due" ] || continue; echo 0 > "$nxt"; fi
+		# your own traffic in the latest sample (transmit + receive from your clients), if it's recent
+		own=$(sql "SELECT coalesce(tx, 0) + coalesce(inbss, 0) FROM samples WHERE band='$band' AND ts >= $((t - 180)) ORDER BY ts DESC LIMIT 1;")
+		if [ "$(awk -v o="${own:-0}" 'BEGIN { print (o > 10) }')" = 1 ] && [ $((t - last)) -lt $((SCAN_INTERVAL * 60)) ]; then continue; fi
+		j=0
+		while [ $j -lt $k ]; do
+			j=$((j + 1))
+			off=$(cat "$nxt" 2>/dev/null); case "$off" in ''|*[!0-9]*) off=0 ;; esac
+			[ "$off" -lt "$nch" ] || off=0
+			c=$(echo $chs | cut -d' ' -f$((off + 1)))
+			m0="$TMPD/chanim_$band.t0"; m1="$TMPD/chanim_$band.t1"; out="$TMPD/scan_$band.one"; err="$TMPD/scan_$band.err"
+			wl -i "$ifc" chanim_stats all > "$m0" 2>/dev/null
+			if ! wl -i "$ifc" scan -c "$c" > /dev/null 2> "$err"; then
+				rm -f "$m0"
+				if grep -q 'Bad Channel' "$err"; then   # radar put it off limits: the next one
+					off=$(( (off + 1) % nch )); echo "$off" > "$nxt"
+					[ "$off" = 0 ] && { rm -f "$sw" "$due"; break; }
+					continue
+				fi
+				break   # refused: the same channel next time
+			fi
+			t2=$(now); echo "$t2" > "$lastf"; p=""; sleep 1
+			while :; do   # done when the channel has new figures or a network, or the results are in
+				el=$(( $(now) - t2 ))
+				if wl -i "$ifc" scanresults > "$out" 2>/dev/null; then
+					wl -i "$ifc" chanim_stats all > "$m1" 2>/dev/null
+					p=$(chanim_reached "$c" "$m0" "$m1" "$band" "$(heard_channels < "$out")")
+					[ -n "${p%%|*}" ] && break
+					[ $el -ge 3 ] && break
+				else : > "$out"
+				fi
+				[ $el -ge 10 ] && break
+				sleep 1
+			done
+			# this sweep so far moves to now, and this channel joins it (a new sweep at the start of the band)
+			sts=$(cat "$sw" 2>/dev/null); case "$sts" in ''|*[!0-9]*) sts="" ;; esac
+			[ "$off" = 0 ] && sts=""
+			[ -n "$sts" ] && [ $((t2 - sts)) -gt $((SCAN_INTERVAL * 120)) ] && sts=""   # a sweep left for too long: start afresh
+			[ -n "$ownf" ] || ownf=$(own_ssids_file)
+			{
+				echo "BEGIN;"
+				[ -n "$sts" ] && for tb in scans aps chanim; do echo "UPDATE $tb SET ts=$t2 WHERE band='$band' AND ts=$sts;"; done
+				echo "COMMIT;"
+				echo "DELETE FROM scans WHERE band='$band' AND ts=$t2 AND ch=$c;"
+				parse_scan "$t2" "$band" "$c" "$ownf" < "$out"
+				[ -n "${p%%|*}" ] && parse_chanim_all "$t2" "$band" < "$m1" | awk -v c="$c" '/^INSERT/ { x = $0; sub(/^[^,]*,[^,]*,/, "", x); if ((x + 0) != c) next } { print }' | sed 's/^INSERT INTO chanim/INSERT OR REPLACE INTO chanim/'
+				echo "DELETE FROM aps WHERE band='$band' AND ts=$t2 AND rowid NOT IN (SELECT max(rowid) FROM aps WHERE band='$band' AND ts=$t2 GROUP BY bssid);"
+			} | sql
+			echo "$t2" > "$sw"
+			off=$(( (off + 1) % nch )); echo "$off" > "$nxt"
+			mc=$(sql "SELECT count(*) FROM chanim WHERE band='$band' AND ts=$t2;")
+			[ "$(cat "$DATA_DIR/measured_$band" 2>/dev/null)" = "$mc" ] || echo "$mc" > "$DATA_DIR/measured_$band"
+			if [ "$off" = 0 ]; then   # the band is done: one line in the syslog per sweep
+				nn=$(sql "SELECT count(DISTINCT bssid) FROM aps WHERE band='$band' AND ts=$t2;")
+				log "scan $band ($ifc): one channel at a time, spread out: $(sql "SELECT count(*) FROM scans WHERE band='$band' AND ts=$t2;") channels, $nn network$( [ "$nn" = 1 ] || printf s), $mc channels measured"
+				rm -f "$sw" "$due"
+			fi
+			rm -f "$m0" "$m1" "$out"
+			did=1
+			[ "$off" = 0 ] && break   # one sweep per scheduled scan
+		done
+	done
+	[ $did = 1 ] && export_scans
+	return 0
+}
+
 wl_said() {   # errfile seconds fallback -> 'wl said "Not Ready" for 45 s', or 'fallback after 45 s'
 	m=$(head -1 "$1" 2>/dev/null | tr -d '\r"' | sed 's/^wl: //' | cut -c1-60)
 	if [ -n "$m" ]; then printf 'wl said "%s" for %s s' "$m" "$2"; else printf '%s after %s s' "$3" "$2"; fi
@@ -823,7 +948,7 @@ scan_radio() {   # ifc band chanspec
 		fi
 		sleep 2
 	done
-	rm -f "$rf"
+	rm -f "$rf" "$TMPD/trickle_$2.due"   # full scans work: no spreading
 	limit=45; [ "$2" = 2g ] && limit=20
 	t1=$(now); sleep 3
 	while :; do
@@ -958,8 +1083,8 @@ export_live() {
 	{
 		printf '{"version":"%s","generated":%s,"sample_interval":%s,"scan_interval":%s,"retain_days":%s,' \
 			"$VERSION" "$t" "$SAMPLE_INTERVAL" "$SCAN_INTERVAL" "$RETAIN_DAYS"
-		printf '"data_dir":"%s","db_bytes":%s,"own_ssids":[%s],"extra_own":"%s",' \
-			"$(js "$DATA_DIR")" "$(jnum "$dbb")" "$ownj" "$(js "$EXTRA_OWN_SSIDS")"
+		printf '"data_dir":"%s","db_bytes":%s,"fs":"%s","fs_note":"%s","own_ssids":[%s],"extra_own":"%s",' \
+			"$(js "$DATA_DIR")" "$(jnum "$dbb")" "$(js "$(fstype_of "$DATA_DIR")")" "$(js "$(journal_note "$DATA_DIR")")" "$ownj" "$(js "$EXTRA_OWN_SSIDS")"
 		printf '"collection":"%s","quiet":"%s","tz_off":%s,"build":"%s",' "$COLLECTION" "$QUIET" "$(tz_off)" "$(js "$( [ -f "$BUILD_FILE" ] && awk '$1 == "dev" { print $2 "@" $3 }' "$BUILD_FILE")")"
 		printf '"measured":{%s},"country":"%s","territory":"%s","radios":%s,' "$mj" "$(js "$(country_code)")" "$(js "$(territory_code)")" "$(radios_json)"
 		printf '"damaged":%s,"samples":' "$(jnum "$(cat "$DATA_DIR/damaged" 2>/dev/null)")"   # when sqlite first said the database is damaged; null = fine
@@ -1170,14 +1295,15 @@ cron_add() {
 		else
 			cru a "${NAME}_scan" "*/$SCAN_INTERVAL * * * * $SCRIPT scan --delay"
 		fi
+		cru a "${NAME}_trickle" "* * * * * $SCRIPT trickle"   # does nothing unless a radio refuses full scans
 	else
-		cru d "${NAME}_scan" 2>/dev/null
+		cru d "${NAME}_scan" 2>/dev/null; cru d "${NAME}_trickle" 2>/dev/null
 	fi
 	cru a "${NAME}_prune" "23 4 * * * $SCRIPT prune"
 }
 
 cron_del() {
-	for j in collect scan prune; do cru d "${NAME}_$j" 2>/dev/null; done
+	for j in collect scan trickle prune; do cru d "${NAME}_$j" 2>/dev/null; done
 }
 
 hook_add() {   # file line
@@ -1276,8 +1402,22 @@ fstype_of() {   # filesystem type of the mount holding $1 (longest matching moun
 	awk -v p="${p:-/}" '{
 		m = $2; ok = (m == "/" || p == m || index(p, m "/") == 1)
 		if (ok && length(m) >= best) { best = length(m); t = $3 }
-	} END { print t }' /proc/mounts 2>/dev/null
+	} END { print t }' "${WI_MOUNTS:-/proc/mounts}" 2>/dev/null
 }
+# A filesystem without a journal (ext2, FAT, exFAT, NTFS, HFS, or ext4 made without one, which amtm
+# offers): a power cut while it's writing can leave files damaged, the history database included.
+# A mounted ext3/ext4 with a journal has /proc/fs/jbd2/<device>-8.
+fs_dev() { p=$(readlink -f "$(nearest_dir "$1")" 2>/dev/null); awk -v p="${p:-/}" '{ m = $2; if ((m == "/" || p == m || index(p, m "/") == 1) && length(m) >= best) { best = length(m); d = $1 } } END { print d }' "${WI_MOUNTS:-/proc/mounts}" 2>/dev/null; }
+no_journal() {   # path -> what to call its filesystem if it has no journal ("ext2, which has no journal"), else nothing
+	t=$(fstype_of "$1")
+	case "$t" in
+		ext2|vfat|msdos|fat|exfat|texfat|ntfs|ntfs3|tntfs|ufsd|tfat|hfs|hfsplus|thfsplus|fuseblk) echo "$t, which has no journal" ;;
+		ext3|ext4) j="${WI_PROC:-/proc}/fs/jbd2"; d=$(fs_dev "$1")
+			[ -d "$j" ] && [ -n "$d" ] && [ ! -d "$j/${d##*/}-8" ] && echo "$t without a journal" ;;
+	esac
+	return 0
+}
+journal_note() { n=$(no_journal "$1"); [ -n "$n" ] && echo "The drive is $n, so a power cut while it's writing can damage the history database. ext4 with a journal is safer (amtm can format a USB drive that way)."; }
 
 check_support() {
 	ck_fails=0
@@ -1375,7 +1515,8 @@ check_support() {
 		*)
 			if [ "${kb:-0}" -lt 51200 ]; then ck_fail "Less than 50 MB free for history in $DATA_DIR."
 			else ck_ok "History storage: $DATA_DIR ($fst, $(kb_to_mb "$kb") MB free)"
-			fi ;;
+			fi
+			n=$(journal_note "$DATA_DIR"); [ -n "$n" ] && ck_warn "History storage: $n" ;;
 	esac
 
 	# JFFS (addon files) and a free web UI slot
@@ -1475,6 +1616,10 @@ install() {
 	fi
 	[ -n "$page" ] && say "Direct link: http://$(nvram get lan_ipaddr)/$page"
 	say "The interference chart fills in over the next few minutes."
+	# The install command downloads to /tmp/wifiinsight.sh: remove that copy, so it can't be run by
+	# mistake later (an old copy's 'scan' or 'status' runs old code).
+	[ "$0" = "$ROOT/tmp/$NAME.sh" ] && [ "$0" != "$SCRIPT" ] && rm -f "$0"
+	return 0
 }
 
 asp_matches() { [ -s "$1" ] && grep -q "wifiinsight-version: $VERSION " "$1"; }
@@ -1615,6 +1760,7 @@ uninstall() {
 status() {
 	say "$TITLE $VERSION$(b=$(build_text); [ -n "$b" ] && printf ' (%s)' "$b")"
 	say "Data:        $DB ($( [ -f "$DB" ] && du -h "$DB" | cut -f1 || echo missing))"
+	n=$(journal_note "$DATA_DIR"); say "Storage:     $(fstype_of "$DATA_DIR")${n:+. $n}"
 	say "Web page:    $(cat "$ADDON_DIR/webui_page" 2>/dev/null || echo 'not mounted')"
 	say "Ready:       $(ready && echo yes || echo 'no (NTP or storage)')"
 	say "Collection:  $(collection_text)"
@@ -1684,6 +1830,7 @@ debug() {
 	say "acsd: $(pidof acsd2 acsd || echo 'not running')"
 	say "Collection: $(collection_text)"
 	say "Quiet hours: $(quiet_text)"
+	say "Storage: $DATA_DIR on $(fstype_of "$DATA_DIR")"
 	for r in 0 1 2 3; do
 		ifc=$(nvram get wl${r}_ifname)
 		[ -n "$ifc" ] || continue
@@ -1809,6 +1956,19 @@ menu() {
 	done
 }
 
+# Run from a copy of another version than the one installed (an old /tmp/wifiinsight.sh from an earlier
+# install, say): hand over to the installed script, so old code doesn't run against the current data.
+case "${1:-menu}" in
+	install|update|uninstall|check|version) ;;
+	*)	if [ "$0" != "$SCRIPT" ] && [ -f "$SCRIPT" ]; then
+			iv=$(sed -n 's/^VERSION="\([0-9][0-9.]*\)".*/\1/p' "$SCRIPT" | head -1)
+			if [ -n "$iv" ] && [ "$iv" != "$VERSION" ]; then
+				say "This is WiFi Insight $VERSION at $0, but $iv is installed: running that instead."
+				exec sh "$SCRIPT" "$@"
+			fi
+		fi ;;
+esac
+
 case "$1" in
 	'')            if [ -t 0 ] && [ -t 1 ]; then menu; else usage; fi ;;
 	menu)          menu ;;
@@ -1823,6 +1983,7 @@ case "$1" in
 	prune)         prune ;;
 	status)        status ;;
 	repair)        repair "$2" ;;
+	trickle)       trickle ;;
 	debug)         debug ;;
 	service_event) service_event "$2" "$3" ;;
 	version)       say "$VERSION" ;;

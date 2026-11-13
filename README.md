@@ -43,12 +43,12 @@ Time ranges: 10 minutes, 1 hour, 12 hours, 1 day, 7 days and 30 days. Short rang
 ## Requirements
 
 - Asuswrt-Merlin with **JFFS custom scripts and configs** enabled (the installer turns it on if needed)
-- Entware on a USB drive, with `sqlite3-cli` installed (`opkg install sqlite3-cli`)
+- Entware on a USB drive, with `sqlite3-cli` installed (`opkg install sqlite3-cli`). A drive formatted ext4 with a journal is safest: on one without (ext2, FAT, exFAT, NTFS, or ext4 made without a journal), a power cut while it's writing can damage the history database. `check`, `status` and the Settings tab say which yours is; amtm can format a drive as ext4 with a journal.
 - A Broadcom radio that answers `wl chanim_stats` (the installer checks)
 
 ## Supported routers
 
-Tested on an RT-AX86U with 3004.388.13_0. Every model current Merlin supports uses Broadcom Wi-Fi on all its radios; what differs is the radio layout and the driver. Models on Merlin 3006.102 have a newer driver (17.10) that prints its airtime statistics differently: they need WiFi Insight 1.0.11 or later. Some drivers refuse full 5 GHz scans ("Scan Rejected") while the router is on a DFS channel, and accept them on a non-DFS one: reported on an RT-AX88U, a GT-AX6000 and an RT-BE88U, while the RT-AX86U it's tested on scans fine on DFS channels. Since 1.2.1 WiFi Insight then scans one channel at a time, which some of these drivers take (an RT-BE88U took them all); where the driver refuses those too, Scan now, the syslog and the page say so.
+Tested on an RT-AX86U with 3004.388.13_0. Every model current Merlin supports uses Broadcom Wi-Fi on all its radios; what differs is the radio layout and the driver. Models on Merlin 3006.102 have a newer driver (17.10) that prints its airtime statistics differently: they need WiFi Insight 1.0.11 or later. Some drivers refuse full 5 GHz scans ("Scan Rejected") while the router is on a DFS channel, and accept them on a non-DFS one: reported on an RT-AX88U, a GT-AX6000 and an RT-BE88U, while the RT-AX86U it's tested on scans fine on DFS channels. Since 1.2.1 WiFi Insight then scans one channel at a time, which some of these drivers take; where the driver refuses those too, Scan now, the syslog and the page say so. If you'd rather have full scans, a channel outside 52–144 avoids it: in Wireless → General, un-tick "Enable 160 MHz" and "Auto select channel including DFS channels" (or pick a channel). The cost: no 160 MHz in most regions, and the remaining channels may be busier. The page suggests this only when your router's scans were actually refused on a DFS channel.
 
 | Router | Radios | Status |
 |---|---|---|
@@ -56,7 +56,7 @@ Tested on an RT-AX86U with 3004.388.13_0. Every model current Merlin supports us
 | RT-AX88U | 2.4 + 5 GHz | Works (user report); on a DFS channel the driver refuses full 5 GHz scans and takes single channels only now and then |
 | RT-AX86U Pro | 2.4 + 5 GHz | Works, including 5 GHz scans since 1.2.0 (user reports) |
 | GT-AX6000 | 2.4 + 5 GHz | Works (user report); on a DFS channel the driver refuses full 5 GHz scans and takes single channels only now and then |
-| RT-BE88U | 2.4 + 5 GHz | Charts and 2.4 GHz scans work (user report); on a DFS channel the driver refuses full 5 GHz scans but takes single channels, which 1.2.1 uses (awaiting confirmation) |
+| RT-BE88U | 2.4 + 5 GHz | Works (user reports); on some, 5 GHz scans are refused while on a DFS channel |
 | RT-AX58U (V1), RT-AX68U, RT-AX88U Pro, RT-BE86U, RT-BE58 Go | 2.4 + 5 GHz | Should work |
 | RT-BE96U | 2.4 + 5 + 6 GHz | Works, including 6 GHz (user report) |
 | GT-AXE11000, RT-BE92U, GT-BE19000AI | 2.4 + 5 + 6 GHz | Should work since 1.2.0. Up to 1.1.0 the check took the 6 GHz radio for a second 5 GHz one |
@@ -123,7 +123,7 @@ It only ever removes a page whose `.title` file says `WiFi Insight`, so other ad
   - **Measured** (where the driver reports it: the RT-AX86U on 3004.388, and the GT-AX6000 on 3006.102 reports them too): while scanning, the radio records each channel's airtime used by other networks (`obss`), non-Wi-Fi energy (`nocat`) and energy it couldn't decode (`nopkt`), plus glitches and the noise floor. WiFi Insight reads them with `wl chanim_stats all` right after the scan. The driver keeps each channel's last figures until a scan reaches it again, so WiFi Insight compares the list before and after, and stores only the channels the scan reached. Each figure comes from a short listen on that channel, so single readings are noisy; the longer ranges average them.
   - **Estimated** (always available, and the fallback): built from the networks heard on each channel.
 
-  For the estimate, each network contributes according to how much it overlaps the channel, how strong its signal is, and the load it advertises (QBSS). Networks with your SSIDs, including your AiMesh node, are listed as yours and kept out of the estimate. Tick **Include my mesh** to add them back. Each scan takes the radio off-channel briefly, so expect a hiccup of about a second. A scan takes a few seconds on 2.4 GHz and longer on 5 and 6 GHz (tens of seconds on some 3006.102 drivers): WiFi Insight waits for the driver to finish, and if a band still fails, Scan now and the syslog say why. With traffic on the router's channel, some drivers stop a 5 GHz scan partway through the band; where the driver reports per-channel figures, WiFi Insight notices and scans the remaining channels right away (a second short hiccup, only then). Some drivers refuse a full scan altogether while the router is on a DFS channel; WiFi Insight then scans one channel at a time, waiting on each until the driver takes it (at most 150 s a band), and where it gets only part of the band, the next scan carries on where this one stopped. Only the channels a scan covered are stored; for the rest, the page uses the newest scan in the previous 6 hours that covered them, and says so.
+  For the estimate, each network contributes according to how much it overlaps the channel, how strong its signal is, and the load it advertises (QBSS). Networks with your SSIDs, including your AiMesh node, are listed as yours and kept out of the estimate. Tick **Include my mesh** to add them back. Each scan takes the radio off-channel briefly, so expect a hiccup of about a second. A scan takes a few seconds on 2.4 GHz and longer on 5 and 6 GHz (tens of seconds on some 3006.102 drivers): WiFi Insight waits for the driver to finish, and if a band still fails, Scan now and the syslog say why. With traffic on the router's channel, some drivers stop a 5 GHz scan partway through the band; where the driver reports per-channel figures, WiFi Insight notices and scans the remaining channels right away (a second short hiccup, only then). Some drivers refuse a full scan altogether while the router is on a DFS channel. WiFi Insight always tries a full scan first. The first time it's refused, it scans the band one channel at a time right away (waiting on each until the driver takes it, at most 150 s a band). After that, each scheduled scan spreads the band out instead of repeating the burst: a sweep over about a third of the scan interval (10 minutes with 30-minute scans, so 2 channels a minute on a 19-channel band; at most 3 a minute), then nothing until the next scheduled scan. A minute is skipped while your own Wi-Fi traffic is high, but never for longer than the scan interval, and nothing runs in quiet hours. Each channel is a single short trip off your channel. Scheduled scans retry the full scan every 6 hours, and the spreading stops as soon as one works, or when the router moves to another channel; *Scan now* still scans the whole band at once. Only the channels a scan covered are stored; for the rest, the page uses the newest scan in the previous 6 hours that covered them, and says so.
 - **Channel events** are detected by comparing the channel and width on every sample:
   - a changed setting in nvram → *Manually configured*
   - a radar line in syslog within 10 minutes → *Regulatory (RADAR)*
@@ -151,10 +151,10 @@ If a scan's one-second hiccup gets in the way at certain times (gaming, calls, s
 | `/opt/var/lib/wifiinsight/measured_2g`, `measured_5g`… | how many channels the radio measured in each band's last scan |
 | `/opt/var/lib/wifiinsight/damaged` | only while the database is damaged: when it was first noticed (`repair` removes it) |
 | `/opt/var/lib/wifiinsight/wifiinsight.db.bad` | only after `repair`: the damaged copy, to delete once everything looks right |
-| `/tmp/wifiinsight/each_5g.next`, `refused_5g`… | for drivers that refuse full scans: where the next one-channel-at-a-time scan starts, and the channel a full scan was last refused on |
+| `/tmp/wifiinsight/each_5g.next`, `refused_5g`, `trickle_5g.*`, `sweep_5g`… | for drivers that refuse full scans: where the next one-channel-at-a-time scan starts, the channel a full scan was last refused on, and the spread-out sweep's next channel, last step, pending start and current sweep |
 | `/tmp/var/wwwext/wifiinsight/` | JSON files the page reads (`live.htm`, `scans.htm`, `week.htm`, `month.htm`, `scanstate.htm`), rebuilt from the database |
 
-Cron jobs: `wifiinsight_collect` (every minute), `wifiinsight_scan` (scan interval) and `wifiinsight_prune` (04:23 daily, before a 05:00 scheduled reboot). A scheduled scan that starts in quiet hours does nothing. With *Scans paused* there's no scan job, and with collection *Off* there are no jobs at all.
+Cron jobs: `wifiinsight_collect` (every minute), `wifiinsight_scan` (scan interval), `wifiinsight_trickle` (every minute; it does nothing unless your router refuses full scans and a sweep is under way) and `wifiinsight_prune` (04:23 daily, before a 05:00 scheduled reboot). A scheduled scan that starts in quiet hours does nothing, and neither does `trickle`. With *Scans paused* there's no scan or trickle job, and with collection *Off* there are no jobs at all.
 
 ## Commands
 
@@ -211,7 +211,7 @@ For amtm's maintainer, the details of a module:
 | Version line | `^VERSION=` |
 | Remote script | `https://github.com/IfSugar/wifiinsight/releases/latest/download/wifiinsight.sh` (the latest release, never unreleased work) |
 | Check string | `IfSugar/wifiinsight` |
-| Install | download the remote script to `/tmp/wifiinsight.sh`, then `sh /tmp/wifiinsight.sh install` |
+| Install | download the remote script to `/tmp/wifiinsight.sh`, then `sh /tmp/wifiinsight.sh install` (which removes that copy when it's done) |
 | Open | `/jffs/addons/wifiinsight/wifiinsight.sh` |
 | Entware | required (`sqlite3`) |
 

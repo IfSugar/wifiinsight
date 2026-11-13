@@ -144,7 +144,7 @@ EVE=000000000fff000000000fff000000000fff000000000fff000000000fff000000000fff0000
 save() { : > "$F/log"; run service_event start wifiinsightconfig > "$t/out" 2>&1 || true; }
 base_conf 30
 settings 30 on "$EVE"; save
-expect "save on + evenings: cron" "collect prune scan" "$(jobs)"
+expect "save on + evenings: cron" "collect prune scan trickle" "$(jobs)"
 expect "save on + evenings: config" "COLLECTION=on|QUIET=\"$EVE\"" "$(sed -n 's/^\(COLLECTION=[a-z]*\).*/\1/p; s/^\(QUIET=.*\)/\1/p' "$CONF" | tr '\n' '|' | sed 's/|$//')"
 expect "save on + evenings: logged" "1" "$(grep -c 'settings updated: collection=on .*quiet=Mon-Sun 18:00-24:00' "$F/log" || true)"
 settings 30 paused "$EVE"; save

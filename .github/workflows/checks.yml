@@ -65,8 +65,14 @@ jobs:
       - name: Check a refused full scan falls back to one channel at a time (DFS channels on some drivers)
         run: bash .github/tests/one-channel.sh
 
+      - name: Check one-channel scans are spread out, only where full scans are refused
+        run: bash .github/tests/trickle.sh
+
       - name: Check a damaged database is noticed, reported and repaired
         run: bash .github/tests/repair.sh
+
+      - name: Check an old copy of the script hands over to the installed one
+        run: bash .github/tests/old-copy.sh
 
       - name: Check bands and widths are read correctly (2.4, 5 and 6 GHz)
         run: bash .github/tests/radio-bands.sh

@@ -176,4 +176,14 @@ expect "quiet last channel, nothing heard: looks unreached, so a follow-up" "ful
 expect "quiet last channel, nothing heard: not stored" "18|0" "$(measured)|$(q "SELECT count(*) FROM scans WHERE band='5g' AND ts=$ts AND ch=140")"
 rm -f "$F/eth7.stuck" "$R/tmp/wifiinsight/rest_5g.skip"
 
+# 8: hidden networks from your own device (an AiMesh node's backhaul, Wi-Fi 7 links) count as yours: same
+# BSSID as one of your named networks but for the first byte and the last 4 bits. Others stay neighbours.
+cp "$F/eth7.nets" "$F/eth7.nets.keep"
+printf '%s\n' '44 0a:11:22:33:44:5d HomeNet' '44 06:11:22:33:44:59' '44 d2:11:22:33:44:5e' \
+	'44 06:11:22:33:44:a9' '44 06:99:22:33:44:59' '44 02:11:22:33:44:5c Neighbour' >> "$F/eth7.nets"
+scan
+own() { q "SELECT group_concat(bssid, ' ') FROM (SELECT bssid FROM aps WHERE band='5g' AND ts=$ts AND own=1 ORDER BY bssid)"; }
+expect "own hidden: the named one and the two hidden ones from the same device" "06:11:22:33:44:59 0a:11:22:33:44:5d d2:11:22:33:44:5e" "$(own | tr 'A-F' 'a-f')"
+mv "$F/eth7.nets.keep" "$F/eth7.nets"
+
 [ $fail -eq 0 ] && echo "Short scans: all checks passed." || { echo "::error::Short scans: some checks failed."; exit 1; }

@@ -45,7 +45,7 @@ printf '#!/bin/sh\ncase "$2" in ntp_ready) echo 1 ;; wl0_ifname) echo eth6 ;; wl
 printf '#!/bin/sh\nexit 1\n' > "$t/bin/wl"
 chmod +x "$t/bin/logger" "$t/bin/nvram" "$t/bin/wl"
 echo 'enable -n test [ printf echo' > "$t/no-builtins.sh"
-run() { WI_ROOT="$R" TZ=UTC PATH="$t/bin" BASH_ENV="$t/no-builtins.sh" "$bash_bin" "$R/jffs/addons/wifiinsight/wifiinsight.sh" "$@"; }
+run() { WI_ROOT="$R" WI_MOUNTS="${MOUNTS:-}" TZ=UTC PATH="$t/bin" BASH_ENV="$t/no-builtins.sh" "$bash_bin" "$R/jffs/addons/wifiinsight/wifiinsight.sh" "$@"; }
 q() { "$sqlite" "$D/wifiinsight.db" "$1"; }
 live() { python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("damaged", "missing"))' "$R/www/user/wifiinsight/live.htm"; }
 
@@ -142,5 +142,30 @@ grep -q '^database compacted (.* of .* pages were free)$' "$F/log" && ok "compac
 n=$(grep -c 'database compacted' "$F/log"); run prune > /dev/null 2>&1 || true
 expect "compaction: not again when there's little to gain" "$n" "$(grep -c 'database compacted' "$F/log")"
 expect "compaction: still sound" "ok" "$(q "PRAGMA integrity_check")"
+
+# 7: a drive without a journal (ext2, FAT, NTFS, or ext4 made without one) is flagged in check, status,
+# debug and live.htm; ext4 with a journal (it has /proc/fs/jbd2/<device>-8) isn't
+fsjson() { python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); print(d.get("fs"), "|", d.get("fs_note"))' "$R/www/user/wifiinsight/live.htm"; }
+MOUNTS=$t/mounts; P=$(cd "$t" && pwd -P); mkdir -p "$t/proc/fs/jbd2"
+mounts() { printf 'rootfs / rootfs rw 0 0\n/dev/sda1 %s %s rw,noatime 0 0\n' "$P" "$1" > "$MOUNTS"; }
+runp() { WI_PROC="$t/proc" run "$@" 2>&1 || true; }
+NOTE2="The drive is ext2, which has no journal, so a power cut while it's writing can damage the history database. ext4 with a journal is safer"
+mounts ext2
+has "ext2: status warns" "Storage:     ext2. $NOTE2" "$(runp status)"
+has "ext2: check warns" "[WARN] History storage: $NOTE2" "$(runp check)"
+has "ext2: debug names it" "Storage: $D on ext2" "$(runp debug)"
+runp export > /dev/null
+has "ext2: the page is told" "ext2 | $NOTE2" "$(fsjson)"
+mounts ext4
+has "ext4 without a journal: status warns" "Storage:     ext4. The drive is ext4 without a journal, so a power cut" "$(runp status)"
+mkdir -p "$t/proc/fs/jbd2/sda1-8"
+out=$(runp status)
+has "ext4 with a journal: status names it" "Storage:     ext4" "$out"
+hasnt "ext4 with a journal: no warning" "journal" "$out$(runp check)"
+runp export > /dev/null
+expect "ext4 with a journal: nothing for the page" "ext4 | " "$(fsjson)"
+rm -rf "$t/proc/fs/jbd2"
+hasnt "no jbd2 in /proc: no guessing" "journal" "$(runp status)"
+MOUNTS=""
 
 [ $fail -eq 0 ] && echo "Repair: all checks passed." || { echo "::error::Repair: some checks failed."; exit 1; }
