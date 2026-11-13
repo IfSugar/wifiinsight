@@ -189,6 +189,14 @@ function bucketName(b) { return b >= 86400 ? 'daily' : b >= 3600 ? (b / 3600) + 
 /* Start of the local-time bucket holding ts (so 1-hour and 1-day buckets follow the clock). */
 function bucketOf(ts, b) { var off = -new Date(ts * 1000).getTimezoneOffset() * 60; return Math.floor((ts + off) / b) * b - off; }
 var BAND_NAME = { '2g': '2.4 GHz', '5g': '5 GHz', '6g': '6 GHz' };
+/* A radio's key is its band (2g, 5g, 6g), or 5g2 / 6g2 for a second radio on one band (5 GHz-2 on a
+   GT-AX11000 or GT-AXE16000, 6 GHz-2 on a GT-BE98 Pro): kind() is the band, for the channel maths. */
+function kind(b) { return String(b == null ? WI.band : b).replace(/\d+$/, ''); }
+function bandName(b) {   /* as the router's own pages name it: 5 GHz, or 5 GHz-1 and 5 GHz-2 */
+	var r = (WI.live && WI.live.radios) || [];
+	for (var i = 0; i < r.length; i++) if (r[i].band === b && r[i].name) return r[i].name;
+	return BAND_NAME[kind(b)] || b;
+}
 var TAGS = {
 	initial: 'Monitoring started', restart: 'Router restarted', scheduled: 'Scheduled reboot',
 	manual: 'Manually configured', auto: 'Optimized automatically', bandwidth: 'Adaptive bandwidth',
@@ -239,7 +247,7 @@ function spanOf(center, width) {
 	for (var i = 0; i < n; i++) out.push(center - (n - 1) * 2 + i * 4);
 	return out;
 }
-function isDfs(ch) { return WI.band === '5g' && ch >= 52 && ch <= 144; }
+function isDfs(ch) { return kind() === '5g' && ch >= 52 && ch <= 144; }
 /* Weather radar: 5600-5650 MHz (channels 120, 124, 128, and any wider block that includes one) is shared with
    weather radars. Countries where Wi-Fi may use it, by the radar rules they follow, from the Linux wireless
    regulatory database (wireless-regdb), plus every EU/EEA country. ETSI rules: a 10-minute radar check on
@@ -257,7 +265,7 @@ function wxRegion() {   /* from the radio's country code, else ASUS's territory 
 	var L = WI.live || {}, c = L.country || (L.territory || '').slice(0, 2);
 	return WX_ETSI.indexOf(c) >= 0 ? 'etsi' : ['US', 'Q1', 'Q2', 'PR'].indexOf(c) >= 0 ? 'us' : c === 'CA' ? 'ca' : WX_OTHER.indexOf(c) >= 0 ? 'other' : '';
 }
-function isWx(ch) { return WI.band === '5g' && (ch === 120 || ch === 124 || ch === 128) && !!wxRegion(); }
+function isWx(ch) { return kind() === '5g' && (ch === 120 || ch === 124 || ch === 128) && !!wxRegion(); }
 function chanTags(ch) { return isWx(ch) ? 'DFS, weather radar' : isDfs(ch) ? 'DFS' : ''; }
 /* The DFS bracket under a channel axis, with the weather-radar channels as a heavier part of it.
    xr(c) gives a channel's [left, right] in pixels. */
@@ -284,8 +292,8 @@ function dfsBracket(ctx, ch, xr, y) {
 	});
 }
 function freq(ch) {
-	if (WI.band === '2g') return ch === 14 ? 2484 : 2407 + 5 * ch;
-	if (WI.band === '6g') return 5950 + 5 * ch;
+	if (kind() === '2g') return ch === 14 ? 2484 : 2407 + 5 * ch;
+	if (kind() === '6g') return 5950 + 5 * ch;
 	return 5000 + 5 * ch;
 }
 
@@ -605,7 +613,7 @@ function lastScanTrouble() {
 	var s = WI.scanState, r = s && s.state === 'done' && s.bands ? s.bands[WI.band] : null;
 	if (!r || r === 'ok') return '';
 	var note = s.notes && s.notes[WI.band] ? ' (' + s.notes[WI.band] + ')' : '', at = s.ts ? ' at ' + hm(s.ts) : '';
-	if (r === 'off') return 'The ' + BAND_NAME[WI.band] + ' radio was off at the last scan' + at + '.';
+	if (r === 'off') return 'The ' + bandName(WI.band) + ' radio was off at the last scan' + at + '.';
 	if (r === 'busy') return 'The radio refused the last scan' + at + note + '.' + (dfsHint() ? ' ' + dfsHint() : '');
 	return 'The last scan' + at + ' heard no networks' + note + '.';
 }
@@ -614,7 +622,7 @@ function lastScanTrouble() {
    time, while its radio is on a DFS channel: say so, and what avoids it, with the cost. Plain text. */
 function dfsHint() {
 	var s = WI.scanState, r = radio(), res = s && s.state === 'done' && s.bands ? s.bands[WI.band] : null, note = (s && s.notes && s.notes[WI.band]) || '';
-	if (WI.band !== '5g' || !r || !r.dfs_state || !/ISM|CAC/.test(r.dfs_state)) return '';
+	if (kind() !== '5g' || !r || !r.dfs_state || !/ISM|CAC/.test(r.dfs_state)) return '';
 	if (!(res === 'busy' || note.indexOf('one channel at a time') >= 0)) return '';
 	return (res === 'busy' ? 'It\'s on DFS channel ' + r.ctl + ': some routers refuse scans there, and many don\'t. '
 			: 'The radio refused full scans on DFS channel ' + r.ctl + ', so it scans one channel at a time: some routers do this on DFS channels, and many don\'t. ')
@@ -644,7 +652,7 @@ function prepCanvas(cv, cssH) {
 function renderHeat() {
 	var cv = $('wiHeat'), r = radio(), info = scanRows(), rows = info.rows, ch = chans(), src = heatSrc(info);
 	$('wiHeatSrc').innerHTML = srcControls(info, src, 'wiMeshLbl');
-	$('wiDfsLbl').style.display = WI.band === '5g' ? '' : 'none';   /* DFS channels: 5 GHz only */
+	$('wiDfsLbl').style.display = kind() === '5g' ? '' : 'none';   /* DFS channels: 5 GHz only */
 	$('wiRampNote').textContent = src === 'measured' ? ' (half the airtime or more)' : '';
 	var qs = quietState(), qband = $('wiHeatQuiet');
 	qband.style.display = 'none'; $('wiHeatQuietKey').style.display = 'none';
@@ -692,7 +700,7 @@ function axisChannels(ctx, ch, padL, colW, y0) {
 	ctx.fillStyle = C.tick; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
 	var every = colW < 22 ? 2 : 1;
 	ch.forEach(function (c, j) { if (j % every === 0) ctx.fillText(c, padL + (j + 0.5) * colW, y0 + 5); });
-	if (!WI.showDfs || WI.band !== '5g') return;
+	if (!WI.showDfs || kind() !== '5g') return;
 	dfsBracket(ctx, ch, function (c) { var j = ch.indexOf(c); return [padL + j * colW, padL + (j + 1) * colW]; }, y0 + 22);
 }
 function activeBox(ctx, ch, r, padL, colW, top, h) {
@@ -738,7 +746,7 @@ function heatHover(ev) {
 	tip.innerHTML = h; placeTip(tip, ev.target.parentNode, x, y);
 }
 function renderEvents() {
-	$('wiEvSub').textContent = WI.band === '5g' ? 'Channel and bandwidth changes, radar detections and restarts.' : 'Channel and bandwidth changes and restarts.';   /* radar: 5 GHz only */
+	$('wiEvSub').textContent = kind() === '5g' ? 'Channel and bandwidth changes, radar detections and restarts.' : 'Channel and bandwidth changes and restarts.';   /* radar: 5 GHz only */
 	var evs = bandEvents(), shown = WI.allEvents ? evs : evs.slice(0, 10);
 	if (!evs.length) { $('wiEvents').innerHTML = '<div class="empty" style="padding:16px 0">No events yet.</div>'; return; }
 	var h = '<table class="t"><tr><th style="width:130px">Time</th><th style="width:190px">Event</th><th>Change</th></tr>';
@@ -769,7 +777,7 @@ function mapGeo(w, h) {
 	var ch = chans(), padL = 44, padR = 8, padT = 10, padB = 36, gw = w - padL - padR;
 	var g = { padL: padL, padT: padT, padB: padB, gh: h - padT - padB, ch: ch, w: w };
 	g.yOf = function (dbm) { var v = Math.max(-100, Math.min(-20, dbm)); return padT + (1 - (v + 100) / 80) * g.gh; };
-	if (WI.band === '2g') {
+	if (kind() === '2g') {
 		var f0 = freq(ch[0]) - 12, f1 = freq(ch[ch.length - 1]) + 12;
 		g.xOf = function (f) { return padL + (f - f0) / (f1 - f0) * gw; };
 		g.xCh = function (c) { return g.xOf(freq(c)); };
@@ -823,7 +831,7 @@ function renderSignalMap(list) {
 	ctx.fillStyle = C.tick; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
 	var y0 = g.padT + g.gh, every = (g.slot && g.slot < 22) ? 2 : 1;
 	g.ch.forEach(function (c, j) { if (j % every === 0) ctx.fillText(c, g.xCh(c), y0 + 6); });
-	if (WI.band === '5g') dfsBracket(ctx, g.ch, function (c) { return [g.xCh(c) - g.slot / 2, g.xCh(c) + g.slot / 2]; }, y0 + 23);
+	if (kind() === '5g') dfsBracket(ctx, g.ch, function (c) { return [g.xCh(c) - g.slot / 2, g.xCh(c) + g.slot / 2]; }, y0 + 23);
 	WI.mapShapes = shapes; WI.mapGeo = g;
 }
 function drawShape(ctx, s, hot) {
@@ -900,7 +908,7 @@ function channelLoads() {   // average and peak load per channel across scans in
 	return { avg: avg, peak: peak, comp: comp, noise: noise, src: src, info: info, n: info.scans, latestOnly: info.latestOnly, filled: filled };
 }
 function renderChannels() {
-	$('wiBestSub').textContent = 'Best channel for each width, based on the load above.' + (WI.band === '5g' ? ' DFS channels can be forced to change if radar is detected.' : '');
+	$('wiBestSub').textContent = 'Best channel for each width, based on the load above.' + (kind() === '5g' ? ' DFS channels can be forced to change if radar is detected.' : '');
 	var ch = chans(), list = aps(), r = radio(), cur = r ? spanOf(r.center, r.width) : [];
 	if (!ch.length || !list.length && !(WI.scans && WI.scans.scans && (WI.scans.scans[WI.band] || []).length)) {
 		drawChart('cnt', 'wiCntChart', 'bar', [], { empty: noScansMsg() });
@@ -921,7 +929,7 @@ function renderChannels() {
 	drawChart('cnt', 'wiCntChart', 'bar', [
 		Object.assign({ label: 'Other networks', data: others, backgroundColor: C.others }, barBase),
 		Object.assign({ label: 'Yours', data: mine, backgroundColor: C.yours }, barBase)
-	], { labels: labels, x: xCat, stacked: true, yMin: 0, yStep: 1, plugins: [curBand(ch.map(function (c, i) { return cur.indexOf(c) >= 0 ? i : -1; }).filter(function (i) { return i >= 0; })), dfsAxis(ch)], padBottom: WI.band === '5g' ? 22 : 0, yFmt: function (v) { return Number.isInteger(v) ? v : ''; },
+	], { labels: labels, x: xCat, stacked: true, yMin: 0, yStep: 1, plugins: [curBand(ch.map(function (c, i) { return cur.indexOf(c) >= 0 ? i : -1; }).filter(function (i) { return i >= 0; })), dfsAxis(ch)], padBottom: kind() === '5g' ? 22 : 0, yFmt: function (v) { return Number.isInteger(v) ? v : ''; },
 		ttTitle: function (it) { return 'Channel ' + it[0].label + (isDfs(+it[0].label) ? ' (' + chanTags(+it[0].label) + ')' : ''); } });
 
 	var L = channelLoads(), meas = L.src === 'measured';
@@ -942,12 +950,12 @@ function renderChannels() {
 		var sets = MEAS.filter(function (m) { return !WI.hidden['meas:' + m[0]]; }).map(function (m) {
 			return Object.assign({ label: m[0], data: ch.map(function (c) { return L.comp[m[0]][c]; }), backgroundColor: m[2], borderWidth: { top: 1 }, borderColor: C.surface }, bar);
 		});
-		drawChart('load', 'wiLoadChart', 'bar', sets, { labels: labels, x: xCat, stacked: true, yMin: 0, plugins: [curBand(curIdx), dfsAxis(ch)], padBottom: WI.band === '5g' ? 22 : 0, yMax: yMax, yFmt: pctFmt, ttTitle: title,
+		drawChart('load', 'wiLoadChart', 'bar', sets, { labels: labels, x: xCat, stacked: true, yMin: 0, plugins: [curBand(curIdx), dfsAxis(ch)], padBottom: kind() === '5g' ? 22 : 0, yMax: yMax, yFmt: pctFmt, ttTitle: title,
 			ttLabel: function (it) { return ' ' + it.dataset.label + ': ' + (it.parsed.y == null ? '–' : it.parsed.y + '%'); } });
 	} else {
 		var colors = data.map(function (v) { return rampColor(v == null ? 0 : Math.max(8, v)); });
 		drawChart('load', 'wiLoadChart', 'bar', [Object.assign({ label: 'Estimated load', data: data, backgroundColor: colors, borderRadius: { topLeft: 4, topRight: 4 } }, bar)],
-			{ labels: labels, x: xCat, yMin: 0, plugins: [curBand(curIdx), dfsAxis(ch)], padBottom: WI.band === '5g' ? 22 : 0, yMax: yMax, yFmt: pctFmt, ttTitle: title,
+			{ labels: labels, x: xCat, yMin: 0, plugins: [curBand(curIdx), dfsAxis(ch)], padBottom: kind() === '5g' ? 22 : 0, yMax: yMax, yFmt: pctFmt, ttTitle: title,
 				ttLabel: function (it) { var c = +it.label; return [' Average: ' + (it.parsed.y == null ? '–' : it.parsed.y + '%'), ' Peak: ' + (L.peak[c] == null ? '–' : L.peak[c] + '%')]; } });
 	}
 	/* Noise floor of every channel, where the radio measures it while scanning */
@@ -957,14 +965,14 @@ function renderChannels() {
 		var nzMin = Math.min.apply(null, nz.filter(function (v) { return v != null; })), nzMax = Math.max.apply(null, nz.filter(function (v) { return v != null; }));
 		drawChart('nzch', 'wiNzChChart', 'bar', [Object.assign({ label: 'Noise floor', data: nz.map(function (v) { return v == null ? null : [-110, v]; }), backgroundColor: '#5f7d87',
 			borderRadius: { topLeft: 4, topRight: 4 } }, bar)],
-			{ labels: labels, x: xCat, yMin: Math.max(-110, Math.floor((nzMin - 5) / 5) * 5), yMax: Math.min(-40, Math.ceil((nzMax + 5) / 5) * 5), plugins: [curBand(curIdx), dfsAxis(ch)], padBottom: WI.band === '5g' ? 22 : 0,
+			{ labels: labels, x: xCat, yMin: Math.max(-110, Math.floor((nzMin - 5) / 5) * 5), yMax: Math.min(-40, Math.ceil((nzMax + 5) / 5) * 5), plugins: [curBand(curIdx), dfsAxis(ch)], padBottom: kind() === '5g' ? 22 : 0,
 				yStep: 5, yFmt: function (v) { return v + ' dBm'; }, ttTitle: title, ttLabel: function (it) { return ' Noise floor: ' + nz[it.dataIndex] + ' dBm'; } });
 	}
 	renderBest(L, ch, r);
 }
 function dfsAxis(ch) {   // the Spectrum's DFS / weather-radar bracket, under a channel chart's labels (5 GHz)
 	return { id: 'wiDfs', afterDraw: function (chart) {
-		if (WI.band !== '5g') return;
+		if (kind() !== '5g') return;
 		var x = chart.scales.x, half = (x.getPixelForValue(1) - x.getPixelForValue(0)) / 2, ctx = chart.ctx;
 		ctx.save(); ctx.font = '11px system-ui, -apple-system, Segoe UI, sans-serif';
 		dfsBracket(ctx, ch, function (c) { var p = x.getPixelForValue(ch.indexOf(c)); return [p - half, p + half]; }, x.bottom + 6);
@@ -996,14 +1004,14 @@ var BLOCKS = {
 	})()
 };
 function renderBest(L, ch, r) {
-	var widths = WI.band === '2g' ? [20] : WI.band === '6g' ? [20, 40, 80, 160, 320] : [20, 40, 80, 160];
+	var widths = kind() === '2g' ? [20] : kind() === '6g' ? [20, 40, 80, 160, 320] : [20, 40, 80, 160];
 	if (r && widths.indexOf(r.width) < 0) widths.push(r.width);
 	var rows = [];
 	widths.forEach(function (w) {
 		var cands = [];
 		if (w === 20) {
-			(WI.band === '2g' ? [1, 6, 11] : ch).forEach(function (c) { if (L.avg[c] != null) cands.push([c]); });
-		} else ((BLOCKS[WI.band] || {})[w] || []).forEach(function (b) { if (b.every(function (c) { return L.avg[c] != null; })) cands.push(b); });
+			(kind() === '2g' ? [1, 6, 11] : ch).forEach(function (c) { if (L.avg[c] != null) cands.push([c]); });
+		} else ((BLOCKS[kind()] || {})[w] || []).forEach(function (b) { if (b.every(function (c) { return L.avg[c] != null; })) cands.push(b); });
 		if (!cands.length) return;
 		var scored = cands.map(function (b) {
 			var s = b.reduce(function (t, c) { return t + L.avg[c]; }, 0) / b.length, pk = Math.max.apply(null, b.map(function (c) { return L.peak[c]; }));
@@ -1025,7 +1033,7 @@ function renderBest(L, ch, r) {
 		if (x.dfs) { anyDfs = true; return '<span class="pill dfs" title="' + WX_DFS + '.">DFS</span>'; }
 		return '';
 	};
-	var dfsBand = WI.band === '5g';   /* 2.4 and 6 GHz have no DFS channels: no "without DFS" columns */
+	var dfsBand = kind() === '5g';   /* 2.4 and 6 GHz have no DFS channels: no "without DFS" columns */
 	var h = '<table class="t"><tr><th style="width:80px">Width</th><th>Quietest channel</th><th class="num">' + lh + '</th>' + (dfsBand ? '<th>Quietest without DFS</th><th class="num">' + lh + '</th>' : '') + '<th>Your current</th></tr>';
 	rows.forEach(function (x) {
 		h += '<tr><td>' + x.w + ' MHz</td><td>' + name(x.best) + tag(x.best) + '</td><td class="num">' + x.best.s + '%</td>' +
@@ -1350,7 +1358,7 @@ function render() {
 	var bands = ((WI.live && WI.live.radios) || []).map(function (r) { return r.band; });
 	if (bands.length && bands.indexOf(WI.band) < 0) WI.band = bands[0];
 	$('wiTabs').innerHTML = VIEWS.map(function (v) { return '<button type="button" class="' + (v[0] === WI.view ? 'on' : '') + '" onclick="WiFiInsight.setView(\'' + v[0] + '\')">' + v[1] + '</button>'; }).join('');
-	$('wiBands').innerHTML = bands.map(function (b) { return '<button type="button" class="' + (b === WI.band ? 'on' : '') + '" onclick="WiFiInsight.setBand(\'' + b + '\')">' + BAND_NAME[b] + '</button>'; }).join('');
+	$('wiBands').innerHTML = bands.map(function (b) { return '<button type="button" class="' + (b === WI.band ? 'on' : '') + '" onclick="WiFiInsight.setBand(\'' + b + '\')">' + bandName(b) + '</button>'; }).join('');
 	$('wiRanges').innerHTML = Object.keys(RANGE_CFG).map(function (k) { return [k, RANGE_CFG[k].btn]; }).map(function (x) { return '<button type="button" class="' + (x[0] === WI.range ? 'on' : '') + '" onclick="WiFiInsight.setRange(\'' + x[0] + '\')">' + x[1] + '</button>'; }).join('');
 	var timed = WI.view === 'insight' || WI.view === 'trouble' || WI.view === 'channels';
 	$('wiRanges').style.display = timed ? '' : 'none';
@@ -1396,7 +1404,7 @@ function scanNow() {
 	var problems = function (bands, notes) {
 		var why = { busy: 'radio was busy', empty: 'no results', off: 'radio is off' }, out = [];
 		Object.keys(bands || {}).forEach(function (b) {
-			if (bands[b] !== 'ok') out.push(BAND_NAME[b] + ': ' + (why[bands[b]] || bands[b]) + (notes && notes[b] && bands[b] !== 'off' ? ' (' + notes[b] + ')' : ''));
+			if (bands[b] !== 'ok') out.push(bandName(b) + ': ' + (why[bands[b]] || bands[b]) + (notes && notes[b] && bands[b] !== 'off' ? ' (' + notes[b] + ')' : ''));
 		});
 		return out.length ? out.join('; ') + '. Kept the previous scan.' : '';
 	};
