@@ -3,11 +3,12 @@
 #
 # Where the driver refuses full scans (some do on a DFS channel), 1.3.0 scanned the band one channel at a
 # time in a burst of up to 150 s at every scheduled scan. Now that's spread out: a full scan is always
-# tried first, and the first refusal still gets the burst; after that, 'trickle' (cron, every 2 minutes)
-# scans one channel when it's due (the scan interval divided by the channels, at least 2 minutes),
-# skipping while the router's own traffic is high (but not for longer than the scan interval), and
-# scheduled scans only retry the full scan every 6 hours. A sweep of the band is one scan whose time
-# moves forward with each channel. Routers whose full scans work never trickle.
+# tried first, and the first refusal still gets the burst; after that, each scheduled scan starts a sweep
+# that 'trickle' (cron, every minute) carries on: a third of the scan interval for the band (2 channels a
+# minute for 19 channels at 30-minute scans, one every 2 minutes at 2-hour scans), then a rest until the
+# next scheduled scan. It skips while the router's own traffic is high (but not for longer than the scan
+# interval), and scheduled scans only retry the full scan every 6 hours. A sweep of the band is one scan
+# whose time moves forward with each channel. Routers whose full scans work never trickle.
 #
 # Same stand-in driver as one-channel.sh. Runs with Merlin's BusyBox commands only, and [, printf and
 # echo as separate programs, on a fake clock.
@@ -132,8 +133,8 @@ sched() {   # a scheduled scan (cron's 'scan --delay'), half an hour after the l
 	out=$(run scan --delay 2>&1) || true
 	r5=$(printf '%s\n' "$out" | sed -n 's/^  5g (eth7): //p'); ts=$(q "SELECT max(ts) FROM scans WHERE band='5g'")
 }
-step() {   # cron's 'trickle', 2 minutes after the last
-	echo $(( $(cat "$F/clock") + 120 )) > "$F/clock"
+step() {   # cron's 'trickle', a minute after the last
+	echo $(( $(cat "$F/clock") + 60 )) > "$F/clock"
 	run trickle > /dev/null 2>&1 || true
 	ts=$(q "SELECT max(ts) FROM scans WHERE band='5g'")
 }
@@ -152,6 +153,8 @@ touch "$F/eth7.reject_full"; n=$(mark)
 sched
 like "first refusal: a burst, as before" "ok, 2 networks in * s, one channel at a time ($FIRST), 19 channels measured" "$r5"
 expect "first refusal: every channel" "$ALL" "$(calls $((n + 1)))"
+n=$(mark); step; step
+expect "first refusal: trickle waits for the next scheduled scan" "" "$(calls $((n + 1)))"
 
 # 3: from then on, scheduled scans don't scan (nor retry the full scan) until 6 hours have passed
 n=$(mark); f=$(tries); b=$(q "SELECT count(DISTINCT ts) FROM scans WHERE band='5g'")
@@ -159,39 +162,44 @@ sched
 expect "spread: the scheduled scan says so" "ok, one channel at a time, spread out (full scans refused on this channel)" "$r5"
 expect "spread: no full-scan try, no channel scanned, nothing stored" "0||$b" "$(( $(tries) - f ))|$(calls $((n + 1)))|$(q "SELECT count(DISTINCT ts) FROM scans WHERE band='5g'")"
 
-# 4: trickle: one channel a step, in order, as one sweep whose time moves forward
-n=$(mark); step; t1=$ts; step; step
-expect "trickle: one channel a step, from the start of the band" "36 40 44" "$(calls $((n + 1)))"
-expect "trickle: one sweep, at the latest step's time" "3|$(cat "$F/clock" | awk '{ print $1 - 1 }')" "$(rows)|$ts"
+# 4: trickle: 2 channels a minute (19 channels in about 10 minutes), in order, as one sweep whose time moves forward
+n=$(mark); step; t1=$ts
+expect "trickle: 2 channels a minute, from the start of the band" "36 40" "$(calls $((n + 1)))"
+step; step
+expect "trickle: in order" "36 40 44 48 52 56" "$(calls $((n + 1)))"
+expect "trickle: one sweep, at the latest channel's time" "6|$(cat "$F/clock" | awk '{ print $1 - 1 }')" "$(rows)|$ts"
 [ "$ts" -gt "$t1" ] && ok "trickle: the sweep moved forward" || bad "trickle: sweep time $t1 -> $ts"
-expect "trickle: measured, and the networks it heard" "3|1" "$(measured)|$(nets)"
+expect "trickle: measured, and the networks it heard" "6|1" "$(measured)|$(nets)"
 expect "trickle: Site Survey keeps Far124 from the burst" "Far124@old Near36@new" "$(survey)"
 
-# 5: not twice in a step's time
+# 5: not twice in a minute
 n=$(mark); run trickle > /dev/null 2>&1 || true
 expect "trickle: nothing before it's due" "" "$(calls $((n + 1)))"
 
 # 6: busy with your own traffic: wait, but not for longer than the scan interval (30 min)
 n=$(mark); sample 35; step
 expect "own traffic high: skipped" "" "$(calls $((n + 1)))"
-i=0; while [ $i -lt 13 ]; do sample 35; step; i=$((i + 1)); done
+i=0; while [ $i -lt 27 ]; do sample 35; step; i=$((i + 1)); done
 expect "own traffic high for 28 min: still waiting" "" "$(calls $((n + 1)))"
 sample 35; step; sample 35; step
-expect "own traffic high for 32 min: scans anyway" "48" "$(calls $((n + 1)))"
+expect "own traffic high for 30 min: scans anyway" "60 64" "$(calls $((n + 1)))"
 sample 3; n=$(mark); step
-expect "own traffic low again: the next one" "52" "$(calls $((n + 1)))"
+expect "own traffic low again: the next ones" "100 104" "$(calls $((n + 1)))"
 
 # 7: a refused single channel: the same one next time
 touch "$F/eth7.never"; n=$(mark); step
 rm -f "$F/eth7.never"; step
-expect "refused: tried again" "56" "$(calls $((n + 1)))"
+expect "refused: tried again" "108 112" "$(calls $((n + 1)))"
 
-# 8: the rest of the band, then one line in the syslog and a new sweep
-i=0; while [ $i -lt 13 ]; do step; i=$((i + 1)); done   # 60 ... 140
+# 8: the rest of the band, then one line in the syslog, a rest, and a new sweep with the next scheduled scan
+n=$(mark); step; step; step; step
+expect "sweep: the rest of the band, stopping at its end" "116 120 124 128 132 136 140" "$(calls $((n + 1)))"
 grep -q '^scan 5g (eth7): one channel at a time, spread out: 19 channels, 2 networks, 19 channels measured$' "$F/log" \
 	&& ok "sweep done: logged" || { bad "sweep done: syslog"; tail -3 "$F/log"; }
-full=$ts; step
-expect "sweep done: the next starts afresh" "1" "$(rows)"
+full=$ts; n=$(mark); step; step
+expect "sweep done: rests until the next scheduled scan" "" "$(calls $((n + 1)))"
+sched; step
+expect "sweep done: the next scheduled scan starts a new one" "36 40|2" "$(calls $((n + 1)))|$(rows)"
 expect "sweep done: the finished one stays whole" "19" "$(q "SELECT count(*) FROM scans WHERE band='5g' AND ts=$full")"
 
 # 9: another channel (the router moved, say): trickle stops, scheduled scans try a full scan again
@@ -207,8 +215,16 @@ expect "full scans work again" "ok, 2 networks in 3 s, 19 channels measured" "$r
 n=$(mark); step
 expect "full scans work again: trickle stops" "" "$(calls $((n + 1)))"
 
-# 11: scans paused: no trickle
-touch "$F/eth7.reject_full"; sched; sed -i 's/^COLLECTION=.*//' "$R/jffs/addons/wifiinsight/config"; echo 'COLLECTION="paused"' >> "$R/jffs/addons/wifiinsight/config"
+# 11: 2-hour scans: one channel every 2 minutes (a sweep in about 40 minutes)
+touch "$F/eth7.reject_full"; sched; sched   # refused again: the burst, then a sweep
+echo 'SCAN_INTERVAL=120' >> "$R/jffs/addons/wifiinsight/config"
+n=$(mark); step; step; step; step
+expect "2-hour scans: one channel every 2 minutes" "36 40" "$(calls $((n + 1)))"
+echo 44 > "$F/eth7.bad"; n=$(mark); step; step; step; step; rm -f "$F/eth7.bad"
+expect "a channel radar put off limits: skipped" "48 52" "$(calls $((n + 1)))"
+
+# 12: scans paused: no trickle
+sed -i 's/^COLLECTION=.*//' "$R/jffs/addons/wifiinsight/config"; echo 'COLLECTION="paused"' >> "$R/jffs/addons/wifiinsight/config"
 n=$(mark); step; step
 expect "scans paused: no trickle" "" "$(calls $((n + 1)))"
 

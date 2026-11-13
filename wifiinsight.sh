@@ -738,6 +738,7 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 		set -- $(cat "$TMPD/refused_$band" 2>/dev/null); pre=0; [ "$1" = "$hex" ] && pre=1
 		if [ $sched = 1 ] && [ $pre = 1 ] && [ $(( ts0 - ${2:-0} )) -lt 21600 ] 2>/dev/null; then
 			result=ok; detail="one channel at a time, spread out (full scans refused on this channel)"
+			: > "$TMPD/trickle_$band.due"   # trickle starts the next sweep
 		else
 			scan_radio "$ifc" "$band" "$hex"
 		fi
@@ -745,6 +746,7 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 		# refused again at the 6-hour retry: trickle carries on (the first refusal still gets a burst, below)
 		if [ "$result" = busy ] && [ $sched = 1 ] && [ $pre = 1 ]; then
 			result=ok; detail="$detail; one channel at a time, spread out"
+			: > "$TMPD/trickle_$band.due"
 		elif [ "$result" = busy ] && [ -n "$chs" ]; then   # the full scan was refused: try one channel at a time
 			full=$detail
 			scan_each "$ifc" "$band" "$chs" "$m0" "$m1" "$all"
@@ -815,13 +817,15 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 }
 
 # For radios whose full scans are refused (refused_<band> holds the current chanspec): scan one channel
-# at a time, spread over the scan interval, instead of a burst of up to 150 s at every scheduled scan.
-# cron runs this every 2 minutes; a band takes its next channel when it's due (the scan interval divided
-# by its channels, at least 2 minutes). Each is one short trip off the router's channel: a fraction of a
-# second's delay, no loss, in a ping test. A step is skipped while your own traffic is high (over 10% of
-# the airtime in the latest sample), but not for longer than the scan interval; none run in quiet hours,
-# or with scans paused or off. A sweep of the band is stored as one scan whose time moves forward with
-# each channel, so the page shows it filling in; Scan now still scans the whole band at once.
+# at a time, spread out, instead of a burst of up to 150 s at every scheduled scan. Each scheduled scan
+# starts a sweep of the band (trickle_<band>.due), and cron runs this every minute to carry it on: the
+# sweep takes about a third of the scan interval (10 minutes with 30-minute scans), up to 3 channels a
+# minute, or one every few minutes with long intervals; then it rests until the next scheduled scan.
+# Each channel is one short trip off the router's channel: a fraction of a second's delay, no loss, in a
+# ping test. A run is skipped while your own traffic is high (over 10% of the airtime in the latest
+# sample), but not for longer than the scan interval; none run in quiet hours, or with scans paused or
+# off. A sweep is stored as one scan whose time moves forward with each channel, so the page shows it
+# filling in; Scan now still scans the whole band at once.
 trickle() {
 	[ "$COLLECTION" = on ] && [ "$SCAN_INTERVAL" -gt 0 ] 2>/dev/null || return 0
 	quiet_now && return 0
@@ -841,58 +845,77 @@ trickle() {
 		chs=$(radio_channels "$ifc" "$band"); nch=$(echo $chs | wc -w | tr -d ' ')
 		[ "$nch" -gt 0 ] || continue
 		t=$(now); lastf="$TMPD/trickle_$band.last"; last=$(cat "$lastf" 2>/dev/null); case "$last" in ''|*[!0-9]*) last=0 ;; esac
-		gap=$((SCAN_INTERVAL * 60 / nch)); [ $gap -lt 120 ] && gap=120
-		[ $((t - last)) -ge $((gap - 30)) ] || continue
+		# seconds per channel for a sweep in a third of the scan interval; under a minute: several a run
+		g=$((SCAN_INTERVAL * 20 / nch)); k=1
+		if [ $g -ge 60 ]; then [ $((t - last)) -ge $((g - 15)) ] || continue
+		else [ $((t - last)) -ge 30 ] || continue   # one run a minute, however long the last one took
+			k=$(( (3 * nch + SCAN_INTERVAL - 1) / SCAN_INTERVAL )); [ $k -gt 3 ] && k=3   # channels a run
+		fi
+		# between sweeps: the next one starts after the next scheduled scan, from the start of the band
+		due="$TMPD/trickle_$band.due"; nxt="$TMPD/trickle_$band.next"; sw="$TMPD/sweep_$band"
+		sts=$(cat "$sw" 2>/dev/null); case "$sts" in ''|*[!0-9]*) sts="" ;; esac
+		[ -n "$sts" ] && [ $((t - sts)) -gt $((SCAN_INTERVAL * 120)) ] && { rm -f "$sw"; sts=""; }   # left too long: dropped
+		if [ -z "$sts" ]; then [ -f "$due" ] || continue; echo 0 > "$nxt"; fi
 		# your own traffic in the latest sample (transmit + receive from your clients), if it's recent
 		own=$(sql "SELECT coalesce(tx, 0) + coalesce(inbss, 0) FROM samples WHERE band='$band' AND ts >= $((t - 180)) ORDER BY ts DESC LIMIT 1;")
 		if [ "$(awk -v o="${own:-0}" 'BEGIN { print (o > 10) }')" = 1 ] && [ $((t - last)) -lt $((SCAN_INTERVAL * 60)) ]; then continue; fi
-		nxt="$TMPD/each_$band.next"; off=$(cat "$nxt" 2>/dev/null); case "$off" in ''|*[!0-9]*) off=0 ;; esac
-		[ "$off" -lt "$nch" ] || off=0
-		c=$(echo $chs | cut -d' ' -f$((off + 1)))
-		m0="$TMPD/chanim_$band.t0"; m1="$TMPD/chanim_$band.t1"; out="$TMPD/scan_$band.one"; err="$TMPD/scan_$band.err"
-		wl -i "$ifc" chanim_stats all > "$m0" 2>/dev/null
-		if ! wl -i "$ifc" scan -c "$c" > /dev/null 2> "$err"; then
-			grep -q 'Bad Channel' "$err" && echo $(( (off + 1) % nch )) > "$nxt"   # radar put it off limits: next one
-			rm -f "$m0"; continue   # refused: the same channel next time
-		fi
-		t2=$(now); echo "$t2" > "$lastf"; p=""; sleep 1
-		while :; do   # done when the channel has new figures or a network, or the results are in
-			el=$(( $(now) - t2 ))
-			if wl -i "$ifc" scanresults > "$out" 2>/dev/null; then
-				wl -i "$ifc" chanim_stats all > "$m1" 2>/dev/null
-				p=$(chanim_reached "$c" "$m0" "$m1" "$band" "$(heard_channels < "$out")")
-				[ -n "${p%%|*}" ] && break
-				[ $el -ge 3 ] && break
-			else : > "$out"
+		j=0
+		while [ $j -lt $k ]; do
+			j=$((j + 1))
+			off=$(cat "$nxt" 2>/dev/null); case "$off" in ''|*[!0-9]*) off=0 ;; esac
+			[ "$off" -lt "$nch" ] || off=0
+			c=$(echo $chs | cut -d' ' -f$((off + 1)))
+			m0="$TMPD/chanim_$band.t0"; m1="$TMPD/chanim_$band.t1"; out="$TMPD/scan_$band.one"; err="$TMPD/scan_$band.err"
+			wl -i "$ifc" chanim_stats all > "$m0" 2>/dev/null
+			if ! wl -i "$ifc" scan -c "$c" > /dev/null 2> "$err"; then
+				rm -f "$m0"
+				if grep -q 'Bad Channel' "$err"; then   # radar put it off limits: the next one
+					off=$(( (off + 1) % nch )); echo "$off" > "$nxt"
+					[ "$off" = 0 ] && { rm -f "$sw" "$due"; break; }
+					continue
+				fi
+				break   # refused: the same channel next time
 			fi
-			[ $el -ge 10 ] && break
-			sleep 1
+			t2=$(now); echo "$t2" > "$lastf"; p=""; sleep 1
+			while :; do   # done when the channel has new figures or a network, or the results are in
+				el=$(( $(now) - t2 ))
+				if wl -i "$ifc" scanresults > "$out" 2>/dev/null; then
+					wl -i "$ifc" chanim_stats all > "$m1" 2>/dev/null
+					p=$(chanim_reached "$c" "$m0" "$m1" "$band" "$(heard_channels < "$out")")
+					[ -n "${p%%|*}" ] && break
+					[ $el -ge 3 ] && break
+				else : > "$out"
+				fi
+				[ $el -ge 10 ] && break
+				sleep 1
+			done
+			# this sweep so far moves to now, and this channel joins it (a new sweep at the start of the band)
+			sts=$(cat "$sw" 2>/dev/null); case "$sts" in ''|*[!0-9]*) sts="" ;; esac
+			[ "$off" = 0 ] && sts=""
+			[ -n "$sts" ] && [ $((t2 - sts)) -gt $((SCAN_INTERVAL * 120)) ] && sts=""   # a sweep left for too long: start afresh
+			[ -n "$ownf" ] || ownf=$(own_ssids_file)
+			{
+				echo "BEGIN;"
+				[ -n "$sts" ] && for tb in scans aps chanim; do echo "UPDATE $tb SET ts=$t2 WHERE band='$band' AND ts=$sts;"; done
+				echo "COMMIT;"
+				echo "DELETE FROM scans WHERE band='$band' AND ts=$t2 AND ch=$c;"
+				parse_scan "$t2" "$band" "$c" "$ownf" < "$out"
+				[ -n "${p%%|*}" ] && parse_chanim_all "$t2" "$band" < "$m1" | awk -v c="$c" '/^INSERT/ { x = $0; sub(/^[^,]*,[^,]*,/, "", x); if ((x + 0) != c) next } { print }' | sed 's/^INSERT INTO chanim/INSERT OR REPLACE INTO chanim/'
+				echo "DELETE FROM aps WHERE band='$band' AND ts=$t2 AND rowid NOT IN (SELECT max(rowid) FROM aps WHERE band='$band' AND ts=$t2 GROUP BY bssid);"
+			} | sql
+			echo "$t2" > "$sw"
+			off=$(( (off + 1) % nch )); echo "$off" > "$nxt"
+			mc=$(sql "SELECT count(*) FROM chanim WHERE band='$band' AND ts=$t2;")
+			[ "$(cat "$DATA_DIR/measured_$band" 2>/dev/null)" = "$mc" ] || echo "$mc" > "$DATA_DIR/measured_$band"
+			if [ "$off" = 0 ]; then   # the band is done: one line in the syslog per sweep
+				nn=$(sql "SELECT count(DISTINCT bssid) FROM aps WHERE band='$band' AND ts=$t2;")
+				log "scan $band ($ifc): one channel at a time, spread out: $(sql "SELECT count(*) FROM scans WHERE band='$band' AND ts=$t2;") channels, $nn network$( [ "$nn" = 1 ] || printf s), $mc channels measured"
+				rm -f "$sw" "$due"
+			fi
+			rm -f "$m0" "$m1" "$out"
+			did=1
+			[ "$off" = 0 ] && break   # one sweep per scheduled scan
 		done
-		# this sweep so far moves to now, and this channel joins it (a new sweep at the start of the band)
-		sw="$TMPD/sweep_$band"; sts=$(cat "$sw" 2>/dev/null); case "$sts" in ''|*[!0-9]*) sts="" ;; esac
-		[ "$off" = 0 ] && sts=""
-		[ -n "$sts" ] && [ $((t2 - sts)) -gt $((SCAN_INTERVAL * 120)) ] && sts=""   # a sweep left for too long: start afresh
-		[ -n "$ownf" ] || ownf=$(own_ssids_file)
-		{
-			echo "BEGIN;"
-			[ -n "$sts" ] && for tb in scans aps chanim; do echo "UPDATE $tb SET ts=$t2 WHERE band='$band' AND ts=$sts;"; done
-			echo "COMMIT;"
-			echo "DELETE FROM scans WHERE band='$band' AND ts=$t2 AND ch=$c;"
-			parse_scan "$t2" "$band" "$c" "$ownf" < "$out"
-			[ -n "${p%%|*}" ] && parse_chanim_all "$t2" "$band" < "$m1" | awk -v c="$c" '/^INSERT/ { x = $0; sub(/^[^,]*,[^,]*,/, "", x); if ((x + 0) != c) next } { print }' | sed 's/^INSERT INTO chanim/INSERT OR REPLACE INTO chanim/'
-			echo "DELETE FROM aps WHERE band='$band' AND ts=$t2 AND rowid NOT IN (SELECT max(rowid) FROM aps WHERE band='$band' AND ts=$t2 GROUP BY bssid);"
-		} | sql
-		echo "$t2" > "$sw"
-		off=$(( (off + 1) % nch )); echo "$off" > "$nxt"
-		mc=$(sql "SELECT count(*) FROM chanim WHERE band='$band' AND ts=$t2;")
-		[ "$(cat "$DATA_DIR/measured_$band" 2>/dev/null)" = "$mc" ] || echo "$mc" > "$DATA_DIR/measured_$band"
-		if [ "$off" = 0 ]; then   # the band is done: one line in the syslog per sweep
-			nn=$(sql "SELECT count(DISTINCT bssid) FROM aps WHERE band='$band' AND ts=$t2;")
-			log "scan $band ($ifc): one channel at a time, spread out: $(sql "SELECT count(*) FROM scans WHERE band='$band' AND ts=$t2;") channels, $nn network$( [ "$nn" = 1 ] || printf s), $mc channels measured"
-			rm -f "$sw"
-		fi
-		rm -f "$m0" "$m1" "$out"
-		did=1
 	done
 	[ $did = 1 ] && export_scans
 	return 0
@@ -925,7 +948,7 @@ scan_radio() {   # ifc band chanspec
 		fi
 		sleep 2
 	done
-	rm -f "$rf"
+	rm -f "$rf" "$TMPD/trickle_$2.due"   # full scans work: no spreading
 	limit=45; [ "$2" = 2g ] && limit=20
 	t1=$(now); sleep 3
 	while :; do
@@ -1272,7 +1295,7 @@ cron_add() {
 		else
 			cru a "${NAME}_scan" "*/$SCAN_INTERVAL * * * * $SCRIPT scan --delay"
 		fi
-		cru a "${NAME}_trickle" "*/2 * * * * $SCRIPT trickle"   # does nothing unless a radio refuses full scans
+		cru a "${NAME}_trickle" "* * * * * $SCRIPT trickle"   # does nothing unless a radio refuses full scans
 	else
 		cru d "${NAME}_scan" 2>/dev/null; cru d "${NAME}_trickle" 2>/dev/null
 	fi
