@@ -2,7 +2,7 @@
 
 What changed in each release of WiFi Insight. The release workflow copies a version's section into its GitHub release notes, so write for people running the addon.
 
-## 1.3.1
+## Unreleased
 
 - **An old copy hands over to the installed script.** The install command downloads the script to `/tmp/wifiinsight.sh`, and that copy stayed there until a reboot: running it later (`sh /tmp/wifiinsight.sh scan`, say) ran the old version's code, which made a 1.3.0 router look like 1.2.0. Now `install` removes that copy when it's done, and a copy whose version differs from the installed one says so and runs the installed script instead (except for `install`, `update`, `uninstall`, `check` and `version`).
 - **When your router refuses 5 GHz scans on a DFS channel, the page says what avoids it.** Some routers refuse full 5 GHz scans while on a DFS channel; many don't (an RT-AX86U in Europe scans them fine). Only when your router's scans were refused, or had to go one channel at a time, while it's on a DFS channel, the Spectrum, Site Survey and Channel Statistics now add that a channel outside 52–144 avoids it (in Wireless → General, un-tick "Enable 160 MHz" and "Auto select channel including DFS channels"), and what that costs. Thanks to SashaSolitaire for finding it!
