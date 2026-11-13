@@ -43,7 +43,7 @@ Time ranges: 10 minutes, 1 hour, 12 hours, 1 day, 7 days and 30 days. Short rang
 ## Requirements
 
 - Asuswrt-Merlin with **JFFS custom scripts and configs** enabled (the installer turns it on if needed)
-- Entware on a USB drive, with `sqlite3-cli` installed (`opkg install sqlite3-cli`)
+- Entware on a USB drive, with `sqlite3-cli` installed (`opkg install sqlite3-cli`). A drive formatted ext4 with a journal is safest: on one without (ext2, FAT, exFAT, NTFS, or ext4 made without a journal), a power cut while it's writing can damage the history database. `check`, `status` and the Settings tab say which yours is; amtm can format a drive as ext4 with a journal.
 - A Broadcom radio that answers `wl chanim_stats` (the installer checks)
 
 ## Supported routers

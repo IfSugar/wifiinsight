@@ -964,8 +964,8 @@ export_live() {
 	{
 		printf '{"version":"%s","generated":%s,"sample_interval":%s,"scan_interval":%s,"retain_days":%s,' \
 			"$VERSION" "$t" "$SAMPLE_INTERVAL" "$SCAN_INTERVAL" "$RETAIN_DAYS"
-		printf '"data_dir":"%s","db_bytes":%s,"own_ssids":[%s],"extra_own":"%s",' \
-			"$(js "$DATA_DIR")" "$(jnum "$dbb")" "$ownj" "$(js "$EXTRA_OWN_SSIDS")"
+		printf '"data_dir":"%s","db_bytes":%s,"fs":"%s","fs_note":"%s","own_ssids":[%s],"extra_own":"%s",' \
+			"$(js "$DATA_DIR")" "$(jnum "$dbb")" "$(js "$(fstype_of "$DATA_DIR")")" "$(js "$(journal_note "$DATA_DIR")")" "$ownj" "$(js "$EXTRA_OWN_SSIDS")"
 		printf '"collection":"%s","quiet":"%s","tz_off":%s,"build":"%s",' "$COLLECTION" "$QUIET" "$(tz_off)" "$(js "$( [ -f "$BUILD_FILE" ] && awk '$1 == "dev" { print $2 "@" $3 }' "$BUILD_FILE")")"
 		printf '"measured":{%s},"country":"%s","territory":"%s","radios":%s,' "$mj" "$(js "$(country_code)")" "$(js "$(territory_code)")" "$(radios_json)"
 		printf '"damaged":%s,"samples":' "$(jnum "$(cat "$DATA_DIR/damaged" 2>/dev/null)")"   # when sqlite first said the database is damaged; null = fine
@@ -1282,8 +1282,22 @@ fstype_of() {   # filesystem type of the mount holding $1 (longest matching moun
 	awk -v p="${p:-/}" '{
 		m = $2; ok = (m == "/" || p == m || index(p, m "/") == 1)
 		if (ok && length(m) >= best) { best = length(m); t = $3 }
-	} END { print t }' /proc/mounts 2>/dev/null
+	} END { print t }' "${WI_MOUNTS:-/proc/mounts}" 2>/dev/null
 }
+# A filesystem without a journal (ext2, FAT, exFAT, NTFS, HFS, or ext4 made without one, which amtm
+# offers): a power cut while it's writing can leave files damaged, the history database included.
+# A mounted ext3/ext4 with a journal has /proc/fs/jbd2/<device>-8.
+fs_dev() { p=$(readlink -f "$(nearest_dir "$1")" 2>/dev/null); awk -v p="${p:-/}" '{ m = $2; if ((m == "/" || p == m || index(p, m "/") == 1) && length(m) >= best) { best = length(m); d = $1 } } END { print d }' "${WI_MOUNTS:-/proc/mounts}" 2>/dev/null; }
+no_journal() {   # path -> what to call its filesystem if it has no journal ("ext2, which has no journal"), else nothing
+	t=$(fstype_of "$1")
+	case "$t" in
+		ext2|vfat|msdos|fat|exfat|texfat|ntfs|ntfs3|tntfs|ufsd|tfat|hfs|hfsplus|thfsplus|fuseblk) echo "$t, which has no journal" ;;
+		ext3|ext4) j="${WI_PROC:-/proc}/fs/jbd2"; d=$(fs_dev "$1")
+			[ -d "$j" ] && [ -n "$d" ] && [ ! -d "$j/${d##*/}-8" ] && echo "$t without a journal" ;;
+	esac
+	return 0
+}
+journal_note() { n=$(no_journal "$1"); [ -n "$n" ] && echo "The drive is $n, so a power cut while it's writing can damage the history database. ext4 with a journal is safer (amtm can format a USB drive that way)."; }
 
 check_support() {
 	ck_fails=0
@@ -1381,7 +1395,8 @@ check_support() {
 		*)
 			if [ "${kb:-0}" -lt 51200 ]; then ck_fail "Less than 50 MB free for history in $DATA_DIR."
 			else ck_ok "History storage: $DATA_DIR ($fst, $(kb_to_mb "$kb") MB free)"
-			fi ;;
+			fi
+			n=$(journal_note "$DATA_DIR"); [ -n "$n" ] && ck_warn "History storage: $n" ;;
 	esac
 
 	# JFFS (addon files) and a free web UI slot
@@ -1625,6 +1640,7 @@ uninstall() {
 status() {
 	say "$TITLE $VERSION$(b=$(build_text); [ -n "$b" ] && printf ' (%s)' "$b")"
 	say "Data:        $DB ($( [ -f "$DB" ] && du -h "$DB" | cut -f1 || echo missing))"
+	n=$(journal_note "$DATA_DIR"); say "Storage:     $(fstype_of "$DATA_DIR")${n:+. $n}"
 	say "Web page:    $(cat "$ADDON_DIR/webui_page" 2>/dev/null || echo 'not mounted')"
 	say "Ready:       $(ready && echo yes || echo 'no (NTP or storage)')"
 	say "Collection:  $(collection_text)"
@@ -1694,6 +1710,7 @@ debug() {
 	say "acsd: $(pidof acsd2 acsd || echo 'not running')"
 	say "Collection: $(collection_text)"
 	say "Quiet hours: $(quiet_text)"
+	say "Storage: $DATA_DIR on $(fstype_of "$DATA_DIR")"
 	for r in 0 1 2 3; do
 		ifc=$(nvram get wl${r}_ifname)
 		[ -n "$ifc" ] || continue

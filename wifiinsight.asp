@@ -631,7 +631,7 @@ function dbWarn() {
 	var w = $('wiWarn'), d = WI.live && WI.live.damaged;
 	if (!d) { w.style.display = 'none'; return; }
 	w.innerHTML = 'The history database is damaged (noticed ' + new Date(d * 1000).toLocaleString() + '), so some charts may have gaps or stop updating. ' +
-		'To repair it, run <code>/jffs/addons/wifiinsight/wifiinsight.sh repair</code> over SSH.';
+		'To repair it, run <code>/jffs/addons/wifiinsight/wifiinsight.sh repair</code> over SSH.' + (WI.live.fs_note ? ' ' + esc(WI.live.fs_note) : '');
 	w.style.display = 'block';
 }
 function prepCanvas(cv, cssH) {
@@ -1317,7 +1317,8 @@ function renderSettings() {
 	if (document.activeElement !== $('setOwn')) $('setOwn').value = L.extra_own || '';
 	$('setOwnAuto').innerHTML = (L.own_ssids || []).length ? 'Detected automatically: ' + L.own_ssids.map(function (s) { return '<code>' + esc(s) + '</code>'; }).join(' ') : '';
 	var mb = L.db_bytes ? (L.db_bytes / 1048576).toFixed(1) + ' MB' : '–';
-	$('setStorage').innerHTML = '<code>' + esc(L.data_dir) + '</code> · ' + mb;
+	$('setStorage').innerHTML = '<code>' + esc(L.data_dir) + '</code> · ' + mb + (L.fs ? ' · ' + esc(L.fs) : '')
+		+ (L.fs_note ? '<br><span style="color:var(--unclass)">' + esc(L.fs_note) + '</span>' : '');
 }
 function saveSettings() {
 	var own = $('setOwn').value.replace(/["$`\\]/g, '').trim();
