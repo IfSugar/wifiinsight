@@ -60,10 +60,11 @@ Tested on an RT-AX86U with 3004.388.13_0. Every model current Merlin supports us
 | RT-AX58U (V1), RT-AX68U, RT-AX88U Pro, RT-BE86U, RT-BE58 Go | 2.4 + 5 GHz | Should work |
 | RT-BE96U | 2.4 + 5 + 6 GHz | Works, including 6 GHz (user report) |
 | GT-AXE11000, RT-BE92U, GT-BE19000AI | 2.4 + 5 + 6 GHz | Should work since 1.2.0. Up to 1.1.0 the check took the 6 GHz radio for a second 5 GHz one |
-| GT-AX11000, GT-AX11000 Pro, ZenWiFi Pro XT12 | 2.4 + 5 + 5 GHz | Not yet: two 5 GHz radios |
-| GT-AXE16000, GT-BE98 Pro | four radios | Not yet: four radios |
+| GT-AX11000, GT-AX11000 Pro, ZenWiFi Pro XT12 | 2.4 + 5 + 5 GHz | Should work: the two 5 GHz radios are kept apart, as 5 GHz-1 and 5 GHz-2 |
+| GT-AXE16000 | 5 + 5 + 6 + 2.4 GHz | Should work: four radios, 5 GHz-1 and 5 GHz-2 kept apart |
+| GT-BE98 Pro | 5 + 6 + 6 + 2.4 GHz | Should work: four radios, 6 GHz-1 and 6 GHz-2 kept apart |
 
-*Should work*: meets the requirements, not run yet. *Not yet*: refused by the check, support planned. Models on a sibling's firmware (RT-AX3000 V1, RT-AX86S, RT-BE7200) should match it. Older models and Gnuton's Merlin-based firmware (RT-AX82U, TUF-AX5400, XT8…) are untried. Either way, `check` tells you before anything is installed, and a [router report](https://github.com/IfSugar/wifiinsight/issues/new/choose) helps add your model.
+*Should work*: meets the requirements, not run yet. Where a router has two radios on one band, each gets its own button, named as on the router's own Wireless pages (5 GHz-1 and 5 GHz-2, or 6 GHz-1 and 6 GHz-2), and its own history; the radio layouts come from the Asuswrt-Merlin source. Models on a sibling's firmware (RT-AX3000 V1, RT-AX86S, RT-BE7200) should match it. Older models and Gnuton's Merlin-based firmware (RT-AX82U, TUF-AX5400, XT8…) are untried. Either way, `check` tells you before anything is installed, and a [router report](https://github.com/IfSugar/wifiinsight/issues/new/choose) helps add your model.
 
 ## Install
 
@@ -148,7 +149,7 @@ If a scan's one-second hiccup gets in the way at certain times (gaming, calls, s
 |---|---|
 | `/jffs/addons/wifiinsight/` | script, page, config, local Chart.js, and `build` while a development version is installed |
 | `/opt/var/lib/wifiinsight/wifiinsight.db` | history (SQLite): samples, scans, measured channel airtime, networks, events |
-| `/opt/var/lib/wifiinsight/measured_2g`, `measured_5g`… | how many channels the radio measured in each band's last scan |
+| `/opt/var/lib/wifiinsight/measured_2g`, `measured_5g`… | how many channels each radio measured in its last scan (`5g2`, `6g2`: the second radio on a band) |
 | `/opt/var/lib/wifiinsight/damaged` | only while the database is damaged: when it was first noticed (`repair` removes it) |
 | `/opt/var/lib/wifiinsight/wifiinsight.db.bad` | only after `repair`: the damaged copy, to delete once everything looks right |
 | `/tmp/wifiinsight/each_5g.next`, `refused_5g`, `trickle_5g.*`, `sweep_5g`… | for drivers that refuse full scans: where the next one-channel-at-a-time scan starts, the channel a full scan was last refused on, and the spread-out sweep's next channel, last step, pending start and current sweep |

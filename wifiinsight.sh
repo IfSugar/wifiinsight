@@ -141,11 +141,15 @@ web_dir() {
 	echo "$d/$NAME"
 }
 
-radios() { for i in 0 1 2; do [ -n "$(nvram get wl${i}_ifname)" ] && echo "$i"; done; }
+# Up to four radios (wl0-wl3): the GT-AXE16000 and GT-BE98 Pro have their 2.4 GHz radio on wl3.
+radios() { for i in 0 1 2 3; do [ -n "$(nvram get wl${i}_ifname)" ] && echo "$i"; done; }
 
 # Chanspec bits, as in Broadcom's bcmwifi_channels.h. Band (0xc000): 0x0000 2.4 GHz, 0x4000 6 GHz,
 # 0x8000 4.9 GHz (counted as 5), 0xc000 5 GHz. Width (0x3800): 0x1000 20, 0x1800 40, 0x2000 80,
-# 0x2800 160, 0x3000 80+80, and 0x0000 is 320 MHz on 6 GHz. Up to 1.1.0, 6 GHz was misread as 5 GHz.
+# 0x2800 160, and 0x3000, which is 80+80 on the Wi-Fi 6 drivers but 320 MHz on the Wi-Fi 7 ones
+# (3006.102), the only width it can be on 6 GHz. The low byte is the centre channel, except at 320 MHz:
+# there bits 0-5 count 160 MHz steps from channel 31 (31, 63, 95...) and bits 6-10 place the primary
+# channel. Up to 1.1.0, 6 GHz was misread as 5 GHz; up to 1.3.0, 320 MHz as 160 around the wrong centre.
 band_of_hex() {
 	case $(( $1 & 0xc000 )) in
 		0) echo 2g ;; 16384) echo 6g ;; *) echo 5g ;;
@@ -154,10 +158,38 @@ band_of_hex() {
 
 width_of_hex() {
 	case $(( ($1 & 0x3800) >> 11 )) in
-		2) echo 20 ;; 3) echo 40 ;; 4) echo 80 ;; 5|6) echo 160 ;; 7) echo 320 ;;
-		0) if [ $(( $1 & 0xc000 )) -eq 16384 ]; then echo 320; else echo 20; fi ;;
+		2) echo 20 ;; 3) echo 40 ;; 4) echo 80 ;; 5) echo 160 ;;
+		6) if [ $(( $1 & 0xc000 )) -eq 16384 ]; then echo 320; else echo 160; fi ;;
 		*) echo 20 ;;
 	esac
+}
+
+center_of_hex() {
+	if [ $(( $1 & 0xf800 )) -eq $(( 0x7000 )) ]; then echo $(( ($1 & 0x3f) * 32 + 31 )); else echo $(( $1 & 0xff )); fi
+}
+
+# Radios on one band are numbered in wl order, as the router's own pages do: 5 GHz-1 and 5 GHz-2 on a
+# GT-AX11000, GT-AX11000 Pro, XT12 or GT-AXE16000, 6 GHz-1 and 6 GHz-2 on a GT-BE98 Pro. The first keeps
+# the band's key (2g, 5g, 6g), and with it the history from before; the second is 5g2 or 6g2.
+nband_of() {   # unit -> 2g, 5g or 6g: from wlN_nband (1 5 GHz, 2 2.4 GHz, 4 6 GHz), else from its chanspec
+	case "$(nvram get wl${1}_nband)" in
+		1) echo 5g ;; 2) echo 2g ;; 4) echo 6g ;;
+		*) _nh=$(wl -i "$(nvram get wl${1}_ifname)" chanspec 2>/dev/null | sed -n 's/.*(\(0x[0-9a-fA-F]*\)).*/\1/p')
+			[ -n "$_nh" ] && band_of_hex "$_nh" ;;
+	esac
+	return 0
+}
+radio_key() {   # unit hex -> 2g, 5g, 6g, 5g2, 6g2
+	_kb=$(band_of_hex "$2"); _kn=1
+	for _kj in $(radios); do [ "$_kj" -lt "$1" ] && [ "$(nband_of "$_kj")" = "$_kb" ] && _kn=$((_kn + 1)); done
+	if [ $_kn -gt 1 ]; then echo "$_kb$_kn"; else echo "$_kb"; fi
+}
+band_name() {   # key -> 2.4 GHz, 5 GHz, or 5 GHz-1 and 5 GHz-2 where there are two
+	_bk=${1%[0-9]}
+	case "$_bk" in 2g) _bt="2.4 GHz" ;; 5g) _bt="5 GHz" ;; 6g) _bt="6 GHz" ;; *) echo "$1"; return 0 ;; esac
+	if [ "$_bk" != "$1" ]; then echo "$_bt-${1#"$_bk"}"; return 0; fi
+	_bc=0; for _bj in $(radios); do [ "$(nband_of "$_bj")" = "$_bk" ] && _bc=$((_bc + 1)); done
+	if [ $_bc -gt 1 ]; then echo "$_bt-1"; else echo "$_bt"; fi
 }
 
 ctl_of_cs() {
@@ -247,7 +279,7 @@ sample_all() {
 		stamp=${14}
 		laststamp=$(state_get "stamp_wl$r")
 		[ -n "$stamp" ] && [ "$stamp" != "NULL" ] && [ "$stamp" = "$laststamp" ] && continue  # stale
-		band=$(band_of_hex "$hex"); width=$(width_of_hex "$hex"); center=$(( hex & 0xff ))
+		band=$(radio_key "$r" "$hex"); width=$(width_of_hex "$hex"); center=$(center_of_hex "$hex")
 		ctl=$(ctl_of_cs "$cs"); noise=$(num "$(wl -i "$ifc" noise 2>/dev/null)")
 		out="${out}INSERT OR REPLACE INTO samples VALUES($ts,'$band','$hex','$(sq "$cs")',$ctl,$width,$center,$1,$2,$3,$4,$5,$6,$7,$8,$9,${10},${11},${12},${13},$noise,${14});
 $(state_sql "stamp_wl$r" "$stamp")
@@ -352,7 +384,7 @@ detect_radar() {
 				ifc=$(nvram get wl${r}_ifname)   # the log may name the radio as ethN or wlN
 				det="Radar detected on $ifc"
 				h=$(wl -i "$ifc" chanspec 2>/dev/null | sed -n 's/.*(\(0x[0-9a-fA-F]*\)).*/\1/p')
-				[ -n "$h" ] && band=$(band_of_hex "$h") ;;
+				[ -n "$h" ] && band=$(radio_key "$r" "$h") ;;
 			esac
 		done
 		ev_sql "$t" "$band" radar "" "" "$det"
@@ -387,7 +419,7 @@ default_channels() {
 
 radio_channels() {   # ifc band
 	c=$(wl -i "$1" channels 2>/dev/null | tr -s ' \t\n' ' ' | sed 's/^ //; s/ $//')
-	case "$c" in ''|*[!0-9\ ]*) c=$(default_channels "$2") ;; esac
+	case "$c" in ''|*[!0-9\ ]*) c=$(default_channels "${2%[0-9]}") ;; esac
 	echo "$c"
 }
 
@@ -410,8 +442,8 @@ parse_scan() {   # ts band "channels" ownfile
 		return o
 	}
 	function freq(c) {
-		if (band == "2g") return (c == 14) ? 2484 : 2407 + 5 * c
-		if (band == "6g") return 5950 + 5 * c
+		if (kind == "2g") return (c == 14) ? 2484 : 2407 + 5 * c
+		if (kind == "6g") return 5950 + 5 * c
 		return 5000 + 5 * c
 	}
 	function esc(s) { gsub(/\047/, "\047\047", s); return s }
@@ -425,9 +457,9 @@ parse_scan() {   # ts band "channels" ownfile
 		if (ctl == "") { have = 0; return }
 		if (center == "") {
 			center = ctl
-			if (band != "2g" && width > 20) {
+			if (kind != "2g" && width > 20) {
 				nb = width / 20; base = (ctl >= 149) ? 149 : (ctl >= 100) ? 100 : 36
-				if (band == "6g") base = 1
+				if (kind == "6g") base = 1
 				center = base + int((ctl - base) / (4 * nb)) * 4 * nb + (nb - 1) * 2
 			}
 		}
@@ -437,7 +469,7 @@ parse_scan() {   # ts band "channels" ownfile
 		n++
 		S[n] = ssid; B[n] = bssid; R[n] = rssi + 0; C[n] = ctl + 0; M[n] = center + 0
 		W[n] = width + 0; U[n] = util; O[n] = (ssid in own) ? 1 : 0
-		P[n] = (eht ? "be" : he ? "ax" : vht ? "ac" : ht ? "n" : (band == "2g" ? "g" : "a"))
+		P[n] = (eht ? "be" : he ? "ax" : vht ? "ac" : ht ? "n" : (kind == "2g" ? "g" : "a"))
 		if (sae && psk) sec = "WPA2/WPA3"; else if (sae) sec = "WPA3"
 		else if (rsn && ent) sec = rsn_wpa ? "WPA/WPA2-Ent" : "WPA2-Ent"
 		else if (rsn) sec = wpa ? "WPA/WPA2" : "WPA2"
@@ -446,7 +478,7 @@ parse_scan() {   # ts band "channels" ownfile
 		have = 0
 	}
 	BEGIN {
-		n = 0
+		n = 0; kind = band; sub(/[0-9]+$/, "", kind)   # 5g2 (a second 5 GHz radio) is 5 GHz
 		if (ownfile != "") while ((getline l < ownfile) > 0) if (l != "") own[l] = 1
 	}
 	/^SSID: / {
@@ -547,12 +579,12 @@ parse_chanim_all() {   # ts band [raw]   raw: "channel<TAB>its figures as printe
 		if (cs ~ /^0[xX]/) {
 			v = hexval(cs); if (v < 0) return -1
 			b = int(v / 16384) % 4; t = (b == 0) ? "2g" : (b == 1) ? "6g" : "5g"
-			return (t == band) ? v % 256 : -1
+			return (t == kind) ? v % 256 : -1
 		}
-		t = band
+		t = kind
 		if (cs ~ /^6g/) { t = "6g"; sub(/^6g/, "", cs) }
 		if (!match(cs, /^[0-9]+/)) return -1
-		return (t == band) ? substr(cs, 1, RLENGTH) + 0 : -1
+		return (t == kind) ? substr(cs, 1, RLENGTH) + 0 : -1
 	}
 	function num(x) { return (x ~ /^-?[0-9]+$/) ? x + 0 : "NULL" }
 	function pct(x) { x = num(x); return (x == "NULL") ? x : (x < 0 ? 0 : (x > 100 ? 100 : x)) }
@@ -568,6 +600,7 @@ parse_chanim_all() {   # ts band [raw]   raw: "channel<TAB>its figures as printe
 		out[k] = sprintf("INSERT OR REPLACE INTO chanim VALUES(%d,\047%s\047,%d,%s,%s,%s,%s,%s,%s);", ts, band, c, pct(o), pct(n), pct(p), num(g), num(b), num(z))
 	}
 	function flush() { if (cs != "") keep(chan(cs), o, n, p, g, b, z); cs = "" }
+	BEGIN { kind = band; sub(/[0-9]+$/, "", kind) }   # 5g2 (a second 5 GHz radio) is 5 GHz
 	/during last scan/ { sec = 1; next }
 	sec && /^[^ \t]/ && !/chanspec:|cca_/ { flush(); sec = 0 }   # the next heading ends it (lines may come unindented)
 	sec && /chanspec:/ { flush(); blk = $0; cs = val("chanspec:"); g = val("crsglitch cnt:"); b = val("bad plcp:"); z = val("noise:"); o = n = p = ""; next }
@@ -729,7 +762,7 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 		ifc=$(nvram get wl${r}_ifname)
 		hex=$(wl -i "$ifc" chanspec 2>/dev/null | sed -n 's/.*(\(0x[0-9a-fA-F]*\)).*/\1/p')
 		[ -n "$hex" ] || continue
-		band=$(band_of_hex "$hex"); chs=$(radio_channels "$ifc" "$band")
+		band=$(radio_key "$r" "$hex"); chs=$(radio_channels "$ifc" "$band")
 		m0="$TMPD/chanim_$band.before"; m1="$TMPD/chanim_$band.after"; all="$TMPD/scan_$band.all"
 		wl -i "$ifc" chanim_stats all > "$m0" 2>/dev/null   # the figures the radio still holds from earlier scans
 		ts0=$(now); touch "$SCAN_FLAG"
@@ -839,7 +872,7 @@ trickle() {
 		ifc=$(nvram get wl${r}_ifname)
 		hex=$(wl -i "$ifc" chanspec 2>/dev/null | sed -n 's/.*(\(0x[0-9a-fA-F]*\)).*/\1/p')
 		[ -n "$hex" ] || continue
-		band=$(band_of_hex "$hex")
+		band=$(radio_key "$r" "$hex")
 		set -- $(cat "$TMPD/refused_$band" 2>/dev/null)
 		[ "$1" = "$hex" ] || continue   # full scans work on this channel (or haven't been refused)
 		chs=$(radio_channels "$ifc" "$band"); nch=$(echo $chs | wc -w | tr -d ' ')
@@ -949,7 +982,7 @@ scan_radio() {   # ifc band chanspec
 		sleep 2
 	done
 	rm -f "$rf" "$TMPD/trickle_$2.due"   # full scans work: no spreading
-	limit=45; [ "$2" = 2g ] && limit=20
+	limit=45; [ "${2%[0-9]}" = 2g ] && limit=20
 	t1=$(now); sleep 3
 	while :; do
 		el=$(( $(now) - t1 ))
@@ -1057,15 +1090,15 @@ radios_json() {
 		cs=${csl%% *}
 		hex=$(printf '%s' "$csl" | sed -n 's/.*(\(0x[0-9a-fA-F]*\)).*/\1/p')
 		[ -n "$hex" ] || continue
-		band=$(band_of_hex "$hex"); width=$(width_of_hex "$hex"); center=$(( hex & 0xff ))
+		band=$(radio_key "$r" "$hex"); width=$(width_of_hex "$hex"); center=$(center_of_hex "$hex")
 		noise=$(jnum "$(wl -i "$ifc" noise 2>/dev/null)")
 		dfs=$(wl -i "$ifc" dfs_status 2>/dev/null)
 		dstate=$(printf '%s' "$dfs" | sed -n 's/^state \(.*\) time elapsed.*/\1/p')
 		dms=$(printf '%s' "$dfs" | sed -n 's/.*time elapsed \([0-9]*\)ms.*/\1/p')
 		auto=false; [ "$(nvram get wl${r}_chanspec)" = "0" ] && auto=true
 		[ $first -eq 1 ] || printf ','; first=0
-		printf '{"radio":%s,"iface":"%s","band":"%s","up":%s,"cs":"%s","hex":"%s","ctl":%s,"width":%s,"center":%s,"noise":%s,"auto":%s,"dfs_state":"%s","dfs_ms":%s,"channels":[%s]}' \
-			"$r" "$(js "$ifc")" "$band" "$([ "$up" = 1 ] && echo true || echo false)" "$(js "$cs")" "$hex" \
+		printf '{"radio":%s,"iface":"%s","band":"%s","name":"%s","up":%s,"cs":"%s","hex":"%s","ctl":%s,"width":%s,"center":%s,"noise":%s,"auto":%s,"dfs_state":"%s","dfs_ms":%s,"channels":[%s]}' \
+			"$r" "$(js "$ifc")" "$band" "$(band_name "$band")" "$([ "$up" = 1 ] && echo true || echo false)" "$(js "$cs")" "$hex" \
 			"$(jnum "$(ctl_of_cs "$cs")")" "$(jnum "$width")" "$(jnum "$center")" "$noise" "$auto" "$(js "$dstate")" "$(jnum "$dms")" \
 			"$(radio_channels "$ifc" "$band" | sed 's/ /,/g')"
 	done
@@ -1079,7 +1112,7 @@ export_live() {
 	while IFS= read -r o; do ownj="$ownj${ownj:+,}\"$(js "$o")\""; done < "$(own_ssids_file)"
 	dbb=$(ls -l "$DB" 2>/dev/null | awk '{print $5}')
 	mj=""   # channels measured in each band's last scan; none yet: no scan since this version
-	for b in 2g 5g 6g; do [ -f "$DATA_DIR/measured_$b" ] && mj="$mj${mj:+,}\"$b\":$(jnum "$(cat "$DATA_DIR/measured_$b")")"; done
+	for f in "$DATA_DIR"/measured_*; do [ -f "$f" ] && mj="$mj${mj:+,}\"${f##*/measured_}\":$(jnum "$(cat "$f")")"; done
 	{
 		printf '{"version":"%s","generated":%s,"sample_interval":%s,"scan_interval":%s,"retain_days":%s,' \
 			"$VERSION" "$t" "$SAMPLE_INTERVAL" "$SCAN_INTERVAL" "$RETAIN_DAYS"
@@ -1439,13 +1472,12 @@ check_support() {
 	if ! have wl; then
 		ck_fail "No Broadcom Wi-Fi driver ('wl' not found in $PATH). Only Broadcom-based models are supported."
 	else
-		good=0; seen=0; off=0; bands=""
+		good=0; seen=0; off=0
 		for r in $(radios); do
 			ifc=$(nvram get wl${r}_ifname); seen=1
 			cl=$(wl -i "$ifc" chanspec 2>/dev/null); cs=${cl%% *}
 			hex=$(printf '%s\n' "$cl" | sed -n 's/.*(\(0x[0-9a-fA-F]*\)).*/\1/p')
-			case "$([ -n "$hex" ] && band_of_hex "$hex")" in 2g) b="2.4 GHz" ;; 5g) b="5 GHz" ;; 6g) b="6 GHz" ;; *) b="radio $r" ;; esac
-			bands="$bands|$b"
+			if [ -n "$hex" ]; then b=$(band_name "$(radio_key "$r" "$hex")"); else b="radio $r"; fi
 			if [ "$(wl -i "$ifc" isup 2>/dev/null)" != "1" ]; then
 				ck_warn "$b ($ifc) is switched off. It will be monitored once it's on."
 				off=$((off + 1)); continue
@@ -1467,14 +1499,6 @@ check_support() {
 			else ck_ok "$b ($ifc) airtime statistics"; good=$((good + 1))
 			fi
 		done
-		# History is kept per band, so two radios on one band (5 GHz-1 + 5 GHz-2, or two 6 GHz)
-		# would overwrite each other, and only wl0-wl2 are read. Refuse those layouts for now.
-		dup=$(printf '%s\n' "$bands" | tr '|' '\n' | grep -v '^$' | sort | uniq -d | head -1)
-		if [ -n "$(nvram get wl3_ifname)" ]; then
-			ck_fail "This router has four radios. WiFi Insight supports up to three, one per band, for now."
-		elif [ -n "$dup" ]; then
-			ck_fail "This router has two $dup radios. WiFi Insight can't keep their data apart yet."
-		fi
 		if [ $seen -eq 0 ]; then ck_fail "No Wi-Fi radios found."
 		elif [ $good -eq 0 ] && [ $off -gt 0 ]; then ck_fail "No Wi-Fi radio is switched on, so support can't be checked. Turn one on and try again."
 		elif [ $good -eq 0 ]; then ck_fail "No radio provides the airtime statistics WiFi Insight is built on."
@@ -1826,7 +1850,7 @@ debug() {
 	say "$TITLE $VERSION$(b=$(build_text); [ -n "$b" ] && printf ' (%s)' "$b")"
 	say "Router:      $(nvram get productid) $(nvram get odmpid)  firmware $(fw_version)  $(uname -m)"
 	say "BusyBox:     $(busybox 2>/dev/null | head -1 | cut -d' ' -f2)   sqlite3: $("$SQLITE" --version 2>/dev/null | cut -d' ' -f1)"
-	say "Smart Connect: $(nvram get smart_connect_x)   wl_ifnames: $(nvram get wl_ifnames)   country: $(country_code)  territory: $(territory_code)"
+	say "Smart Connect: $(nvram get smart_connect_x)   wl_ifnames: $(nvram get wl_ifnames)   wlnband_list: $(nvram get wlnband_list)   country: $(country_code)  territory: $(territory_code)"
 	say "acsd: $(pidof acsd2 acsd || echo 'not running')"
 	say "Collection: $(collection_text)"
 	say "Quiet hours: $(quiet_text)"
@@ -1834,7 +1858,8 @@ debug() {
 	for r in 0 1 2 3; do
 		ifc=$(nvram get wl${r}_ifname)
 		[ -n "$ifc" ] || continue
-		say "===== wl$r ($ifc)  nband=$(nvram get wl${r}_nband) nband_type=$(nvram get wl${r}_nband_type) ====="
+		h=$(wl -i "$ifc" chanspec 2>/dev/null | sed -n 's/.*(\(0x[0-9a-fA-F]*\)).*/\1/p'); k=""; [ -n "$h" ] && k=$(radio_key "$r" "$h")
+		say "===== wl$r ($ifc)  nband=$(nvram get wl${r}_nband) nband_type=$(nvram get wl${r}_nband_type)${k:+  shown as $(band_name "$k") ($k)} ====="
 		wl -i "$ifc" ver 2>/dev/null | sed -n '2p'
 		wl -i "$ifc" isup; wl -i "$ifc" chanspec; wl -i "$ifc" noise
 		wl -i "$ifc" chanim_stats; wl -i "$ifc" dfs_status; wl -i "$ifc" channels
