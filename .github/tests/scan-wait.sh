@@ -75,7 +75,7 @@ net() {   # ssid bssid rssi "Channel: x/w" chanspec-line primary
 { net Neighbour-5 02:00:00:00:05:01 -66 100/80 "5GHz channel 106 80MHz (0xe06a)" 100
   net Cafe-5 02:00:00:00:05:02 -80 36/160 "5GHz channel 50 160MHz (0xe832)" 36; } > "$F/results_eth7.txt"
 
-awk '/^init_db\(\) \{/ { f = 1 } f && /^EOF$/ { exit } f && p { print } f && /<<.EOF.$/ { p = 1 }' "$script" > "$t/schema.sql"
+awk '/^SCHEMA=\047/ { f = 1; sub(/^SCHEMA=\047/, "") } f { e = ($0 ~ /\047$/); if (e) sub(/\047$/, ""); print; if (e) exit; next } /^init_db\(\) \{/ { h = 1 } h && /^EOF$/ { exit } h && p { print } h && /<<.EOF.$/ { p = 1 }' "$script" > "$t/schema.sql"
 "$sqlite" "$D/wifiinsight.db" < "$t/schema.sql"
 echo 'enable -n test [ printf echo' > "$t/no-builtins.sh"
 run() { WI_ROOT="$R" TZ=UTC PATH="$t/bin" BASH_ENV="$t/no-builtins.sh" "$bash_bin" "$R/jffs/addons/wifiinsight/wifiinsight.sh" "$@"; }

@@ -101,16 +101,28 @@ chart_ok() {   # the downloaded Chart.js is byte-identical to the published npm 
 
 # sqlite's errors still go to stderr. "malformed" or "not a database" also marks the database as damaged
 # (a power cut while the USB drive was writing, say), which status and the page report until 'repair'.
+# The SQL comes as one argument or on stdin; the schema check runs first either way, and -bail stops
+# everything after it if it fails.
 sql() {
-	{ _sqe=$("$SQLITE" -batch -noheader -cmd ".timeout 8000" "$DB" "$@" 2>&1 1>&3 3>&-); _sqr=$?; } 3>&1
+	sql_guard
+	if [ $# -gt 0 ]; then
+		{ _sqe=$("$SQLITE" -batch -noheader -bail -cmd ".timeout 8000" "$DB" "$SQL_GUARD $1" 2>&1 1>&3 3>&-); _sqr=$?; } 3>&1
+	else
+		{ _sqe=$({ printf '%s\n' "$SQL_GUARD"; cat; } | "$SQLITE" -batch -noheader -bail -cmd ".timeout 8000" "$DB" 2>&1 1>&3 3>&-); _sqr=$?; } 3>&1
+	fi
 	if [ -n "$_sqe" ]; then
 		printf '%s\n' "$_sqe" >&2
-		case "$_sqe" in *malformed*|*"not a database"*)
-			[ -f "$DATA_DIR/damaged" ] || { now > "$DATA_DIR/damaged"; log "the database is damaged ($(printf '%s' "$_sqe" | head -1 | cut -c1-80)): run '$SCRIPT repair'"; } 2>/dev/null ;;
+		case "$_sqe" in
+			*"not created by WiFi Insight"*)
+				[ -f "$TMPD/foreign" ] || { mkdir -p "$TMPD"; : > "$TMPD/foreign"; log "$DB holds something WiFi Insight didn't create ($(printf '%s' "$_sqe" | sed -n "s/.*WiFi Insight: \([^']*\).*/\1/p" | head -1)), so it isn't used. Move it away, then run '$SCRIPT startup' to start a new one."; } 2>/dev/null ;;
+			*malformed*|*"not a database"*)
+				{ [ -f "$DATA_DIR/damaged" ] && [ ! -L "$DATA_DIR/damaged" ]; } || { put_file "$DATA_DIR/damaged" "$(now)"; log "the database is damaged ($(printf '%s' "$_sqe" | head -1 | cut -c1-80)): run '$SCRIPT repair'"; } 2>/dev/null ;;
 		esac
 	fi
 	return $_sqr
 }
+# A small file in DATA_DIR, on a drive others may write to: never written through a link left there.
+put_file() { rm -f "$1" 2>/dev/null; printf '%s\n' "$2" > "$1"; }
 
 # Big query results (a day of samples is ~350 KB of JSON) must never sit in a shell variable or
 # be passed as an argument. Merlin's BusyBox runs [, printf and echo as separate programs, and
@@ -134,7 +146,8 @@ ready() {
 	[ "$(nvram get ntp_ready)" = "1" ] || return 1
 	[ -x "$SQLITE" ] || return 1
 	[ -d "$DATA_DIR" ] || return 1
-	case "$(fstype_of "$DATA_DIR")" in tmpfs|ramfs) return 1 ;; esac
+	[ -L "$DB" ] && return 1   # a link put in place of the database: never followed
+	case "$(fstype_of "$DATA_DIR")" in tmpfs|ramfs|jffs2|ubifs|yaffs2) return 1 ;; esac
 	return 0
 }
 
@@ -200,9 +213,11 @@ ctl_of_cs() {
 }
 
 # ---- database ---------------------------------------------------------------
-init_db() {
-	sql <<'EOF'
-CREATE TABLE IF NOT EXISTS samples(
+# The database's tables and indexes. init_db creates them, and sql() refuses a database holding anything else:
+# the folder is on a USB drive others may be able to write to (a guest Samba or FTP share), and a table,
+# trigger or view WiFi Insight didn't create could make sqlite3 write files as root. A CHECK constraint
+# calling writefile() does, even on 3.42.0. Every version so far created exactly these.
+SCHEMA='CREATE TABLE IF NOT EXISTS samples(
   ts INTEGER NOT NULL, band TEXT NOT NULL, hex TEXT, cs TEXT,
   ctl INTEGER, width INTEGER, center INTEGER,
   tx INTEGER, inbss INTEGER, obss INTEGER, nocat INTEGER, nopkt INTEGER,
@@ -226,9 +241,19 @@ CREATE INDEX IF NOT EXISTS ap_bt ON aps(band, ts);
 CREATE TABLE IF NOT EXISTS chanim(
   ts INTEGER NOT NULL, band TEXT NOT NULL, ch INTEGER NOT NULL, obss INTEGER, nocat INTEGER,
   nopkt INTEGER, glitch INTEGER, badplcp INTEGER, noise INTEGER, PRIMARY KEY(band, ts, ch));
-CREATE TABLE IF NOT EXISTS state(k TEXT PRIMARY KEY, v TEXT);
-EOF
+CREATE TABLE IF NOT EXISTS state(k TEXT PRIMARY KEY, v TEXT);'
+init_db() { printf '%s\n' "$SCHEMA" | sql; }
+# The statement run first, in the same sqlite3 run as the rest: an error, which stops it there, if the
+# database holds anything init_db doesn't create (its sql in sqlite_master, less "IF NOT EXISTS"), or
+# sqlite's own statistics tables (PRAGMA optimize, which prune runs, makes sqlite_stat1).
+schema_guard() {
+	{ printf '%s' "$SCHEMA"; printf ';CREATE TABLE sqlite_stat1(tbl,idx,stat);CREATE TABLE sqlite_stat4(tbl,idx,neq,nlt,ndlt,sample)'; } | awk 'BEGIN { RS = ";" }
+		{ sub(/^[[:space:]]+/, ""); if ($0 == "") next
+		  sub(/^CREATE TABLE IF NOT EXISTS /, "CREATE TABLE "); sub(/^CREATE INDEX IF NOT EXISTS /, "CREATE INDEX ")
+		  l = l (l == "" ? "" : ", ") "\047" $0 "\047" }
+		END { printf "SELECT json_extract(\047{}\047, \047not created by WiFi Insight: \047 || name) FROM sqlite_master WHERE NOT (sql IN (%s) OR (type = \047index\047 AND sql IS NULL AND name LIKE \047sqlite_autoindex_%%\047)) LIMIT 1;", l }'
 }
+sql_guard() { [ -n "$SQL_GUARD" ] || SQL_GUARD=$(schema_guard); }
 
 # ---- sampling ---------------------------------------------------------------
 # Print: chanspec tx inbss obss nocat nopkt doze txop goodtx badtx glitch badplcp
@@ -756,7 +781,8 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 	lowprio
 	mkdir -p "$TMPD"
 	exec 7>"$TMPD/scan.lock"
-	flock -n 7 || { say "A scan is already running."; return 0; }
+	# another scan, or one-channel trickle (up to ~35 s): wait for it rather than skip (BusyBox flock has no -w)
+	i=0; until flock -n 7; do i=$((i + 1)); [ $i -gt 30 ] && { say "A scan is already running."; log "scan skipped: another scan is still running"; return 0; }; sleep 2; done
 	[ "$1" = "--delay" ] && sleep 8
 	trap 'rm -f "$SCAN_FLAG"' EXIT; trap 'rm -f "$SCAN_FLAG"; exit 1' INT TERM HUP
 	touch "$SCAN_FLAG"
@@ -773,7 +799,7 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 		# a scheduled scan of a radio whose full scans are refused here: trickle scans it one channel at a
 		# time, spread out; this only retries the full scan every 6 hours (scan_radio)
 		set -- $(cat "$TMPD/refused_$band" 2>/dev/null); pre=0; [ "$1" = "$hex" ] && pre=1
-		if [ $sched = 1 ] && [ $pre = 1 ] && [ $(( ts0 - ${2:-0} )) -lt 21600 ] 2>/dev/null; then
+		if [ $sched = 1 ] && [ $pre = 1 ] && [ $(( ts0 - ${2:-0} )) -lt 21600 ] 2>/dev/null && [ "$(wl -i "$ifc" isup 2>/dev/null)" = "1" ]; then
 			result=ok; detail="one channel at a time, spread out (full scans refused on this channel)"
 			: > "$TMPD/trickle_$band.due"   # trickle starts the next sweep
 		else
@@ -838,7 +864,7 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 			if [ "$mc" -gt 0 ] 2>/dev/null && sql < "$msql"; then detail="$detail, $mc channels measured"; else mc=0; fi
 			rm -f "$msql" "$m1" "$all"
 			# the page says "starts with the next scan" until a scan has run with this version
-			[ "$(cat "$DATA_DIR/measured_$band" 2>/dev/null)" = "$mc" ] || echo "$mc" > "$DATA_DIR/measured_$band"
+			[ "$(cat "$DATA_DIR/measured_$band" 2>/dev/null)" = "$mc" ] || put_file "$DATA_DIR/measured_$band" "$mc"
 		fi
 		rm -f "$m0" "$m1" "$all"
 		bands="$bands${bands:+,}\"$band\":\"$result\""
@@ -848,6 +874,7 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 	done
 	rm -f "$SCAN_FLAG"
 	export_scans
+	export_live   # the channel tile follows a channel change at once
 	scan_state done "$bands" "" "$notes"
 	flock -u 7
 	log "scan complete"
@@ -865,6 +892,7 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 # filling in; Scan now still scans the whole band at once.
 trickle() {
 	[ "$COLLECTION" = on ] && [ "$SCAN_INTERVAL" -gt 0 ] 2>/dev/null || return 0
+	set -- "$TMPD"/refused_*; [ -f "$1" ] || return 0   # no radio refuses full scans: nothing to do, and no lock taken
 	quiet_now && return 0
 	ready || return 0
 	mkdir -p "$TMPD"
@@ -879,6 +907,7 @@ trickle() {
 		band=$(radio_key "$r" "$hex")
 		set -- $(cat "$TMPD/refused_$band" 2>/dev/null)
 		[ "$1" = "$hex" ] || continue   # full scans work on this channel (or haven't been refused)
+		[ "$(wl -i "$ifc" isup 2>/dev/null)" = "1" ] || continue   # switched off
 		chs=$(radio_channels "$ifc" "$band"); nch=$(echo $chs | wc -w | tr -d ' ')
 		[ "$nch" -gt 0 ] || continue
 		t=$(now); lastf="$TMPD/trickle_$band.last"; last=$(cat "$lastf" 2>/dev/null); case "$last" in ''|*[!0-9]*) last=0 ;; esac
@@ -943,7 +972,7 @@ trickle() {
 			echo "$t2" > "$sw"
 			off=$(( (off + 1) % nch )); echo "$off" > "$nxt"
 			mc=$(sql "SELECT count(*) FROM chanim WHERE band='$band' AND ts=$t2;")
-			[ "$(cat "$DATA_DIR/measured_$band" 2>/dev/null)" = "$mc" ] || echo "$mc" > "$DATA_DIR/measured_$band"
+			[ "$(cat "$DATA_DIR/measured_$band" 2>/dev/null)" = "$mc" ] || put_file "$DATA_DIR/measured_$band" "$mc"
 			if [ "$off" = 0 ]; then   # the band is done: one line in the syslog per sweep
 				nn=$(sql "SELECT count(DISTINCT bssid) FROM aps WHERE band='$band' AND ts=$t2;")
 				log "scan $band ($ifc): one channel at a time, spread out: $(sql "SELECT count(*) FROM scans WHERE band='$band' AND ts=$t2;") channels, $nn network$( [ "$nn" = 1 ] || printf s), $mc channels measured"
@@ -1116,7 +1145,10 @@ export_live() {
 	while IFS= read -r o; do ownj="$ownj${ownj:+,}\"$(js "$o")\""; done < "$(own_ssids_file)"
 	dbb=$(ls -l "$DB" 2>/dev/null | awk '{print $5}')
 	mj=""   # channels measured in each band's last scan; none yet: no scan since this version
-	for f in "$DATA_DIR"/measured_*; do [ -f "$f" ] && mj="$mj${mj:+,}\"${f##*/measured_}\":$(jnum "$(cat "$f")")"; done
+	for f in "$DATA_DIR"/measured_*; do   # only radio keys (2g, 5g, 5g2...): the names come from a drive others may write to
+		k=${f##*/measured_}; case "$k" in [256]g|[256]g[2-4]) ;; *) continue ;; esac
+		[ -f "$f" ] && [ ! -L "$f" ] && mj="$mj${mj:+,}\"$k\":$(jnum "$(cat "$f")")"
+	done
 	{
 		printf '{"version":"%s","generated":%s,"sample_interval":%s,"scan_interval":%s,"retain_days":%s,' \
 			"$VERSION" "$t" "$SAMPLE_INTERVAL" "$SCAN_INTERVAL" "$RETAIN_DAYS"
@@ -1226,7 +1258,7 @@ prune() {
 	if [ "$(date +%w)" = "0" ]; then
 		fl=$(sql "PRAGMA freelist_count;"); pc=$(sql "PRAGMA page_count;")
 		if [ "${fl:-0}" -gt 0 ] 2>/dev/null && [ $((fl * 4)) -ge "${pc:-0}" ]; then
-			SQLITE_TMPDIR="$DATA_DIR" "$SQLITE" -batch -cmd ".timeout 8000" "$DB" "VACUUM;" && log "database compacted ($fl of $pc pages were free)"
+			sql_guard; SQLITE_TMPDIR="$DATA_DIR" "$SQLITE" -batch -bail -cmd ".timeout 8000" "$DB" "$SQL_GUARD VACUUM;" && log "database compacted ($fl of $pc pages were free)"
 		fi
 	fi
 	export_all
@@ -1402,6 +1434,10 @@ service_event() {   # action service
 
 # ---- install / uninstall ------------------------------------------------------
 write_conf() {
+	if [ -z "$CONF_PATHS" ] && [ -f "$CONF" ]; then
+		_cd=$(sed -n 's/^DATA_DIR="\(.*\)"$/\1/p' "$CONF" | tail -1); [ -n "$_cd" ] && DATA_DIR=$_cd && DB="$DATA_DIR/$NAME.db"
+		_cs=$(sed -n 's/^SQLITE="\(.*\)"$/\1/p' "$CONF" | tail -1); [ -n "$_cs" ] && SQLITE=$_cs
+	fi
 	cat > "$CONF" <<EOF
 # WiFi Insight settings - run "$SCRIPT startup" after editing
 SAMPLE_INTERVAL=$SAMPLE_INTERVAL      # seconds between interference samples (30 or 60)
@@ -1450,7 +1486,7 @@ no_journal() {   # path -> what to call its filesystem if it has no journal ("ex
 	t=$(fstype_of "$1")
 	case "$t" in
 		ext2|vfat|msdos|fat|exfat|texfat|ntfs|ntfs3|tntfs|ufsd|tfat|hfs|hfsplus|thfsplus|fuseblk) echo "$t, which has no journal" ;;
-		ext3|ext4) j="${WI_PROC:-/proc}/fs/jbd2"; d=$(fs_dev "$1")
+		ext4) j="${WI_PROC:-/proc}/fs/jbd2"; d=$(fs_dev "$1")
 			[ -d "$j" ] && [ -n "$d" ] && [ ! -d "$j/${d##*/}-8" ] && echo "$t without a journal" ;;
 	esac
 	return 0
@@ -1481,6 +1517,8 @@ usb_drives() {   # the USB drives Merlin has mounted, writable, one mount point 
 		"${WI_MOUNTS:-/proc/mounts}" 2>/dev/null | while IFS= read -r _d; do [ -d "$_d" ] && [ -w "$_d" ] && echo "$_d"; done
 }
 data_dir_default() {   # a new install's history folder: on Entware's drive if there is one, else the first drive
+	# history kept by an earlier 'uninstall --keep-data' in Entware's folder: that, so install moves it
+	[ -f "$ROOT/opt/var/lib/$NAME/$NAME.db" ] && [ -n "$(drive_of "$ROOT/opt/var/lib/$NAME")" ] && { echo "$ROOT/opt/var/lib/$NAME"; return; }
 	_d=$(drive_of "$ROOT/opt/var/lib")
 	[ -n "$_d" ] || _d=$(usb_drives | head -1)
 	if [ -n "$_d" ]; then echo "$_d/$NAME"; else echo "$ROOT/opt/var/lib/$NAME"; fi   # no drive: the check says so
@@ -1508,7 +1546,10 @@ choose_drive() {   # a new install, no Entware, more than one drive, in a termin
 migrate_data() {
 	_old=$DATA_DIR
 	case "$_old" in "/opt/var/lib/$NAME"|"$ROOT/opt/var/lib/$NAME") ;; *) return 0 ;; esac
-	[ -d "$_old" ] && [ ! -L "$_old" ] || return 0   # nothing there, or moved already
+	if _t=$(moved_to "$_old"); then   # moved already, but the config still names the old folder: the new one
+		DATA_DIR=$_t; DB="$DATA_DIR/$NAME.db"; CONF_PATHS=1; write_conf; CONF_PATHS=""; return 0
+	fi
+	[ -d "$_old" ] && [ ! -L "$_old" ] || return 0   # nothing there
 	_drv=$(drive_of "$_old"); [ -n "$_drv" ] || return 0   # not on a USB drive: the check says so
 	_new="$_drv/$NAME"
 	if [ -e "$_new" ] && [ -n "$(ls -A "$_new" 2>/dev/null)" ]; then
@@ -1523,7 +1564,7 @@ migrate_data() {
 	rmdir "$_new" 2>/dev/null
 	if mv "$_real" "$_new" 2>/dev/null; then
 		ln -s "$_new" "$_old" 2>/dev/null
-		DATA_DIR=$_new; DB="$DATA_DIR/$NAME.db"; write_conf
+		DATA_DIR=$_new; DB="$DATA_DIR/$NAME.db"; CONF_PATHS=1; write_conf; CONF_PATHS=""
 		say "Moved the history to $_new (it was in $_old; a link is left there)."
 		log "history moved to $_new from $_old"
 	else
@@ -1533,13 +1574,19 @@ migrate_data() {
 	return 0
 }
 
+moved_to() {   # path -> where migrate_data moved it, if it's the link left there: <drive>/wifiinsight
+	[ -L "$1" ] || return 1
+	_mt=$(readlink -f "$1"); _md=$(drive_of "$_mt")
+	[ -n "$_md" ] && [ "$_mt" = "$_md/$NAME" ] && [ -d "$_mt" ] && [ ! -L "$_mt" ] && echo "$_mt"
+}
+
 # Use the firmware's sqlite3 when it works, instead of Entware's: the same database file. A path set by
 # hand in the config stays.
 adopt_sqlite() {
 	case "$SQLITE" in ''|/opt/bin/sqlite3|/usr/sbin/sqlite3|"$OPT_SQLITE"|"$FW_SQLITE") ;; *) return 0 ;; esac
 	_q=$(pick_sqlite) || return 0
 	[ "$_q" = "$SQLITE" ] && return 0
-	SQLITE=$_q; write_conf
+	SQLITE=$_q; CONF_PATHS=1; write_conf; CONF_PATHS=""
 	say "Using $_q (sqlite $(sqlite_ver "$_q")) for the history in $DATA_DIR."
 	log "using $_q"
 	return 0
@@ -1867,6 +1914,7 @@ uninstall() {
 	hook_del service-event
 	[ -f "$ROOT/jffs/addons/custom_settings.txt" ] && sed -i "/^${NAME}_/d" "$ROOT/jffs/addons/custom_settings.txt"
 	rm -rf "$(web_dir)" "$TMPD" "$SCAN_FLAG"
+	_t=$(moved_to "$DATA_DIR") && DATA_DIR=$_t && DB="$DATA_DIR/$NAME.db"
 	[ -L "$ROOT/opt/var/lib/$NAME" ] && [ "$(readlink -f "$ROOT/opt/var/lib/$NAME")" = "$(readlink -f "$DATA_DIR")" ] && rm -f "$ROOT/opt/var/lib/$NAME"   # left by migrate_data
 	if [ "$1" = "--keep-data" ]; then
 		say "History kept in $DATA_DIR"
@@ -1895,6 +1943,9 @@ status() {
 		say "Recent events:"
 		sql "SELECT '  ' || datetime(ts,'unixepoch','localtime') || '  ' || band || '  ' || tag || '  ' || coalesce(old,'') || ' -> ' || coalesce(new,'') FROM events ORDER BY ts DESC LIMIT 8;"
 	fi
+	if [ -f "$TMPD/foreign" ]; then
+		say "Database:    NOT USED: it holds something WiFi Insight didn't create (see the syslog). Move it away, then run '$SCRIPT startup'."
+	fi
 	if [ -f "$DATA_DIR/damaged" ]; then
 		say "Database:    DAMAGED (noticed $(date -d "@$(cat "$DATA_DIR/damaged")" '+%Y-%m-%d %H:%M' 2>/dev/null || echo earlier)). Run '$SCRIPT repair'."
 	fi
@@ -1910,9 +1961,16 @@ repair() {   # [force]: rebuild even when the check finds nothing wrong
 	i=0; until flock -n 7; do i=$((i + 1)); [ $i -gt 150 ] && die "A scan is still running. Try again in a few minutes."; sleep 2; done
 	exec 6>"$TMPD/collect.lock"
 	i=0; until flock -n 6; do i=$((i + 1)); [ $i -gt 60 ] && die "Sampling is still running. Try again in a minute."; sleep 2; done
+	sql_guard
+	g=$("$SQLITE" -batch -noheader -bail "$DB" "$SQL_GUARD SELECT 'mine';" 2>&1 | head -2)
+	case "$g" in
+		mine) ;;
+		*"not created by WiFi Insight"*) die "$DB holds something WiFi Insight didn't create ($(printf '%s' "$g" | sed -n "s/.*WiFi Insight: \([^']*\).*/\1/p" | head -1)), so it won't be repaired or used. Move it away, then run '$SCRIPT startup' to start a new one." ;;
+		*) die "Can't read the list of tables in $DB ($(printf '%s' "$g" | head -1 | cut -c1-80)), so it can't be repaired. Move it away, then run '$SCRIPT startup' to start a new one." ;;
+	esac
 	say "Checking $DB (a minute or so on a large one)..."
 	# the full check: quick_check doesn't compare indexes with their tables, and that's damage too
-	chk=$("$SQLITE" "$DB" "PRAGMA integrity_check;" 2>&1 | head -3)
+	chk=$("$SQLITE" -batch -bail "$DB" "$SQL_GUARD PRAGMA integrity_check;" 2>&1 | head -3)
 	if [ "$chk" = ok ] && [ "$1" != force ]; then
 		rm -f "$DATA_DIR/damaged"; say "The database is fine: nothing to repair."; return 0
 	fi
@@ -1921,7 +1979,7 @@ repair() {   # [force]: rebuild even when the check finds nothing wrong
 	[ "$free" -gt $((kb * 2)) ] 2>/dev/null || die "Not enough free space on the drive for a copy (${kb} KB needed twice); nothing was changed."
 	new="$DB.new"; bad="$DB.bad"; rm -f "$new" "$new-journal"
 	say "Copying everything still readable into a new database..."
-	"$SQLITE" "$DB" .dump 2>/dev/null | sed 's/^ROLLBACK;.*/COMMIT;/' | "$SQLITE" "$new" > /dev/null 2>&1
+	printf '%s\n.dump\n' "$SQL_GUARD" | "$SQLITE" -batch -bail "$DB" 2>/dev/null | sed 's/^ROLLBACK;.*/COMMIT;/' | "$SQLITE" "$new" > /dev/null 2>&1
 	nchk=$("$SQLITE" "$new" "PRAGMA integrity_check;" 2>&1 | head -1)
 	[ "$nchk" = ok ] || { rm -f "$new"; die "The new copy isn't sound either ($nchk); nothing was changed."; }
 	rm -f "$bad" "$bad-journal"

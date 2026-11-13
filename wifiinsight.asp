@@ -302,14 +302,35 @@ function getJSON(name) {
 		.then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
 		.then(function (t) { return JSON.parse(t); });
 }
+/* The data comes from a database on the USB drive, which others may be able to write to (a guest share):
+   numbers are made numbers here, missing ones stay missing, so only text, escaped where it's shown, is left. */
+function num(x) { return x == null ? x : Number(x); }
+function numRows(o) { Object.keys(o || {}).forEach(function (b) { o[b] = (o[b] || []).map(function (r) { return Array.isArray(r) ? r.map(num) : num(r); }); }); return o; }
+function numKeys(o, keys) { keys.forEach(function (k) { if (o && k in o) o[k] = num(o[k]); }); return o; }
+function cleanLive(d) {
+	numKeys(d, ['generated', 'sample_interval', 'scan_interval', 'retain_days', 'db_bytes', 'tz_off', 'damaged']);
+	numRows(d.samples);
+	Object.keys(d.measured || {}).forEach(function (b) { d.measured[b] = num(d.measured[b]); });
+	(d.radios || []).forEach(function (r) { numKeys(r, ['radio', 'ctl', 'width', 'center', 'noise', 'dfs_ms']); r.channels = (r.channels || []).map(num); });
+	(d.events || []).forEach(function (e) { e[0] = num(e[0]); });
+	return d;
+}
+function cleanScans(d) {
+	numKeys(d, ['generated', 'scan_interval']);
+	numRows(d.scans);
+	Object.keys(d.last_scan || {}).forEach(function (b) { d.last_scan[b] = num(d.last_scan[b]); });
+	Object.keys(d.aps || {}).forEach(function (b) { (d.aps[b] || []).forEach(function (a) { numKeys(a, ['rssi', 'ctl', 'center', 'width', 'util', 'own', 'snr', 'ts']); }); });
+	return d;
+}
+function cleanAgg(d) { numKeys(d, ['generated', 'bucket', 'scan_bucket']); numRows(d.agg); numRows(d.scans); return d; }
 function loadAll(what) {
 	var jobs = [];
-	if (!what || what.live) jobs.push(getJSON('live.htm').then(function (d) { WI.live = d; }));
+	if (!what || what.live) jobs.push(getJSON('live.htm').then(function (d) { WI.live = cleanLive(d); }));
 	/* scans and week files can be missing for a minute after a reboot: keep what we have */
-	if (!what || what.scans) jobs.push(getJSON('scans.htm').then(function (d) { WI.scans = d; }, function () {}));
+	if (!what || what.scans) jobs.push(getJSON('scans.htm').then(function (d) { WI.scans = cleanScans(d); }, function () {}));
 	if (!what || what.scans) jobs.push(getJSON('scanstate.htm').then(function (d) { WI.scanState = d; }, function () {}));   /* the last scan's result per band */
-	if (!what || what.week) jobs.push(getJSON('week.htm').then(function (d) { WI.week = d; }, function () {}));
-	if (what && what.month) jobs.push(getJSON('month.htm').then(function (d) { WI.month = d; }, function () {}));
+	if (!what || what.week) jobs.push(getJSON('week.htm').then(function (d) { WI.week = cleanAgg(d); }, function () {}));
+	if (what && what.month) jobs.push(getJSON('month.htm').then(function (d) { WI.month = cleanAgg(d); }, function () {}));
 	return Promise.all(jobs).then(function () { dbWarn(); render(); })
 		.catch(function () {
 			var w = $('wiWarn');
@@ -1370,7 +1391,7 @@ function render() {
 		var L = WI.live, scans = L.collection === 'off' ? 'collection off' : L.collection === 'paused' ? 'neighbour scans paused'
 			: 'neighbour scans ' + (L.scan_interval > 0 ? 'every ' + L.scan_interval + ' min' + (L.quiet ? ' outside quiet hours' : '') : 'off');
 		$('wiFoot').innerHTML = 'Updated ' + hm(L.generated) + ' · samples every ' + L.sample_interval + ' s · ' + scans
-			+ ' · history kept ' + L.retain_days + ' days · v' + L.version + (L.build ? ' (development: ' + esc(L.build) + ')' : '') + (r ? ' · ' + r.iface : '');
+			+ ' · history kept ' + L.retain_days + ' days · v' + esc(L.version) + (L.build ? ' (development: ' + esc(L.build) + ')' : '') + (r ? ' · ' + esc(r.iface) : '');
 	}
 	renderQuietMarks();
 }

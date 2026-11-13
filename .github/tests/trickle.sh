@@ -67,7 +67,7 @@ visit() {   # the scan reaches these channels: new figures for each, and what it
 	done
 }
 case "$cmd" in
-	isup) echo 1 ;;
+	isup) if [ -f "$F/$ifc.down" ]; then echo 0; else echo 1; fi ;;
 	chanspec) if [ "$ifc" = eth6 ]; then echo "1 (0x1001)"; else echo "100/160 (0xe872)"; fi ;;
 	channels) all ;;
 	scan)
@@ -103,7 +103,7 @@ sed -i "s|@BB@|$bb|; s|@F@|\"$F\"|" "$t/bin/wl"
 printf '6 02:00:00:00:24:01 Near6\n' > "$F/eth6.nets"
 printf '36 02:00:00:00:05:01 Near36\n124 02:00:00:00:05:02 Far124\n' > "$F/eth7.nets"
 chmod +x "$t/bin/date" "$t/bin/sleep" "$t/bin/logger" "$t/bin/nvram" "$t/bin/wl"
-awk '/^init_db\(\) \{/ { f = 1 } f && /^EOF$/ { exit } f && p { print } f && /<<.EOF.$/ { p = 1 }' "$script" > "$t/schema.sql"
+awk '/^SCHEMA=\047/ { f = 1; sub(/^SCHEMA=\047/, "") } f { e = ($0 ~ /\047$/); if (e) sub(/\047$/, ""); print; if (e) exit; next } /^init_db\(\) \{/ { h = 1 } h && /^EOF$/ { exit } h && p { print } h && /<<.EOF.$/ { p = 1 }' "$script" > "$t/schema.sql"
 "$sqlite" "$D/wifiinsight.db" < "$t/schema.sql"
 echo 'enable -n test [ printf echo' > "$t/no-builtins.sh"
 run() { WI_ROOT="$R" TZ=UTC PATH="$t/bin" BASH_ENV="$t/no-builtins.sh" "$bash_bin" "$R/jffs/addons/wifiinsight/wifiinsight.sh" "$@"; }
@@ -142,11 +142,15 @@ sample() {   # a sample of the router's own channel now: own traffic (tx + inbss
 	q "INSERT INTO samples(ts, band, obss, nocat, tx, inbss, idle, noise) VALUES($(cat "$F/clock"), '5g', 1, 1, $1, 0, 90, -90)"
 }
 
-# 1: full scans work: trickle never scans, the scheduled scan is a full one
-n=$(mark); step; step
+# 1: full scans work: trickle never scans, nor takes the scan lock (a scheduled scan starting in the same
+# second must never find it taken); the scheduled scan is a full one, and refreshes live.htm too
+n=$(mark); rm -f "$R/tmp/wifiinsight/scan.lock"; step; step
 expect "full scans work: trickle does nothing" "" "$(calls $((n + 1)))"
+[ ! -e "$R/tmp/wifiinsight/scan.lock" ] && ok "full scans work: trickle doesn't even take the scan lock" || bad "trickle took the scan lock"
+rm -f "$R/www/user/wifiinsight/live.htm"
 sched
 expect "full scans work: a full scheduled scan" "ok, 2 networks in 3 s, 19 channels measured" "$r5"
+[ -f "$R/www/user/wifiinsight/live.htm" ] && ok "a scan refreshes live.htm (the channel tile)" || bad "a scan left live.htm alone"
 
 # 2: the first refusal: the scheduled scan still gets the whole band at once, one channel at a time
 touch "$F/eth7.reject_full"; n=$(mark)
@@ -201,6 +205,13 @@ expect "sweep done: rests until the next scheduled scan" "" "$(calls $((n + 1)))
 sched; step
 expect "sweep done: the next scheduled scan starts a new one" "36 40|2" "$(calls $((n + 1)))|$(rows)"
 expect "sweep done: the finished one stays whole" "19" "$(q "SELECT count(*) FROM scans WHERE band='5g' AND ts=$full")"
+
+# 8b: switched off: scheduled scans say so, and trickle leaves the radio alone
+touch "$F/eth7.down"; n=$(mark); sched
+expect "radio off: the scheduled scan says off" "off" "$r5"
+step; step
+expect "radio off: trickle doesn't scan it" "" "$(calls $((n + 1)))"
+rm -f "$F/eth7.down"
 
 # 9: another channel (the router moved, say): trickle stops, scheduled scans try a full scan again
 echo "0xd02a $(cat "$F/clock")" > "$R/tmp/wifiinsight/refused_5g"; n=$(mark); step

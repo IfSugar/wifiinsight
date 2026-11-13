@@ -42,7 +42,7 @@ done
 [ -e "$t/bin/sed" ] && [ -e "$t/bin/[" ] || { echo "::error::couldn't set up Merlin's commands"; exit 1; }
 
 # The script's own schema, then a day of 30 s samples on two bands and a week of 30 min scans.
-awk '/^init_db\(\) \{/ { f = 1 } f && /^EOF$/ { exit } f && p { print } f && /<<.EOF.$/ { p = 1 }' "$script" > "$t/schema.sql"
+awk '/^SCHEMA=\047/ { f = 1; sub(/^SCHEMA=\047/, "") } f { e = ($0 ~ /\047$/); if (e) sub(/\047$/, ""); print; if (e) exit; next } /^init_db\(\) \{/ { h = 1 } h && /^EOF$/ { exit } h && p { print } h && /<<.EOF.$/ { p = 1 }' "$script" > "$t/schema.sql"
 now=$(date +%s)
 sqlite3 "$D/wifiinsight.db" < "$t/schema.sql"
 sqlite3 "$D/wifiinsight.db" <<EOF

@@ -50,7 +50,7 @@ q() { "$sqlite" "$D/wifiinsight.db" "$1"; }
 live() { python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("damaged", "missing"))' "$R/www/user/wifiinsight/live.htm"; }
 
 # A database with a day of samples and a week of scans, the way WiFi Insight writes it
-awk '/^init_db\(\) \{/ { f = 1 } f && /^EOF$/ { exit } f && p { print } f && /<<.EOF.$/ { p = 1 }' "$script" > "$t/schema.sql"
+awk '/^SCHEMA=\047/ { f = 1; sub(/^SCHEMA=\047/, "") } f { e = ($0 ~ /\047$/); if (e) sub(/\047$/, ""); print; if (e) exit; next } /^init_db\(\) \{/ { h = 1 } h && /^EOF$/ { exit } h && p { print } h && /<<.EOF.$/ { p = 1 }' "$script" > "$t/schema.sql"
 "$sqlite" "$D/wifiinsight.db" < "$t/schema.sql"
 now=$(date +%s)
 python3 - "$D/wifiinsight.db" "$now" <<'PY'
@@ -113,12 +113,18 @@ out=$(run repair 2>&1) || true
 has "again: nothing to repair" "The database is fine: nothing to repair." "$out"
 expect "again: .bad untouched" "$m" "$(ls -l "$D/wifiinsight.db.bad" | awk '{ print $5 }')"
 
-# 5: damage only the full check finds (an index that no longer matches its table): quick_check says ok,
-# so repair has to run integrity_check
+# 5: damage only the full check finds (an index whose entries no longer match its table): quick_check says
+# ok, so repair has to run integrity_check. The index's definition stays WiFi Insight's own (one that isn't
+# is refused, see storage.sh): it's rebuilt on another column, then its definition put back.
 python3 - "$D/wifiinsight.db" <<'PY'
 import sqlite3, sys
-c = sqlite3.connect(sys.argv[1]); c.execute('PRAGMA writable_schema=ON')
-c.execute("UPDATE sqlite_master SET sql='CREATE INDEX sa_ts ON samples(obss)' WHERE name='sa_ts'"); c.commit(); c.close()
+db = sys.argv[1]
+def schema(sql):
+    c = sqlite3.connect(db); c.execute('PRAGMA writable_schema=ON')
+    c.execute("UPDATE sqlite_master SET sql=? WHERE name='sa_ts'", (sql,)); c.commit(); c.close()
+schema('CREATE INDEX sa_ts ON samples(obss)')
+c = sqlite3.connect(db); c.execute('REINDEX sa_ts'); c.commit(); c.close()
+schema('CREATE INDEX sa_ts ON samples(ts)')
 PY
 expect "index damage: quick_check misses it" "ok" "$(q "PRAGMA quick_check")"
 out=$(run repair 2>&1) || true
@@ -164,6 +170,9 @@ has "ext4 with a journal: status names it" "Storage:     ext4" "$out"
 hasnt "ext4 with a journal: no warning" "journal" "$out$(runp check)"
 runp export > /dev/null
 expect "ext4 with a journal: nothing for the page" "ext4 | " "$(fsjson)"
+mounts ext3; rm -rf "$t/proc/fs/jbd2/sda1-8"
+hasnt "ext3: always has a journal, no jbd2 entry needed" "journal" "$(runp status)$(runp check)"
+mounts ext4
 rm -rf "$t/proc/fs/jbd2"
 hasnt "no jbd2 in /proc: no guessing" "journal" "$(runp status)"
 MOUNTS=""

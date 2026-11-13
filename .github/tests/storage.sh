@@ -13,7 +13,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 script=${1:-$here/../../wifiinsight.sh}
 case "$script" in /*) ;; *) script=$PWD/$script ;; esac
 bb=$(command -v busybox) || { echo "::error::storage.sh needs busybox installed"; exit 1; }
-host_sqlite=$(command -v sqlite3) || { echo "::error::storage.sh needs sqlite3 installed"; exit 1; }
+# "Entware's" sqlite3: the system's, not one put first on PATH (CI puts the firmware's there)
+host_sqlite=${HOST_SQLITE:-$( [ -x /usr/bin/sqlite3 ] && echo /usr/bin/sqlite3 || command -v sqlite3)} || { echo "::error::storage.sh needs sqlite3 installed"; exit 1; }
 fw_sqlite=${FW_SQLITE_BIN:-$host_sqlite}
 bash_bin=$(command -v bash)
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
@@ -22,7 +23,7 @@ ok()  { echo "ok    $*"; }
 bad() { echo "FAIL  $*"; fail=1; }
 expect() { if [ "$3" = "$2" ]; then ok "$1"; else bad "$1"; echo "      want: $2"; echo "      got:  $3"; fi; }
 has() { if printf '%s\n' "$3" | grep -qF -- "$2"; then ok "$1"; else bad "$1"; echo "      want a line with: $2"; printf '%s\n' "$3" | sed 's/^/      | /'; fi; }
-echo "firmware's sqlite3 stand-in: $("$fw_sqlite" -version | cut -d' ' -f1)"
+echo "firmware's sqlite3 stand-in: $("$fw_sqlite" -version | cut -d' ' -f1); Entware's: $("$host_sqlite" -version | cut -d' ' -f1)"
 
 mkdir -p "$T/bin"
 "$bb" --list > "$T/bb.list"
@@ -37,7 +38,7 @@ printf '#!%s sh\ncase "$2" in ntp_ready) echo 1 ;; esac\n' "$bb" > "$T/bin/nvram
 chmod +x "$T/bin/sleep" "$T/bin/nvram"
 echo 'enable -n test [ printf echo' > "$T/no-builtins.sh"
 schema=$T/schema.sql
-awk '/^init_db\(\) \{/ { f = 1 } f && /^EOF$/ { exit } f && p { print } f && /<<.EOF.$/ { p = 1 }' "$script" > "$schema"
+awk '/^SCHEMA=\047/ { f = 1; sub(/^SCHEMA=\047/, "") } f { e = ($0 ~ /\047$/); if (e) sub(/\047$/, ""); print; if (e) exit; next } /^init_db\(\) \{/ { h = 1 } h && /^EOF$/ { exit } h && p { print } h && /<<.EOF.$/ { p = 1 }' "$script" > "$schema"
 
 # A router: its root, the mounts it reports, and which sqlite3 programs it has (fw, opt, both, none, badfw)
 router() {   # name sqlites
@@ -108,7 +109,8 @@ expect "migrate again: nothing changes" "$ino|$new" "$(inode "$new/wifiinsight.d
 # 4: never moved while sampling or a scan holds the database, nor onto a folder that isn't empty, nor off a drive
 router busy "fw opt"; drive USB ext4; entware_on USB
 old=$R/opt/var/lib/wifiinsight; fill "$old"; conf "$R/opt/bin/sqlite3" "$old"
-mkdir -p "$R/tmp/wifiinsight"; ( exec 6>"$R/tmp/wifiinsight/collect.lock"; flock 6; sleep 30 ) & held=$!; command sleep 0.5
+mkdir -p "$R/tmp/wifiinsight"; ( exec 6>"$R/tmp/wifiinsight/collect.lock"; flock 6; sleep 30 ) & held=$!
+i=0; while flock -n "$R/tmp/wifiinsight/collect.lock" true 2>/dev/null && [ $i -lt 100 ]; do command sleep 0.1; i=$((i + 1)); done   # until it holds the lock
 has "busy: not moved while sampling" "Sampling is still running: the history stays in $old" "$(run migrate)"
 kill $held 2>/dev/null; wait $held 2>/dev/null || true
 [ -d "$old" ] && [ ! -L "$old" ] && ok "busy: still in place" || bad "busy: moved anyway"
@@ -118,6 +120,21 @@ router ram "fw opt"; mkdir -p "$R/tmp/opt"; rm -rf "$R/opt"; ln -s "$R/tmp/opt" 
 old=$R/opt/var/lib/wifiinsight; fill "$old"; conf "$R/usr/sbin/sqlite3" "$old"
 run migrate > /dev/null
 [ -d "$old" ] && [ ! -L "$old" ] && ok "RAM: a folder that isn't on a drive isn't moved" || bad "RAM: moved"
+
+# 4b: history kept by 'uninstall --keep-data' in Entware's folder: a reinstall picks it up (and moves it)
+router kept "fw opt"; drive USB ext4; entware_on USB; fill "$R/opt/var/lib/wifiinsight"
+has "kept history: a new install uses it" "History storage: $R/opt/var/lib/wifiinsight (ext4" "$(run check)"
+
+# 4c: a settings save that started before the move doesn't put the old folder back
+router race "fw opt"; drive USB ext4; entware_on USB
+old=$R/opt/var/lib/wifiinsight; new=$R/tmp/mnt/USB/wifiinsight; fill "$old"; conf "$R/opt/bin/sqlite3" "$old"
+printf 'am_settings_get() { "%s" sleep 1; }\n' "$bb" > "$R/usr/sbin/helper.sh"   # a slow settings read: ~7 s
+( run service_event start wifiinsightconfig > /dev/null ) & saving=$!
+command sleep 1; run migrate > /dev/null; wait $saving 2>/dev/null || true
+expect "settings saved during the move: the config keeps the new folder and sqlite3" "$new|$R/usr/sbin/sqlite3" "$(. "$A/config"; echo "$DATA_DIR|$SQLITE")"
+# and a config that still names the old folder (the link) is put right
+conf "$R/opt/bin/sqlite3" "$old"; run migrate > /dev/null
+expect "config naming the moved folder: put right" "$new" "$(. "$A/config"; echo "$DATA_DIR")"
 
 # 5: the history is never kept in RAM: a drive's mount point without the drive doesn't count
 router unplugged fw; mkdir -p "$R/tmp/mnt/USB"; echo "tmpfs $R/tmp tmpfs rw 0 0" >> "$M"
