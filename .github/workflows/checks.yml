@@ -54,6 +54,7 @@ jobs:
         #   trickle         one-channel scans are spread out, only where full scans are refused
         #   repair          a damaged database is noticed, reported and repaired
         #   storage         no Entware: the firmware's sqlite3, a folder on the drive, the move from /opt
+        #   tamper          a database or files someone put in the history folder can't be turned against the router
         #   old-copy        an old copy of the script hands over to the installed one
         #   radio-bands     bands, widths and centres read right (2.4, 5 and 6 GHz, 320 MHz)
         #   multi-radio     two radios on one band, and four radios, are kept apart

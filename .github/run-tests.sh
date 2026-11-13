@@ -7,7 +7,7 @@ set -u
 here=$(cd "$(dirname "$0")" && pwd)
 jobs=${1:-$(nproc 2>/dev/null || echo 2)}; [ "$jobs" -ge 2 ] 2>/dev/null || jobs=2
 out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
-slow="trickle one-channel multi-radio quiet-hours short-scans scan-wait measured repair large-history"
+slow="trickle one-channel multi-radio short-scans scan-wait measured quiet-hours repair storage large-history"
 all=$(cd "$here/tests" && ls *.sh | sed 's/\.sh$//')
 order=$(for n in $slow; do [ -f "$here/tests/$n.sh" ] && echo "$n"; done; for n in $all; do case " $slow " in *" $n "*) ;; *) echo "$n" ;; esac; done)
 
