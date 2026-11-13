@@ -8,7 +8,7 @@
 #
 #  Usage: wifiinsight.sh                    (a menu, when run in a terminal: amtm opens this)
 #         wifiinsight.sh install | update [force | dev [branch]] | uninstall [--keep-data] | status | scan |
-#                        collection [on|paused|off] | debug | amtmupdate [check] |
+#                        collection [on|paused|off] | debug | amtmupdate [check] | migrate |
 #                        startup | collect | export | prune
 #
 #  Install:  curl -fsL --retry 3 https://github.com/IfSugar/wifiinsight/releases/latest/download/wifiinsight.sh \
@@ -52,9 +52,10 @@ EXTRA_OWN_SSIDS=""      # extra SSIDs to treat as yours, separated by |
 COLLECTION=on           # on, paused (no scheduled scans) or off (no samples or scans)
 QUIET=""                # quiet hours, no scheduled scans: see quiet_at() below
 AMTM_UPDATE=on          # on: amtm may update WiFi Insight (amtmupdate); off: only 'update' does
-DATA_DIR="/opt/var/lib/$NAME"
-SQLITE="/opt/bin/sqlite3"
+DATA_DIR=""             # set on install: <USB drive>/wifiinsight (data_dir_default)
+SQLITE=""               # set on install: the firmware's sqlite3, or Entware's (pick_sqlite)
 [ -f "$CONF" ] && . "$CONF"
+FW_SQLITE="$ROOT/usr/sbin/sqlite3"; OPT_SQLITE="$ROOT/opt/bin/sqlite3"
 DB="$DATA_DIR/$NAME.db"
 case "$COLLECTION" in on|paused|off) ;; *) COLLECTION=on ;; esac
 case "$AMTM_UPDATE" in on|off) ;; *) AMTM_UPDATE=on ;; esac
@@ -128,10 +129,12 @@ state_get() { sql "SELECT v FROM state WHERE k='$(sq "$1")';" 2>/dev/null; }   #
 state_sql() { printf "INSERT OR REPLACE INTO state(k,v) VALUES('%s','%s');\n" "$(sq "$1")" "$(sq "$2")"; }
 
 ready() {
-	# Collect only when NTP has synced and Entware/USB storage is mounted.
+	# Collect only when NTP has synced and the USB drive with the history is mounted. A folder of that
+	# name in RAM (the drive's mount point without the drive) never counts: the history would vanish.
 	[ "$(nvram get ntp_ready)" = "1" ] || return 1
 	[ -x "$SQLITE" ] || return 1
 	[ -d "$DATA_DIR" ] || return 1
+	case "$(fstype_of "$DATA_DIR")" in tmpfs|ramfs) return 1 ;; esac
 	return 0
 }
 
@@ -1357,6 +1360,7 @@ hook_del() {   # only lines this addon wrote: start with our script path, end wi
 
 startup() {
 	mkdir -p "$TMPD"
+	[ -f "$CONF" ] && adopt_sqlite
 	[ -x "$SQLITE" ] && [ -d "$DATA_DIR" ] && init_db   # adds anything new after an update
 	mount_webui
 	web_assets
@@ -1452,6 +1456,95 @@ no_journal() {   # path -> what to call its filesystem if it has no journal ("ex
 }
 journal_note() { n=$(no_journal "$1"); [ -n "$n" ] && echo "The drive is $n, so a power cut while it's writing can damage the history database. ext4 with a journal is safer (amtm can format a USB drive that way)."; }
 
+# ---- where the history lives, and which sqlite3 reads it ----------------------------
+# sqlite3 with what WiFi Insight needs (JSON and window functions): the firmware's own /usr/sbin/sqlite3
+# (3.25.3 from 386.1 to 3004.388.4, 3.42.0 since; 384 has none), else Entware's. Both open the same file.
+sqlite_ok() { [ -n "$1" ] && [ -x "$1" ] && [ "$("$1" :memory: 'SELECT json_array(1), row_number() OVER () FROM (SELECT 1);' 2>/dev/null)" = "[1]|1" ]; }
+pick_sqlite() { for _s in "$FW_SQLITE" "$OPT_SQLITE"; do sqlite_ok "$_s" && { echo "$_s"; return 0; }; done; return 1; }
+sqlite_ver() { "$1" -version 2>/dev/null | cut -d' ' -f1; }
+
+# The history goes in a folder on the USB drive itself, <drive>/wifiinsight, as Skynet keeps its data:
+# Merlin mounts each drive at /tmp/mnt/<name>, and that path is the drive, not RAM (Entware's /opt points
+# into it too). With Entware, it's the drive Entware is on. Entware isn't needed.
+mount_of() {   # path -> the mount point holding it (longest match)
+	p=$(readlink -f "$(nearest_dir "$1")" 2>/dev/null)
+	awk -v p="${p:-/}" '{ m = $2; if ((m == "/" || p == m || index(p, m "/") == 1) && length(m) >= best) { best = length(m); d = m } } END { print d }' "${WI_MOUNTS:-/proc/mounts}" 2>/dev/null
+}
+drive_of() {   # path -> the USB drive (its mount point under /tmp/mnt) it's on, or nothing
+	_m=$(mount_of "$1")
+	case "$_m" in "$ROOT/tmp/mnt/"?*) ;; *) return 0 ;; esac
+	case "$(fstype_of "$1")" in ''|tmpfs|ramfs|rootfs|devtmpfs|squashfs) ;; *) echo "$_m" ;; esac
+}
+usb_drives() {   # the USB drives Merlin has mounted, writable, one mount point per line
+	awk -v m="$ROOT/tmp/mnt/" 'index($2, m) == 1 && substr($2, length(m) + 1) !~ /\// && $3 !~ /^(tmpfs|ramfs|rootfs|devtmpfs|squashfs|proc|sysfs)$/ { print $2 }' \
+		"${WI_MOUNTS:-/proc/mounts}" 2>/dev/null | while IFS= read -r _d; do [ -d "$_d" ] && [ -w "$_d" ] && echo "$_d"; done
+}
+data_dir_default() {   # a new install's history folder: on Entware's drive if there is one, else the first drive
+	_d=$(drive_of "$ROOT/opt/var/lib")
+	[ -n "$_d" ] || _d=$(usb_drives | head -1)
+	if [ -n "$_d" ]; then echo "$_d/$NAME"; else echo "$ROOT/opt/var/lib/$NAME"; fi   # no drive: the check says so
+}
+choose_drive() {   # a new install, no Entware, more than one drive, in a terminal: ask which drive
+	[ -f "$CONF" ] && return 0
+	[ -n "$(drive_of "$ROOT/opt/var/lib")" ] && return 0
+	[ -t 0 ] && [ -t 1 ] || return 0
+	usb_drives > "$TMPD/drives" 2>/dev/null
+	_n=$(wc -l < "$TMPD/drives" | tr -d ' ')
+	[ "${_n:-0}" -gt 1 ] || { rm -f "$TMPD/drives"; return 0; }
+	say "Which USB drive should keep the history?"
+	awk '{ printf "  %d  %s\n", NR, $0 }' "$TMPD/drives"
+	printf ' Choose 1-%s [1]: ' "$_n"; read -r _c || _c=1
+	case "$_c" in ''|*[!0-9]*) _c=1 ;; esac
+	[ "$_c" -ge 1 ] && [ "$_c" -le "$_n" ] || _c=1
+	DATA_DIR="$(sed -n "${_c}p" "$TMPD/drives")/$NAME"; DB="$DATA_DIR/$NAME.db"
+	rm -f "$TMPD/drives"; say ""
+}
+
+# Installs up to 1.3.0 kept the history in Entware's /opt/var/lib/wifiinsight. Move it to <drive>/wifiinsight
+# on that same drive, where every install now keeps it: a rename, nothing is copied, and it's the same file.
+# Sampling and scans are held off meanwhile, and a link is left at the old path, so anything still using it
+# (a settings save during the update, a copy of an older version) reaches the same files.
+migrate_data() {
+	_old=$DATA_DIR
+	case "$_old" in "/opt/var/lib/$NAME"|"$ROOT/opt/var/lib/$NAME") ;; *) return 0 ;; esac
+	[ -d "$_old" ] && [ ! -L "$_old" ] || return 0   # nothing there, or moved already
+	_drv=$(drive_of "$_old"); [ -n "$_drv" ] || return 0   # not on a USB drive: the check says so
+	_new="$_drv/$NAME"
+	if [ -e "$_new" ] && [ -n "$(ls -A "$_new" 2>/dev/null)" ]; then
+		say "The history stays in $_old: $_new already exists and isn't empty."; return 0
+	fi
+	mkdir -p "$TMPD"
+	exec 7>"$TMPD/scan.lock"
+	_i=0; until flock -n 7; do _i=$((_i + 1)); [ $_i -gt 150 ] && { say "A scan is still running: the history stays in $_old for now."; return 0; }; sleep 2; done
+	exec 6>"$TMPD/collect.lock"
+	_i=0; until flock -n 6; do _i=$((_i + 1)); [ $_i -gt 60 ] && { flock -u 7; say "Sampling is still running: the history stays in $_old for now."; return 0; }; sleep 2; done
+	_real=$(readlink -f "$_old")
+	rmdir "$_new" 2>/dev/null
+	if mv "$_real" "$_new" 2>/dev/null; then
+		ln -s "$_new" "$_old" 2>/dev/null
+		DATA_DIR=$_new; DB="$DATA_DIR/$NAME.db"; write_conf
+		say "Moved the history to $_new (it was in $_old; a link is left there)."
+		log "history moved to $_new from $_old"
+	else
+		say "Couldn't move the history to $_new: it stays in $_old."
+	fi
+	flock -u 6; flock -u 7
+	return 0
+}
+
+# Use the firmware's sqlite3 when it works, instead of Entware's: the same database file. A path set by
+# hand in the config stays.
+adopt_sqlite() {
+	case "$SQLITE" in ''|/opt/bin/sqlite3|/usr/sbin/sqlite3|"$OPT_SQLITE"|"$FW_SQLITE") ;; *) return 0 ;; esac
+	_q=$(pick_sqlite) || return 0
+	[ "$_q" = "$SQLITE" ] && return 0
+	SQLITE=$_q; write_conf
+	say "Using $_q (sqlite $(sqlite_ver "$_q")) for the history in $DATA_DIR."
+	log "using $_q"
+	return 0
+}
+migrate() { migrate_data; adopt_sqlite; }
+
 check_support() {
 	ck_fails=0
 	say "Checking that this router can run $TITLE:"
@@ -1519,23 +1612,21 @@ check_support() {
 	else ck_fail "This firmware's BusyBox lacks:$lack"
 	fi
 
-	# Entware + sqlite3 with JSON on persistent storage
-	if [ -x "$SQLITE" ]; then
-		if [ "$("$SQLITE" :memory: 'SELECT json_array(1);' 2>/dev/null)" = "[1]" ]; then ck_ok "sqlite3 with JSON support"
-		else ck_fail "sqlite3 has no JSON support. Run: opkg update && opkg upgrade sqlite3-cli"
-		fi
-	elif [ -x "$ROOT/opt/bin/opkg" ]; then
-		ck_fail "sqlite3 isn't installed. Run: opkg update && opkg install sqlite3-cli"
-	else
-		ck_fail "Entware isn't installed. It needs a USB drive; amtm can set it up for you."
+	# sqlite3 with JSON and window functions: the firmware's own, or Entware's. Entware isn't needed.
+	if sqlite_ok "$SQLITE"; then s=$SQLITE; else s=$(pick_sqlite); fi
+	if [ -n "$s" ]; then ck_ok "sqlite3 $(sqlite_ver "$s") ($s)"
+	else ck_fail "No sqlite3 with JSON support: this firmware has none (Merlin 386.1 and later do). Entware's works too: opkg update && opkg install sqlite3-cli"
 	fi
+	# the history, on a USB drive
 	nd=$(nearest_dir "$DATA_DIR"); fst=$(fstype_of "$DATA_DIR"); kb=$(free_kb "$DATA_DIR")
 	[ "$nd" = "/" ] && fst=""   # nothing on the way exists, e.g. the USB drive isn't mounted
 	case "$(readlink -f "$nd" 2>/dev/null)/:$fst" in
 		"$ROOT/jffs/"*|*:jffs2|*:ubifs|*:yaffs2)
 			ck_fail "History folder $DATA_DIR is on the router's flash. Constant writes would wear it out; use the USB drive." ;;
 		*:|*:tmpfs|*:ramfs|*:rootfs|*:devtmpfs|*:squashfs)
-			ck_fail "History folder $DATA_DIR isn't on a USB drive (it would live in RAM and vanish at reboot)." ;;
+			if [ -z "$(usb_drives)" ]; then ck_fail "No USB drive is mounted. The history needs one (ext4 is best; Entware isn't needed)."
+			else ck_fail "History folder $DATA_DIR isn't on a USB drive (it would live in RAM and vanish at reboot)."
+			fi ;;
 		*)
 			if [ "${kb:-0}" -lt 51200 ]; then ck_fail "Less than 50 MB free for history in $DATA_DIR."
 			else ck_ok "History storage: $DATA_DIR ($fst, $(kb_to_mb "$kb") MB free)"
@@ -1570,6 +1661,7 @@ install() {
 	src="$(cd "$(dirname "$0")" && pwd)"
 	say "Installing $TITLE $VERSION"
 	say ""
+	mkdir -p "$TMPD"; choose_drive
 	check_support || die "Nothing was installed or changed."
 	say ""
 	if [ "$(nvram get jffs2_scripts)" != "1" ]; then
@@ -1602,7 +1694,9 @@ install() {
 	# A development version says so (update_dev sets WI_BUILD); anything else installed is a release.
 	if [ -n "$WI_BUILD" ]; then printf '%s\n' "$WI_BUILD" > "$BUILD_FILE"; else rm -f "$BUILD_FILE"; fi
 	grep -q '^AMTM_UPDATE=' "$CONF" 2>/dev/null || write_conf   # new, or from before 1.2.0: add the new settings
-	. "$CONF"; DB="$DATA_DIR/$NAME.db"
+	. "$CONF"; [ -n "$SQLITE" ] || SQLITE=$(pick_sqlite) || SQLITE=$FW_SQLITE; [ -n "$DATA_DIR" ] || DATA_DIR=$(data_dir_default)
+	DB="$DATA_DIR/$NAME.db"
+	migrate   # an install from before: history to <drive>/wifiinsight, and the firmware's sqlite3
 	mkdir -p "$DATA_DIR" || die "Couldn't create $DATA_DIR"
 	init_db || die "Couldn't create the database in $DATA_DIR"
 	cj="$ADDON_DIR/chart.umd.min.js"
@@ -1772,6 +1866,7 @@ uninstall() {
 	hook_del service-event
 	[ -f "$ROOT/jffs/addons/custom_settings.txt" ] && sed -i "/^${NAME}_/d" "$ROOT/jffs/addons/custom_settings.txt"
 	rm -rf "$(web_dir)" "$TMPD" "$SCAN_FLAG"
+	[ -L "$ROOT/opt/var/lib/$NAME" ] && [ "$(readlink -f "$ROOT/opt/var/lib/$NAME")" = "$(readlink -f "$DATA_DIR")" ] && rm -f "$ROOT/opt/var/lib/$NAME"   # left by migrate_data
 	if [ "$1" = "--keep-data" ]; then
 		say "History kept in $DATA_DIR"
 	else
@@ -1785,6 +1880,7 @@ status() {
 	say "$TITLE $VERSION$(b=$(build_text); [ -n "$b" ] && printf ' (%s)' "$b")"
 	say "Data:        $DB ($( [ -f "$DB" ] && du -h "$DB" | cut -f1 || echo missing))"
 	n=$(journal_note "$DATA_DIR"); say "Storage:     $(fstype_of "$DATA_DIR")${n:+. $n}"
+	say "sqlite3:     $SQLITE ($(sqlite_ver "$SQLITE"))"
 	say "Web page:    $(cat "$ADDON_DIR/webui_page" 2>/dev/null || echo 'not mounted')"
 	say "Ready:       $(ready && echo yes || echo 'no (NTP or storage)')"
 	say "Collection:  $(collection_text)"
@@ -1849,7 +1945,7 @@ fw_version() {   # e.g. 3004.388.12_2
 debug() {
 	say "$TITLE $VERSION$(b=$(build_text); [ -n "$b" ] && printf ' (%s)' "$b")"
 	say "Router:      $(nvram get productid) $(nvram get odmpid)  firmware $(fw_version)  $(uname -m)"
-	say "BusyBox:     $(busybox 2>/dev/null | head -1 | cut -d' ' -f2)   sqlite3: $("$SQLITE" --version 2>/dev/null | cut -d' ' -f1)"
+	say "BusyBox:     $(busybox 2>/dev/null | head -1 | cut -d' ' -f2)   sqlite3: $SQLITE $(sqlite_ver "$SQLITE")   firmware's: $(sqlite_ver "$FW_SQLITE")   Entware's: $(sqlite_ver "$OPT_SQLITE")"
 	say "Smart Connect: $(nvram get smart_connect_x)   wl_ifnames: $(nvram get wl_ifnames)   wlnband_list: $(nvram get wlnband_list)   country: $(country_code)  territory: $(territory_code)"
 	say "acsd: $(pidof acsd2 acsd || echo 'not running')"
 	say "Collection: $(collection_text)"
@@ -1905,7 +2001,7 @@ amtm_update() {   # [check]
 
 usage() {
 	say "Usage: $0 [menu] | install | check | update [force | dev [branch]] | uninstall [--keep-data] | status | scan |"
-	say "       collection [on|paused|off] | repair | debug | amtmupdate [check] | export | version"
+	say "       collection [on|paused|off] | repair | migrate | debug | amtmupdate [check] | export | version"
 }
 menu_pause() { printf '\n Press Enter to go back to the menu '; read -r dummy || exit 0; }
 menu_collection() {
@@ -1981,6 +2077,11 @@ menu() {
 	done
 }
 
+# What a new install hasn't saved in its config yet: which sqlite3, and where the history goes.
+[ -n "$SQLITE" ] || SQLITE=$(pick_sqlite) || SQLITE=$FW_SQLITE
+[ -n "$DATA_DIR" ] || DATA_DIR=$(data_dir_default)
+DB="$DATA_DIR/$NAME.db"
+
 # Run from a copy of another version than the one installed (an old /tmp/wifiinsight.sh from an earlier
 # install, say): hand over to the installed script, so old code doesn't run against the current data.
 case "${1:-menu}" in
@@ -2008,6 +2109,7 @@ case "$1" in
 	prune)         prune ;;
 	status)        status ;;
 	repair)        repair "$2" ;;
+	migrate)       [ -f "$CONF" ] || die "$TITLE isn't installed."; migrate; say "History: $DATA_DIR   sqlite3: $SQLITE" ;;
 	trickle)       trickle ;;
 	debug)         debug ;;
 	service_event) service_event "$2" "$3" ;;
