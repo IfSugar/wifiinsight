@@ -39,52 +39,26 @@ jobs:
             exit 1
           fi
 
-      - name: Check both airtime statistics layouts parse (Wi-Fi 6 and Wi-Fi 7 drivers)
-        run: bash .github/tests/chanim-formats.sh
-
-      - name: Check the data files stay complete with a long history
-        # Runs the script with only Merlin's BusyBox commands, and [, printf and echo as separate
-        # programs (128 KB per argument), like the router: a day of samples must stream into the
-        # files, or the charts go empty.
-        run: bash .github/tests/large-history.sh
-
-      - name: Check quiet hours and the collection switch
-        # The page and the script must read the quiet hours the same way, saving must set the
-        # cron jobs for each mode, and scheduled scans must skip quiet hours.
-        run: bash .github/tests/quiet-hours.sh
-
-      - name: Check scans wait for the driver (slow 5 GHz scans on 3006.102)
-        run: bash .github/tests/scan-wait.sh
-
-      - name: Check the radio's per-channel measurements are stored and exported
-        run: bash .github/tests/measured.sh
-
-      - name: Check scans the driver stops early are finished, and old per-channel figures aren't stored
-        run: bash .github/tests/short-scans.sh
-
-      - name: Check a refused full scan falls back to one channel at a time (DFS channels on some drivers)
-        run: bash .github/tests/one-channel.sh
-
-      - name: Check one-channel scans are spread out, only where full scans are refused
-        run: bash .github/tests/trickle.sh
-
-      - name: Check a damaged database is noticed, reported and repaired
-        run: bash .github/tests/repair.sh
-
-      - name: Check an old copy of the script hands over to the installed one
-        run: bash .github/tests/old-copy.sh
-
-      - name: Check bands and widths are read correctly (2.4, 5 and 6 GHz, 320 MHz)
-        run: bash .github/tests/radio-bands.sh
-
-      - name: Check two radios on one band, and four radios, are kept apart (GT-AXE16000, GT-BE98 Pro)
-        run: bash .github/tests/multi-radio.sh
-
-      - name: Check amtm support (amtmupdate, the menu, amtm's version check)
-        run: bash .github/tests/amtm.sh
-
-      - name: Check development updates (update dev [branch]; plain update stays on releases)
-        run: bash .github/tests/dev-update.sh
+      - name: Run every suite, in parallel
+        # Each suite in .github/tests is independent (its own temporary folder, stand-ins and clock), so they
+        # run at once; the output comes grouped per suite, then a summary. What they check:
+        #   large-history   the data files stay complete with a long history (Merlin's BusyBox only, and [,
+        #                   printf and echo as separate programs: 128 KB per argument, like the router)
+        #   quiet-hours     the page and the script read quiet hours alike; cron jobs for each mode
+        #   chanim-formats  both airtime statistics layouts parse (Wi-Fi 6 and Wi-Fi 7 drivers)
+        #   scan-wait       scans wait for the driver (slow 5 GHz scans on 3006.102)
+        #   measured        the radio's per-channel measurements are stored and exported
+        #   short-scans     scans the driver stops early are finished; old per-channel figures aren't stored
+        #   one-channel     a refused full scan falls back to one channel at a time
+        #   trickle         one-channel scans are spread out, only where full scans are refused
+        #   repair          a damaged database is noticed, reported and repaired
+        #   storage         no Entware: the firmware's sqlite3, a folder on the drive, the move from /opt
+        #   old-copy        an old copy of the script hands over to the installed one
+        #   radio-bands     bands, widths and centres read right (2.4, 5 and 6 GHz, 320 MHz)
+        #   multi-radio     two radios on one band, and four radios, are kept apart
+        #   amtm            amtm support (amtmupdate, the menu, amtm's version check)
+        #   dev-update      update dev [branch]; plain update stays on releases
+        run: bash .github/run-tests.sh
 
       - name: Check the page's JavaScript
         run: |
@@ -109,3 +83,35 @@ jobs:
           if ! grep -q "^## $v\( \|$\)" CHANGELOG.md; then
             echo "::warning file=CHANGELOG.md::No '## $v' section; its release notes would list commit titles instead."
           fi
+
+  firmware-sqlite:
+    # WiFi Insight uses the firmware's own sqlite3 (/usr/sbin/sqlite3), not Entware's: every suite runs
+    # with the two versions Merlin ships, built from its source (and kept in the cache after the first build).
+    # 3.25.3: 386.1 to 3004.388.4; 3.42.0 since.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sqlite: ['3.25.3', '3.42.0']
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install busybox and sqlite3
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq busybox sqlite3 > /dev/null
+
+      - name: Restore the firmware's sqlite3 ${{ matrix.sqlite }}
+        id: fwsqlite
+        uses: actions/cache@v4
+        with:
+          path: ~/fwsqlite
+          key: fwsqlite-${{ matrix.sqlite }}-${{ hashFiles('.github/firmware-sqlite.sh') }}
+
+      - name: Build it from the Merlin source
+        if: steps.fwsqlite.outputs.cache-hit != 'true'
+        run: sh .github/firmware-sqlite.sh ${{ matrix.sqlite }} "$HOME/fwsqlite" && rm -rf "$HOME/fwsqlite/src"
+
+      - name: Run every suite with it, in parallel
+        run: |
+          export PATH="$HOME/fwsqlite:$PATH" FW_SQLITE_BIN="$HOME/fwsqlite/sqlite3"
+          sqlite3 -version
+          bash .github/run-tests.sh

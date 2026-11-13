@@ -43,7 +43,7 @@ Time ranges: 10 minutes, 1 hour, 12 hours, 1 day, 7 days and 30 days. Short rang
 ## Requirements
 
 - Asuswrt-Merlin with **JFFS custom scripts and configs** enabled (the installer turns it on if needed)
-- Entware on a USB drive, with `sqlite3-cli` installed (`opkg install sqlite3-cli`). A drive formatted ext4 with a journal is safest: on one without (ext2, FAT, exFAT, NTFS, or ext4 made without a journal), a power cut while it's writing can damage the history database. `check`, `status` and the Settings tab say which yours is; amtm can format a drive as ext4 with a journal.
+- A USB drive for the history. Entware isn't needed: WiFi Insight uses the firmware's own `sqlite3` (Merlin 386.1 and later have one, 3.25.3 or 3.42.0), or Entware's where the firmware has none. The history goes in a `wifiinsight` folder on the drive itself, as Skynet keeps its data: `/tmp/mnt/<drive>/wifiinsight`, which is the drive, not RAM (Merlin mounts every drive under `/tmp/mnt`, and Entware's `/opt` points there too). With Entware, it's the drive Entware is on; with several drives and no Entware, the installer asks which. A drive formatted ext4 with a journal is safest: on one without (ext2, FAT, exFAT, NTFS, or ext4 made without a journal), a power cut while it's writing can damage the history database. `check`, `status` and the Settings tab say which yours is; amtm can format a drive as ext4 with a journal.
 - A Broadcom radio that answers `wl chanim_stats` (the installer checks)
 
 ## Supported routers
@@ -91,7 +91,7 @@ The installer:
 
 1. checks the requirements
 2. copies the addon to `/jffs/addons/wifiinsight/`, downloading the web page from this repo if it isn't next to the script
-3. creates the database in `/opt/var/lib/wifiinsight/` on the USB drive
+3. creates the database in `wifiinsight/` on the USB drive. An install from before kept it in Entware's `/opt/var/lib/wifiinsight/`: `install` and `update` move that folder to `wifiinsight/` on the same drive (a rename, so it's the same file, nothing is copied) with sampling and scans held off, leave a link at the old path, and switch to the firmware's `sqlite3`. `wifiinsight.sh migrate` does the same on its own
 4. downloads Chart.js once and checks it against the official release's SHA-256, so the page works without internet
 5. hooks itself into `services-start` and `service-event`
 6. mounts the page and runs a first sample and scan (an update keeps your history and skips the scan)
@@ -148,10 +148,11 @@ If a scan's one-second hiccup gets in the way at certain times (gaming, calls, s
 | Path | Contents |
 |---|---|
 | `/jffs/addons/wifiinsight/` | script, page, config, local Chart.js, and `build` while a development version is installed |
-| `/opt/var/lib/wifiinsight/wifiinsight.db` | history (SQLite): samples, scans, measured channel airtime, networks, events |
-| `/opt/var/lib/wifiinsight/measured_2g`, `measured_5g`… | how many channels each radio measured in its last scan (`5g2`, `6g2`: the second radio on a band) |
-| `/opt/var/lib/wifiinsight/damaged` | only while the database is damaged: when it was first noticed (`repair` removes it) |
-| `/opt/var/lib/wifiinsight/wifiinsight.db.bad` | only after `repair`: the damaged copy, to delete once everything looks right |
+| `/tmp/mnt/<drive>/wifiinsight/wifiinsight.db` | history (SQLite) on the USB drive: samples, scans, measured channel airtime, networks, events |
+| `/tmp/mnt/<drive>/wifiinsight/measured_2g`, `measured_5g`… | how many channels each radio measured in its last scan (`5g2`, `6g2`: the second radio on a band) |
+| `/tmp/mnt/<drive>/wifiinsight/damaged` | only while the database is damaged: when it was first noticed (`repair` removes it) |
+| `/tmp/mnt/<drive>/wifiinsight/wifiinsight.db.bad` | only after `repair`: the damaged copy, to delete once everything looks right |
+| `/opt/var/lib/wifiinsight` | only on installs from before, moved: a link to the folder above |
 | `/tmp/wifiinsight/each_5g.next`, `refused_5g`, `trickle_5g.*`, `sweep_5g`… | for drivers that refuse full scans: where the next one-channel-at-a-time scan starts, the channel a full scan was last refused on, and the spread-out sweep's next channel, last step, pending start and current sweep |
 | `/tmp/var/wwwext/wifiinsight/` | JSON files the page reads (`live.htm`, `scans.htm`, `week.htm`, `month.htm`, `scanstate.htm`), rebuilt from the database |
 
@@ -188,8 +189,8 @@ EXTRA_OWN_SSIDS=""         # extra SSIDs to treat as yours, separated by |
 COLLECTION=on              # on, paused (no scheduled scans) or off (no samples or scans)
 QUIET=""                   # quiet hours, no scheduled scans (below); empty = none
 AMTM_UPDATE=on             # on: amtm may update WiFi Insight; off: only 'update' does
-DATA_DIR="/opt/var/lib/wifiinsight"
-SQLITE="/opt/bin/sqlite3"
+DATA_DIR="/tmp/mnt/<drive>/wifiinsight"   # set at install: a folder on the USB drive
+SQLITE="/usr/sbin/sqlite3"                # the firmware's (or Entware's /opt/bin/sqlite3 where it has none)
 ```
 
 `QUIET` is easiest to set on the Settings page. In the file it's 84 hex digits, one bit per half hour of the week, starting Monday 00:00 in the router's local time: 12 digits a day, each digit covering 2 hours (8 is its first half hour, 4 the second, 2 the third, 1 the fourth). For example, `000000000fff` repeated seven times is 18:00–24:00 every day. A value that isn't exactly 84 hex digits is ignored, and `status` says so.
@@ -214,12 +215,12 @@ For amtm's maintainer, the details of a module:
 | Check string | `IfSugar/wifiinsight` |
 | Install | download the remote script to `/tmp/wifiinsight.sh`, then `sh /tmp/wifiinsight.sh install` (which removes that copy when it's done) |
 | Open | `/jffs/addons/wifiinsight/wifiinsight.sh` |
-| Entware | required (`sqlite3`) |
+| Entware | not required (the firmware's `sqlite3` is used); a USB drive is |
 
 ## What it changes on your router
 
-- **Nothing until the checks pass.** `install` first verifies the firmware, the Addons API, the Broadcom driver's airtime statistics, Entware with `sqlite3`, that history will live on a USB drive (not RAM or flash), JFFS space and a free page slot. If anything fails it stops without changing anything. Run `wifiinsight.sh check` to see the checklist on its own.
-- **JFFS (flash):** about 350 KB of addon files, written at install and when you save settings, never on a schedule. One tagged line is added to each of `/jffs/scripts/services-start` and `service-event`.
+- **Nothing until the checks pass.** `install` first verifies the firmware, the Addons API, the Broadcom driver's airtime statistics, a `sqlite3` with JSON support (the firmware's), that history will live on a USB drive (not RAM or flash), JFFS space and a free page slot. If anything fails it stops without changing anything. Run `wifiinsight.sh check` to see the checklist on its own.
+- **JFFS (flash):** about 430 KB of addon files (the script, the page and a local copy of Chart.js), written at install and when you save settings, never on a schedule. One tagged line is added to each of `/jffs/scripts/services-start` and `service-event`.
 - **Settings:** the only router setting it may change is *JFFS custom scripts and configs*, switched on if it's off.
 - **Wi-Fi:** it only reads the driver's counters, except for the neighbour scan. No wireless setting is ever changed.
 - **RAM only (gone after a reboot, recreated at boot):** the web page, the menu entry, the cron jobs and the JSON data files (about 1 MB). The menu is edited on a copy and swapped in only if the result is exactly the one expected line.
