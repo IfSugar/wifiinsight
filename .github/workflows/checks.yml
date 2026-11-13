@@ -44,6 +44,7 @@ jobs:
         # run at once; the output comes grouped per suite, then a summary. What they check:
         #   large-history   the data files stay complete with a long history (Merlin's BusyBox only, and [,
         #                   printf and echo as separate programs: 128 KB per argument, like the router)
+        #   radar           radar lines become events with the right time and radio, in one quick pass
         #   quiet-hours     the page and the script read quiet hours alike; cron jobs for each mode
         #   chanim-formats  both airtime statistics layouts parse (Wi-Fi 6 and Wi-Fi 7 drivers)
         #   scan-wait       scans wait for the driver (slow 5 GHz scans on 3006.102)
