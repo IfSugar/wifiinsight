@@ -8,7 +8,7 @@
 <link rel="shortcut icon" href="images/favicon.png"/>
 <link rel="icon" href="images/favicon.png"/>
 <title>WiFi Insight</title>
-<!-- wifiinsight-version: 2.0.0 (must match VERSION in wifiinsight.sh) -->
+<!-- wifiinsight-version: 2.1.0 (must match VERSION in wifiinsight.sh) -->
 <link rel="stylesheet" type="text/css" href="index_style.css"/>
 <link rel="stylesheet" type="text/css" href="form_style.css"/>
 <script type="text/javascript" src="/js/jquery.js"></script>
@@ -168,7 +168,7 @@ var WI = {
 	base: '/ext/wifiinsight/',
 	live: null, week: null, scans: null,
 	view: 'insight', band: '5g', range: '1h',
-	charts: {}, hidden: {}, missed: {}, redraw: false,
+	charts: {}, hidden: {}, missed: {}, redraw: false, drawn: 0,
 	showMesh: false, showDfs: true, showActive: true, allEvents: false, src: 'measured',
 	sortKey: 'rssi', sortDir: -1
 };
@@ -1383,7 +1383,7 @@ var VIEWS = [['insight', 'Insight'], ['survey', 'Site Survey'], ['channels', 'Ch
 function tabHidden() { return document.visibilityState === 'hidden'; }
 function render() {
 	if (tabHidden()) { WI.redraw = true; return; }
-	WI.redraw = false;
+	WI.redraw = false; WI.drawn = (WI.drawn || 0) + 1;
 	var bands = ((WI.live && WI.live.radios) || []).map(function (r) { return r.band; });
 	if (bands.length && bands.indexOf(WI.band) < 0) WI.band = bands[0];
 	$('wiTabs').innerHTML = VIEWS.map(function (v) { return '<button type="button" class="' + (v[0] === WI.view ? 'on' : '') + '" onclick="WiFiInsight.setView(\'' + v[0] + '\')">' + v[1] + '</button>'; }).join('');
@@ -1479,15 +1479,18 @@ function boot() {
 	loadAll();
 	var refresh = function (m) {
 		var src = RANGE_CFG[WI.range].src;
-		loadAll({ live: m.live ? 1 : 0, scans: m.scans ? 1 : 0, week: m.scans && src === 'week' ? 1 : 0, month: m.scans && src === 'month' ? 1 : 0 });
+		return loadAll({ live: m.live ? 1 : 0, scans: m.scans ? 1 : 0, week: m.scans && src === 'week' ? 1 : 0, month: m.scans && src === 'month' ? 1 : 0 });
 	};
 	setInterval(function () { if (WI.view === 'settings') return; if (tabHidden()) WI.missed.live = 1; else refresh({ live: 1 }); }, 60000);
 	setInterval(function () { if (tabHidden()) WI.missed.scans = 1; else refresh({ scans: 1 }); }, 300000);
 	document.addEventListener('visibilitychange', function () {
 		if (tabHidden()) return;
-		var m = WI.missed; WI.missed = {};
-		if (WI.redraw) render(); else renderView();   /* redrawn even if nothing changed: a canvas may have been dropped */
-		if (m.live && WI.view !== 'settings' || m.scans) refresh(m);
+		var m = WI.missed, n = WI.drawn; WI.missed = {};
+		/* a refresh it skipped: fetched first and drawn when it's in, so figures from before never show; if
+		   it can't be fetched, what there is gets drawn (with the warning). Nothing skipped: redrawn at once
+		   all the same, as a browser may have dropped a canvas while the tab was hidden. */
+		if (m.live && WI.view !== 'settings' || m.scans) refresh(m).then(function () { if (WI.drawn === n) render(); });
+		else if (WI.redraw) render(); else renderView();
 	});
 }
 function setMesh(on) { WI.showMesh = on; store('mesh', on ? '1' : '0'); $('wiMesh').checked = on; $('wiMesh2').checked = on; renderView(); }
