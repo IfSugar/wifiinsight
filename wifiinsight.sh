@@ -719,10 +719,25 @@ scan_rest() {   # ifc band "channels" before-file after-file results-file
 # every single-channel scan, while an RT-AX88U and a GT-AX6000 took one only now and then (the GT-AX6000
 # about every 16 s). So when the full scan is refused, scan the channels one by one, in order, waiting
 # on each until the driver takes it. "Bad Channel" (a channel radar put off limits) is skipped. Stop when
-# nothing has been taken for 60 s, or after 150 s; the next scan starts at the first channel not scanned,
-# so the band is covered over a few scans. Sampling carries on meanwhile: each visit is a moment.
+# nothing has been taken for 60 s, after 150 s, or when a background radar check starts (bg_radar); the
+# next scan starts at the first channel not scanned, so the band is covered over a few scans. Sampling
+# carries on meanwhile: each visit is a moment.
 # Sets each_list (channels scanned), each_got (of those, measured), each_did, each_all, each_why (wl's
 # last refusal) and each_more (1 if it stopped before the end of the band).
+# Drivers that take the odd single channel have a cool-down: an RT-AX88U took one every 10.1-10.2 s,
+# however often it was asked. When a channel is taken after a refusal, the time since the one before is
+# kept (gap_<band>, until a full scan works or a reboot), and the next channel waits that long instead of
+# being asked for every 2 s. Taken at once after that wait: the next waits a second less (two on long
+# gaps), so the gap follows the driver down too; refused: retried every second, and the gap becomes what
+# it took. So about every other channel is refused once, instead of each being refused four times or so.
+gap_of() {   # band -> seconds this driver needs between single-channel scans (0: none known)
+	_g=$(cat "$TMPD/gap_$1" 2>/dev/null); case "$_g" in ''|*[!0-9]*) _g=0 ;; esac
+	[ "$_g" -le 30 ] || _g=30; echo "$_g"
+}
+gap_set() {   # band seconds -> stores it (0 to 30) and prints it
+	_g=$2; [ "$_g" -gt 30 ] && _g=30; [ "$_g" -lt 0 ] && _g=0
+	echo "$_g" > "$TMPD/gap_$1"; echo "$_g"
+}
 scan_each() {   # ifc band "channels" before-file after-file results-file
 	each_list=""; each_got=""; each_did=0; each_why=""; each_more=""; : > "$6"
 	nxt="$TMPD/each_$2.next"; err="$TMPD/scan_$2.err"; out="$TMPD/scan_$2.one"
@@ -730,19 +745,33 @@ scan_each() {   # ifc band "channels" before-file after-file results-file
 	off=$(cat "$nxt" 2>/dev/null); case "$off" in ''|*[!0-9]*) off=0 ;; esac
 	[ "$off" -lt "$each_all" ] || off=0
 	rm -f "$SCAN_FLAG"
+	gap=$(gap_of "$2")
 	t0=$(now); last=$t0; adv=0
 	for c in $(echo $3 | awk -v o="$off" '{ for (i = 0; i < NF; i++) printf "%s ", $((i + o) % NF + 1) }'); do
-		ok=0
+		ok=0; tries=0
+		# a driver that takes a single channel only every so often: wait that long after the last one
+		[ $gap -gt 0 ] && [ $each_did -gt 0 ] && { w=$((gap - ($(now) - last))); [ $w -gt 0 ] && sleep $w; }
 		while :; do
 			if wl -i "$1" scan -c "$c" > /dev/null 2> "$err"; then ok=1; break; fi
+			tries=$((tries + 1))
 			grep -q 'Bad Channel' "$err" && break
+			bg_radar "$1" "$2" && break
 			[ $(( $(now) - last )) -ge 60 ] && break
 			[ $(( $(now) - t0 )) -ge 150 ] && break
-			sleep 2
+			if [ $gap -gt 0 ]; then sleep 1; else sleep 2; fi
 		done
 		if [ $ok = 0 ]; then
 			if grep -q 'Bad Channel' "$err"; then each_why=$(wl_said "$err" 0 "refused"); adv=$((adv + 1)); continue; fi
-			each_why=$(wl_said "$err" $(( $(now) - last )) "refused"); each_more=1; break
+			if bg_radar "$1" "$2"; then each_why="a background radar check started"
+			else each_why=$(wl_said "$err" $(( $(now) - last )) "refused")
+			fi
+			each_more=1; break
+		fi
+		# taken after a refusal: the time since the last one taken is how long this driver needs between them
+		if [ $each_did -gt 0 ]; then
+			if [ $tries -gt 0 ]; then gap=$(gap_set "$2" $(( $(now) - last )))
+			elif [ $gap -gt 0 ]; then gap=$(gap_set "$2" $((gap - 1 - gap / 20)))
+			fi
 		fi
 		last=$(now); p=""; sleep 1
 		while :; do   # done when the channel has new figures or a network, or the results are in (drivers without figures)
@@ -799,18 +828,23 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 		# a scheduled scan of a radio whose full scans are refused here: trickle scans it one channel at a
 		# time, spread out; this only retries the full scan every 6 hours (scan_radio)
 		set -- $(cat "$TMPD/refused_$band" 2>/dev/null); pre=0; [ "$1" = "$hex" ] && pre=1
+		bgr=0
 		if [ $sched = 1 ] && [ $pre = 1 ] && [ $(( ts0 - ${2:-0} )) -lt 21600 ] 2>/dev/null && [ "$(wl -i "$ifc" isup 2>/dev/null)" = "1" ]; then
 			result=ok; detail="one channel at a time, spread out (full scans refused on this channel)"
 			: > "$TMPD/trickle_$band.due"   # trickle starts the next sweep
+		elif ! bg_radar_wait "$ifc" "$band"; then
+			result=busy; bgr=1; detail=$(bg_radar_note)
 		else
 			scan_radio "$ifc" "$band" "$hex"
 		fi
 		each=0
 		# refused again at the 6-hour retry: trickle carries on (the first refusal still gets a burst, below)
 		if [ "$result" = busy ] && [ $sched = 1 ] && [ $pre = 1 ]; then
-			result=ok; detail="$detail; one channel at a time, spread out"
-			: > "$TMPD/trickle_$band.due"
-		elif [ "$result" = busy ] && [ -n "$chs" ]; then   # the full scan was refused: try one channel at a time
+			if [ $bgr = 1 ]; then detail="one channel at a time, spread out (full scans refused on this channel)"   # retried next time
+			else detail="$detail; one channel at a time, spread out"
+			fi
+			result=ok; : > "$TMPD/trickle_$band.due"
+		elif [ "$result" = busy ] && [ $bgr = 0 ] && [ -n "$chs" ]; then   # the full scan was refused: try one channel at a time
 			full=$detail
 			scan_each "$ifc" "$band" "$chs" "$m0" "$m1" "$all"
 			if [ $each_did -gt 0 ]; then
@@ -884,7 +918,8 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 # at a time, spread out, instead of a burst of up to 150 s at every scheduled scan. Each scheduled scan
 # starts a sweep of the band (trickle_<band>.due), and cron runs this every minute to carry it on: the
 # sweep takes about a third of the scan interval (10 minutes with 30-minute scans), up to 3 channels a
-# minute, or one every few minutes with long intervals; then it rests until the next scheduled scan.
+# minute, at least 20 s apart (longer if the driver needs it), or one every few minutes with long
+# intervals; then it rests until the next scheduled scan. Not while a background radar check runs.
 # Each channel is one short trip off the router's channel: a fraction of a second's delay, no loss, in a
 # ping test. A run is skipped while your own traffic is high (over 10% of the airtime in the latest
 # sample), but not for longer than the scan interval; none run in quiet hours, or with scans paused or
@@ -908,13 +943,15 @@ trickle() {
 		set -- $(cat "$TMPD/refused_$band" 2>/dev/null)
 		[ "$1" = "$hex" ] || continue   # full scans work on this channel (or haven't been refused)
 		[ "$(wl -i "$ifc" isup 2>/dev/null)" = "1" ] || continue   # switched off
+		bg_radar "$ifc" "$band" && continue   # a background radar check (DFS): next minute
 		chs=$(radio_channels "$ifc" "$band"); nch=$(echo $chs | wc -w | tr -d ' ')
 		[ "$nch" -gt 0 ] || continue
 		t=$(now); lastf="$TMPD/trickle_$band.last"; last=$(cat "$lastf" 2>/dev/null); case "$last" in ''|*[!0-9]*) last=0 ;; esac
-		# seconds per channel for a sweep in a third of the scan interval; under a minute: several a run
-		g=$((SCAN_INTERVAL * 20 / nch)); k=1
+		# seconds per channel for a sweep in a third of the scan interval; under a minute: several a run,
+		# at least 20 s apart (or this driver's gap between single channels, if longer: see scan_each)
+		g=$((SCAN_INTERVAL * 20 / nch)); k=1; sp=$(gap_of "$band"); [ "$sp" -gt 20 ] || sp=20
 		if [ $g -ge 60 ]; then [ $((t - last)) -ge $((g - 15)) ] || continue
-		else [ $((t - last)) -ge 30 ] || continue   # one run a minute, however long the last one took
+		else [ $((t - last)) -ge $((sp - 5)) ] || continue   # one run a minute, however long the last one took
 			k=$(( (3 * nch + SCAN_INTERVAL - 1) / SCAN_INTERVAL )); [ $k -gt 3 ] && k=3   # channels a run
 		fi
 		# between sweeps: the next one starts after the next scheduled scan, from the start of the band
@@ -931,18 +968,31 @@ trickle() {
 			off=$(cat "$nxt" 2>/dev/null); case "$off" in ''|*[!0-9]*) off=0 ;; esac
 			[ "$off" -lt "$nch" ] || off=0
 			c=$(echo $chs | cut -d' ' -f$((off + 1)))
+			w=$((sp - ($(now) - last))); [ $w -gt 0 ] && sleep $w   # spaced from the last channel taken
 			m0="$TMPD/chanim_$band.t0"; m1="$TMPD/chanim_$band.t1"; out="$TMPD/scan_$band.one"; err="$TMPD/scan_$band.err"
 			wl -i "$ifc" chanim_stats all > "$m0" 2>/dev/null
 			if ! wl -i "$ifc" scan -c "$c" > /dev/null 2> "$err"; then
-				rm -f "$m0"
-				if grep -q 'Bad Channel' "$err"; then   # radar put it off limits: the next one
-					off=$(( (off + 1) % nch )); echo "$off" > "$nxt"
-					[ "$off" = 0 ] && { rm -f "$sw" "$due"; break; }
-					continue
+				tk=0
+				# refused soon after the last one taken: this driver needs longer between single channels.
+				# Ask again each second for up to 10 s, and keep how long it took (see scan_each).
+				if [ $j -gt 1 ] && ! grep -q 'Bad Channel' "$err" && ! bg_radar "$ifc" "$band"; then
+					tw=$(now)
+					while [ $(( $(now) - tw )) -lt 10 ]; do
+						sleep 1
+						if wl -i "$ifc" scan -c "$c" > /dev/null 2> "$err"; then tk=1; gap_set "$band" $(( $(now) - last )) > /dev/null; break; fi
+					done
 				fi
-				break   # refused: the same channel next time
+				if [ $tk = 0 ]; then
+					rm -f "$m0"
+					if grep -q 'Bad Channel' "$err"; then   # radar put it off limits: the next one
+						off=$(( (off + 1) % nch )); echo "$off" > "$nxt"
+						[ "$off" = 0 ] && { rm -f "$sw" "$due"; break; }
+						continue
+					fi
+					break   # refused: the same channel next time
+				fi
 			fi
-			t2=$(now); echo "$t2" > "$lastf"; p=""; sleep 1
+			t2=$(now); last=$t2; echo "$t2" > "$lastf"; p=""; sleep 1
 			while :; do   # done when the channel has new figures or a network, or the results are in
 				el=$(( $(now) - t2 ))
 				if wl -i "$ifc" scanresults > "$out" 2>/dev/null; then
@@ -992,6 +1042,35 @@ wl_said() {   # errfile seconds fallback -> 'wl said "Not Ready" for 45 s', or '
 	if [ -n "$m" ]; then printf 'wl said "%s" for %s s' "$m" "$2"; else printf '%s after %s s' "$3" "$2"; fi
 }
 
+# Background radar checks (zero-wait DFS): acsd can have a 5 GHz radio's spare core listen to a DFS
+# channel for radar before moving there, for a minute (ten on weather-radar channels). Meanwhile the
+# driver refuses scans, and a scan would cut the check short: ASUS's own Site Survey aborts it and starts
+# it again afterwards. WiFi Insight never interrupts it: it waits for the check to end, or scans that band
+# next time, and a refusal during a check isn't taken for a driver that refuses full scans. `wl
+# dfs_ap_move` (read-only without arguments) reports "move status=2" (a check running) or 4 (switching
+# modes for it), with "Radar Scan In Progress"; drivers without background checks answer an error.
+BG_WAIT=90
+bg_radar() {   # ifc band -> true while the radio runs a background radar check
+	case "$2" in 5g*) ;; *) return 1 ;; esac
+	wl -i "$1" dfs_ap_move 2>/dev/null | awk '
+		{ l = tolower($0) }
+		l ~ /radar scan in progress|mode switch in progress/ { b = 1 }
+		match(l, /move status *[=:] *-?[0-9]+/) { s = substr(l, RSTART, RLENGTH); sub(/.*[=:] */, "", s); if (s + 0 == 2 || s + 0 == 4) b = 1 }
+		END { exit !b }'
+}
+bg_radar_wait() {   # ifc band -> waits up to BG_WAIT s while a background radar check runs; false if it still does
+	bg_radar "$1" "$2" || return 0
+	bw0=$(now); bwf=0; [ -f "$SCAN_FLAG" ] && { bwf=1; rm -f "$SCAN_FLAG"; }   # sampling carries on meanwhile
+	log "scan $2 ($1): waiting for the radio's background radar check (DFS) to end"
+	while bg_radar "$1" "$2"; do
+		[ $(( $(now) - bw0 )) -ge "$BG_WAIT" ] && { [ $bwf = 1 ] && touch "$SCAN_FLAG"; return 1; }
+		sleep 5
+	done
+	[ $bwf = 1 ] && touch "$SCAN_FLAG"
+	return 0
+}
+bg_radar_note() { echo "the radio was checking another channel for radar in the background (DFS) for over $BG_WAIT s: scanned next time"; }
+
 # One radio's neighbour scan. Sets result (ok, busy, empty or off) and detail; the results are in $res.
 # The driver answers "Not Ready" until the scan ends, so poll for the results instead of guessing how
 # long a scan takes: 2.4 GHz scans take a few seconds, 5 GHz ones longer (more channels, and DFS channels
@@ -1006,6 +1085,11 @@ scan_radio() {   # ifc band chanspec
 	set -- "$1" "$2" "$3" $(cat "$rf" 2>/dev/null)
 	[ -n "$3" ] && [ "$4" = "$3" ] && [ $(( t0 - ${5:-0} )) -lt 21600 ] 2>/dev/null && quick=1
 	until wl -i "$1" scan > /dev/null 2> "$err"; do
+		# refused because a background radar check started: not the driver refusing full scans
+		if bg_radar "$1" "$2"; then
+			if bg_radar_wait "$1" "$2"; then t0=$(now); continue; fi
+			result=busy; bgr=1; detail=$(bg_radar_note); return 0
+		fi
 		if [ $quick = 1 ]; then result=busy; detail=$(wl_said "$err" 0 "refused" | sed 's/ for 0 s$/ again/'); return 0; fi
 		if [ $(( $(now) - t0 )) -ge 20 ]; then
 			result=busy; detail=$(wl_said "$err" 20 "still busy")
@@ -1014,7 +1098,7 @@ scan_radio() {   # ifc band chanspec
 		fi
 		sleep 2
 	done
-	rm -f "$rf" "$TMPD/trickle_$2.due"   # full scans work: no spreading
+	rm -f "$rf" "$TMPD/trickle_$2.due" "$TMPD/gap_$2"   # full scans work: no spreading
 	limit=45; [ "${2%[0-9]}" = 2g ] && limit=20
 	t1=$(now); sleep 3
 	while :; do
@@ -2018,7 +2102,9 @@ debug() {
 		wl -i "$ifc" ver 2>/dev/null | sed -n '2p'
 		wl -i "$ifc" isup; wl -i "$ifc" chanspec; wl -i "$ifc" noise
 		wl -i "$ifc" chanim_stats; wl -i "$ifc" dfs_status; wl -i "$ifc" channels
+		case "$k" in 5g*) say "dfs_ap_move (background radar check):"; wl -i "$ifc" dfs_ap_move 2>&1 | head -8 ;; esac
 		say "nvram chanspec=$(nvram get wl${r}_chanspec) bw=$(nvram get wl${r}_bw)"
+		[ -n "$k" ] && [ -f "$TMPD/refused_$k" ] && say "full scans refused on this channel; gap the driver needs between single channels: $(gap_of "$k") s"
 	done
 }
 

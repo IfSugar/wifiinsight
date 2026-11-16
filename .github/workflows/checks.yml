@@ -89,7 +89,7 @@ jobs:
   firmware-sqlite:
     # WiFi Insight uses the firmware's own sqlite3 (/usr/sbin/sqlite3), not Entware's: every suite runs
     # with the two versions Merlin ships, built from its source (and kept in the cache after the first build).
-    # 3.25.3: 386.1 to 3004.388.4; 3.42.0 since.
+    # 3.25.3: 386.1 to 3004.388.5; 3.42.0 since 3004.388.6.
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

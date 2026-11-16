@@ -51,7 +51,9 @@ EOF
 # <ifc>.reject_full (refuses full scans), <ifc>.every (takes a single channel at most once every N
 # seconds), <ifc>.never (refuses single channels too), <ifc>.bad (a channel it calls "Bad Channel"),
 # <ifc>.stuck (a channel whose figures never change), <ifc>.nets (channel bssid ssid), <ifc>.scans (log of
-# accepted scans), <ifc>.tries (one line per full-scan request).
+# accepted scans), <ifc>.times (when each single channel was taken), <ifc>.tries (one line per full-scan
+# request), <ifc>.refused (one line per single channel refused), <ifc>.bgcac (a background radar check
+# runs until this time: every scan refused, and dfs_ap_move says so).
 cat > "$t/bin/wl" <<'WL'
 #!@BB@ sh
 F=@F@; ifc=$2; cmd=$3; now=$(cat "$F/clock")
@@ -66,18 +68,25 @@ visit() {   # the scan reaches these channels: new figures for each, and what it
 		echo "$c|$(( (n * 3 + c) % 17 ))|$(( n % 5 ))|-$(( 88 + n % 4 ))" >> "$F/$ifc.list"
 	done
 }
+bg() { [ -f "$F/$ifc.bgcac" ] && [ "$now" -lt "$(cat "$F/$ifc.bgcac")" ]; }
 case "$cmd" in
 	isup) if [ -f "$F/$ifc.down" ]; then echo 0; else echo 1; fi ;;
+	dfs_ap_move)
+		[ "$ifc" = eth7 ] || { echo "wl: Unsupported" >&2; exit 1; }
+		if bg; then printf 'version: 2, move status=2\nAP Target Chanspec 100/80 (0xe06a)\nRadar Scan In Progress\n'
+		else echo "version: 2, move status=-1"
+		fi ;;
 	chanspec) if [ "$ifc" = eth6 ]; then echo "1 (0x1001)"; else echo "100/160 (0xe872)"; fi ;;
 	channels) all ;;
 	scan)
+		if bg; then echo "wl: Scan Rejected" >&2; [ "$4" = -c ] && echo "$5" >> "$F/$ifc.refused"; exit 1; fi
 		if [ "$4" = -c ]; then
 			if [ -f "$F/$ifc.bad" ] && [ "$(cat "$F/$ifc.bad")" = "$5" ]; then echo "wl: Bad Channel" >&2; exit 1; fi
-			if [ -f "$F/$ifc.never" ]; then echo "wl: Scan Rejected" >&2; exit 1; fi
+			if [ -f "$F/$ifc.never" ]; then echo "wl: Scan Rejected" >&2; echo "$5" >> "$F/$ifc.refused"; exit 1; fi
 			if [ -f "$F/$ifc.every" ] && [ "$now" -lt $(( $(cat "$F/$ifc.lastok" 2>/dev/null || echo 0) + $(cat "$F/$ifc.every") )) ]; then
-				echo "wl: Scan Rejected" >&2; exit 1
+				echo "wl: Scan Rejected" >&2; echo "$5" >> "$F/$ifc.refused"; exit 1
 			fi
-			echo "$now" > "$F/$ifc.lastok"; echo "$5" >> "$F/$ifc.scans"
+			echo "$now" > "$F/$ifc.lastok"; echo "$5" >> "$F/$ifc.scans"; echo "$now" >> "$F/$ifc.times"
 			visit $(echo "$5" | tr ',' ' ')
 		else
 			echo full >> "$F/$ifc.tries"
@@ -169,7 +178,9 @@ expect "spread: no full-scan try, no channel scanned, nothing stored" "0||$b" "$
 # 4: trickle: 2 channels a minute (19 channels in about 10 minutes), in order, as one sweep whose time moves forward
 n=$(mark); step; t1=$ts
 expect "trickle: 2 channels a minute, from the start of the band" "36 40" "$(calls $((n + 1)))"
+expect "trickle: 20 s apart" "20" "$(tail -2 "$F/eth7.times" | awk 'NR == 1 { a = $1 } NR == 2 { print $1 - a }')"
 step; step
+expect "trickle: never closer than 20 s" "" "$(tail -6 "$F/eth7.times" | awk 'NR > 1 && $1 - p < 20 { print p " " $1 } { p = $1 }')"
 expect "trickle: in order" "36 40 44 48 52 56" "$(calls $((n + 1)))"
 expect "trickle: one sweep, at the latest channel's time" "6|$(cat "$F/clock" | awk '{ print $1 - 1 }')" "$(rows)|$ts"
 [ "$ts" -gt "$t1" ] && ok "trickle: the sweep moved forward" || bad "trickle: sweep time $t1 -> $ts"
@@ -225,6 +236,25 @@ expect "full scans work again" "ok, 2 networks in 3 s, 19 channels measured" "$r
 [ ! -f "$R/tmp/wifiinsight/refused_5g" ] && ok "full scans work again: the refusal is forgotten" || bad "refused_5g still there"
 n=$(mark); step
 expect "full scans work again: trickle stops" "" "$(calls $((n + 1)))"
+
+# 10b: a driver that needs 25 s between single channels: the burst learns it, and trickle waits that long
+# between channels instead of asking 20 s after the last and being refused
+touch "$F/eth7.reject_full"; echo 25 > "$F/eth7.every"; rm -f "$F/eth7.lastok"
+sched   # the first refusal: the burst
+like "25 s driver: the burst learns the gap" "2[345]" "$(cat "$R/tmp/wifiinsight/gap_5g" 2>/dev/null)"
+sched; : > "$F/eth7.refused"; n=$(mark); step; step; step
+expect "25 s driver: 2 channels a minute all the same" "6" "$(calls $((n + 1)) | wc -w | tr -d ' ')"
+r=$(wc -l < "$F/eth7.refused" | tr -d ' '); [ "$r" -le 2 ] && ok "25 s driver: $r refused in 3 minutes" || bad "25 s driver: $r refused in 3 minutes"
+rm -f "$F/eth7.every"
+
+# 10c: a background radar check (zero-wait DFS): trickle leaves the radio alone while it runs, then carries on
+echo $(( $(cat "$F/clock") + 150 )) > "$F/eth7.bgcac"; : > "$F/eth7.refused"; n=$(mark); step; step
+expect "background radar check: trickle waits" "" "$(calls $((n + 1)))"
+expect "background radar check: no scan even asked for" "0" "$(wc -l < "$F/eth7.refused" | tr -d ' ')"
+step; step
+expect "background radar check over: trickle carries on" "4" "$(calls $((n + 1)) | wc -w | tr -d ' ')"
+rm -f "$F/eth7.reject_full" "$F/eth7.bgcac" "$R/tmp/wifiinsight/refused_5g" "$R/tmp/wifiinsight/sweep_5g" "$R/tmp/wifiinsight/trickle_5g.due" "$R/tmp/wifiinsight/gap_5g"
+sched
 
 # 11: 2-hour scans: one channel every 2 minutes (a sweep in about 40 minutes)
 touch "$F/eth7.reject_full"; sched; sched   # refused again: the burst, then a sweep

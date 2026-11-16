@@ -49,7 +49,9 @@ EOF
 # <ifc>.reject_full (refuses full scans), <ifc>.every (takes a single channel at most once every N
 # seconds), <ifc>.never (refuses single channels too), <ifc>.bad (a channel it calls "Bad Channel"),
 # <ifc>.stuck (a channel whose figures never change), <ifc>.nets (channel bssid ssid), <ifc>.scans (log of
-# accepted scans), <ifc>.tries (one line per full-scan request).
+# accepted scans), <ifc>.tries (one line per full-scan request), <ifc>.refused (one line per single
+# channel refused), <ifc>.bgcac (a background radar check runs until this time: every scan refused, and
+# dfs_ap_move says so; <ifc>.bgfmt picks how it says it), <ifc>.bgnext (one starts at the next scan request).
 cat > "$t/bin/wl" <<'WL'
 #!@BB@ sh
 F=@F@; ifc=$2; cmd=$3; now=$(cat "$F/clock")
@@ -64,16 +66,28 @@ visit() {   # the scan reaches these channels: new figures for each, and what it
 		echo "$c|$(( (n * 3 + c) % 17 ))|$(( n % 5 ))|-$(( 88 + n % 4 ))" >> "$F/$ifc.list"
 	done
 }
+bg() { [ -f "$F/$ifc.bgcac" ] && [ "$now" -lt "$(cat "$F/$ifc.bgcac")" ]; }
 case "$cmd" in
 	isup) echo 1 ;;
+	dfs_ap_move)
+		[ "$ifc" = eth7 ] || { echo "wl: Unsupported" >&2; exit 1; }
+		if bg; then
+			case "$(cat "$F/$ifc.bgfmt" 2>/dev/null)" in
+				text) printf 'AP Target Chanspec 100/80 (0xe06a)\nRadar Scan In Progress\n' ;;
+				*) printf 'version: 2, move status=2\nAP Target Chanspec 100/80 (0xe06a)\n@1: state: PRE-ISM Channel Availability Check(CAC), time elapsed: 12000ms\n' ;;
+			esac
+		else echo "version: 2, move status=-1"; echo "dfs AP move in IDLE state"
+		fi ;;
 	chanspec) if [ "$ifc" = eth6 ]; then echo "1 (0x1001)"; else echo "100/160 (0xe872)"; fi ;;
 	channels) all ;;
 	scan)
+		if [ -f "$F/$ifc.bgnext" ]; then echo $((now + 30)) > "$F/$ifc.bgcac"; rm -f "$F/$ifc.bgnext"; fi   # starts now
+		if bg; then echo "wl: Scan Rejected" >&2; [ "$4" = -c ] && echo "$5" >> "$F/$ifc.refused"; [ "$4" = -c ] || echo full >> "$F/$ifc.tries"; exit 1; fi
 		if [ "$4" = -c ]; then
 			if [ -f "$F/$ifc.bad" ] && [ "$(cat "$F/$ifc.bad")" = "$5" ]; then echo "wl: Bad Channel" >&2; exit 1; fi
-			if [ -f "$F/$ifc.never" ]; then echo "wl: Scan Rejected" >&2; exit 1; fi
+			if [ -f "$F/$ifc.never" ]; then echo "wl: Scan Rejected" >&2; echo "$5" >> "$F/$ifc.refused"; exit 1; fi
 			if [ -f "$F/$ifc.every" ] && [ "$now" -lt $(( $(cat "$F/$ifc.lastok" 2>/dev/null || echo 0) + $(cat "$F/$ifc.every") )) ]; then
-				echo "wl: Scan Rejected" >&2; exit 1
+				echo "wl: Scan Rejected" >&2; echo "$5" >> "$F/$ifc.refused"; exit 1
 			fi
 			echo "$now" > "$F/$ifc.lastok"; echo "$5" >> "$F/$ifc.scans"
 			visit $(echo "$5" | tr ',' ' ')
@@ -211,5 +225,62 @@ scan
 expect "full scan again" "ok, 2 networks in 3 s, 19 channels measured" "$r5"
 expect "full scan again: one call, every channel stored" "full|19" "$(calls $((n + 1)))|$(rows)"
 [ ! -f "$R/tmp/wifiinsight/refused_5g" ] && ok "full scan again: refusal forgotten" || bad "full scan again: refused_5g still there"
+
+# 11: an RT-AX88U takes a single channel only every 10.2 s, however often it's asked (here: every 10 s).
+# The second channel is asked for every 2 s until taken; then each waits that gap out instead, so few are
+# refused (before: four or five refusals for every channel).
+touch "$F/eth7.reject_full"; echo 10 > "$F/eth7.every"; : > "$F/eth7.refused"
+rm -f "$F/eth7.lastok" "$R/tmp/wifiinsight/each_5g.next" "$R/tmp/wifiinsight/gap_5g"; n=$(mark)
+scan
+first=$(calls $((n + 1))); k=$(echo $first | wc -w | tr -d ' '); r=$(wc -l < "$F/eth7.refused" | tr -d ' ')
+expect "cool-down: consecutive, none skipped" "$(from 36 $k)" "$first"
+[ "$k" -ge 12 ] && ok "cool-down: $k channels in the 150 s" || bad "cool-down: only $k channels"
+[ "$r" -le $((k / 2 + 5)) ] && ok "cool-down: $r refused for $k channels" || bad "cool-down: $r refused for $k channels"
+like "cool-down: the gap is learned" "[91]*" "$(cat "$R/tmp/wifiinsight/gap_5g" 2>/dev/null)"
+: > "$F/eth7.refused"; n=$(mark)
+scan
+k=$(calls $((n + 1)) | wc -w | tr -d ' '); r=$(wc -l < "$F/eth7.refused" | tr -d ' ')
+[ "$r" -le $((k / 2 + 1)) ] && ok "cool-down, next scan: $r refused for $k channels" || bad "cool-down, next scan: $r refused for $k channels"
+rm -f "$F/eth7.every"
+
+# 12: a driver that takes every single channel at once never waits, even with a gap left from before
+echo 10 > "$R/tmp/wifiinsight/gap_5g"; rm -f "$R/tmp/wifiinsight/each_5g.next"; n=$(mark); c0=$(cat "$F/clock")
+scan
+k=$(calls $((n + 1)) | wc -w | tr -d ' '); el=$(( $(cat "$F/clock") - c0 - 1800 ))
+expect "no cool-down: the whole band" "19" "$k"
+[ "$el" -le 150 ] && ok "no cool-down: the gap shrinks away ($el s)" || bad "no cool-down: took $el s"
+rm -f "$R/tmp/wifiinsight/gap_5g" "$R/tmp/wifiinsight/refused_5g" "$F/eth7.reject_full"
+
+# 13: a background radar check (zero-wait DFS) runs for 40 s when the scan starts: the scan waits for it,
+# then scans the whole band; the refusal isn't taken for a driver that refuses full scans
+echo $(( $(cat "$F/clock") + 1800 + 40 )) > "$F/eth7.bgcac"; f=$(tries); n=$(mark); c0=$(cat "$F/clock")
+scan
+expect "background check: waited, then a full scan" "ok, 2 networks in 3 s, 19 channels measured" "$r5"
+expect "background check: one full scan, nothing refused" "1|full" "$(( $(tries) - f ))|$(calls $((n + 1)))"
+el=$(( $(cat "$F/clock") - c0 - 1800 )); [ "$el" -ge 40 ] && [ "$el" -le 55 ] && ok "background check: waited for it ($el s)" || bad "background check: $el s"
+[ ! -f "$R/tmp/wifiinsight/refused_5g" ] && ok "background check: not taken for refused full scans" || bad "background check: refused_5g written"
+grep -q "^scan 5g (eth7): waiting for the radio's background radar check (DFS) to end$" "$F/log" && ok "background check: logged" || bad "background check: syslog"
+expect "background check: 2.4 GHz unaffected" "ok, 1 network in 3 s, 13 channels measured" "$r2"
+
+# 14: one that runs longer than 90 s (ten minutes on a weather-radar channel): the band is left for next
+# time, without a single-channel burst; reported in the words wl uses on some drivers
+echo text > "$F/eth7.bgfmt"; echo $(( $(cat "$F/clock") + 1800 + 600 )) > "$F/eth7.bgcac"; f=$(tries); n=$(mark); : > "$F/eth7.refused"
+scan
+expect "long background check: next time" "busy, the radio was checking another channel for radar in the background (DFS) for over 90 s: scanned next time" "$r5"
+expect "long background check: no scan asked for" "0||0" "$(( $(tries) - f ))|$(calls $((n + 1)))|$(wc -l < "$F/eth7.refused" | tr -d ' ')"
+[ ! -f "$R/tmp/wifiinsight/refused_5g" ] && ok "long background check: not taken for refused full scans" || bad "long background check: refused_5g written"
+python3 - "$R/www/user/wifiinsight/scanstate.htm" <<'PY' && ok "long background check: the page is told why" || bad "long background check: scanstate.htm"
+import json, sys
+s = json.load(open(sys.argv[1])); sys.exit(0 if s['bands']['5g'] == 'busy' and 'radar in the background' in s['notes']['5g'] else 1)
+PY
+rm -f "$F/eth7.bgfmt"
+
+# 15: one that starts just as the full scan is asked for: refused, then waited for, then scanned
+n=$(mark); touch "$F/eth7.bgnext"
+scan
+expect "background check starting at the scan: waited, then scanned" "ok, 2 networks in 3 s, 19 channels measured" "$r5"
+expect "background check starting at the scan: then one full scan" "full" "$(calls $((n + 1)))"
+[ ! -f "$R/tmp/wifiinsight/refused_5g" ] && ok "background check starting at the scan: not taken for refused full scans" || bad "refused_5g written"
+rm -f "$F/eth7.bgcac"
 
 [ $fail -eq 0 ] && echo "One channel at a time: all checks passed." || { echo "::error::One channel at a time: some checks failed."; exit 1; }

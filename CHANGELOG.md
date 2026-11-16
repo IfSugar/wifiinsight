@@ -2,6 +2,12 @@
 
 What changed in each release of WiFi Insight. The release workflow copies a version's section into its GitHub release notes, so write for people running the addon.
 
+## Unreleased
+
+- **Gentler one-channel scans on drivers with a cool-down** (thanks to Squall Leonhart for measuring it): an RT-AX88U takes a single-channel scan only every 10.2 s, however often it's asked. WiFi Insight was asking every 2 s until it did, so most requests were refused. Now it learns how long the driver needs between them and waits that out: about one request in two is refused once, instead of four or five for every channel, and no channel is skipped. Spread-out scans are at least 20 s apart (they could be a few seconds apart within a minute), or longer if the driver needs it.
+- **Background radar checks are left alone.** With zero-wait DFS, acsd can have a 5 GHz radio listen to another channel for radar before moving there, for a minute (ten on weather-radar channels), and the driver refuses scans meanwhile. A scan now waits up to 90 s for the check to end (sampling carries on), or leaves that band for the next scan, and spread-out scans skip that minute. Such a refusal is no longer taken for a driver that refuses full scans, which used to switch the band to one channel at a time. `debug` shows the radio's check status (`wl dfs_ap_move`).
+- **The page doesn't redraw in a hidden tab** (thanks to Squall Leonhart): while the tab is in the background or the window is minimised, the charts aren't redrawn and the data isn't refreshed. When you come back, the page redraws at once and fetches anything it skipped, so the data is as fresh as with the tab open. In Firefox, charts drawn in the background could stay blank until hovered.
+
 ## 2.0.0
 
 Entware is no longer needed, routers with two radios on one band (or four radios) are supported, and the history database is checked before every use. With these changes the history moves to a `wifiinsight` folder on the USB drive when you update (a rename on the same drive: nothing is copied), hence the new major version.
