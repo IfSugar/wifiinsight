@@ -168,7 +168,7 @@ var WI = {
 	base: '/ext/wifiinsight/',
 	live: null, week: null, scans: null,
 	view: 'insight', band: '5g', range: '1h',
-	charts: {}, hidden: {},
+	charts: {}, hidden: {}, missed: {}, redraw: false,
 	showMesh: false, showDfs: true, showActive: true, allEvents: false, src: 'measured',
 	sortKey: 'rssi', sortDir: -1
 };
@@ -1375,7 +1375,15 @@ function saveSettings() {
 
 /* =================== shell =================== */
 var VIEWS = [['insight', 'Insight'], ['survey', 'Site Survey'], ['channels', 'Channel Statistics'], ['trouble', 'Troubleshooting'], ['settings', 'Settings']];
+/* While the tab is hidden (another tab, a minimised window), browsers throttle its timers and painting,
+   and Firefox can leave a chart drawn then blank until it's hovered. So nothing is drawn while hidden:
+   render() just notes that it's due, and the timed refreshes note what they skipped. When the tab shows
+   again it's drawn at once and the skipped data is fetched, so what you see is never older than it would
+   have been with the tab open (see boot). */
+function tabHidden() { return document.visibilityState === 'hidden'; }
 function render() {
+	if (tabHidden()) { WI.redraw = true; return; }
+	WI.redraw = false;
 	var bands = ((WI.live && WI.live.radios) || []).map(function (r) { return r.band; });
 	if (bands.length && bands.indexOf(WI.band) < 0) WI.band = bands[0];
 	$('wiTabs').innerHTML = VIEWS.map(function (v) { return '<button type="button" class="' + (v[0] === WI.view ? 'on' : '') + '" onclick="WiFiInsight.setView(\'' + v[0] + '\')">' + v[1] + '</button>'; }).join('');
@@ -1396,6 +1404,7 @@ function render() {
 	renderQuietMarks();
 }
 function renderView() {
+	if (tabHidden()) { WI.redraw = true; return; }
 	Object.keys(WI.charts).forEach(function (k) { WI.charts[k].destroy(); delete WI.charts[k]; });
 	if (WI.view === 'insight') renderInsight();
 	else if (WI.view === 'survey') renderSurvey();
@@ -1468,8 +1477,18 @@ function boot() {
 	quietBoot();
 	render();
 	loadAll();
-	setInterval(function () { if (WI.view !== 'settings') loadAll({ live: 1 }); }, 60000);
-	setInterval(function () { var src = RANGE_CFG[WI.range].src; loadAll({ scans: 1, week: src === 'week' ? 1 : 0, month: src === 'month' ? 1 : 0 }); }, 300000);
+	var refresh = function (m) {
+		var src = RANGE_CFG[WI.range].src;
+		loadAll({ live: m.live ? 1 : 0, scans: m.scans ? 1 : 0, week: m.scans && src === 'week' ? 1 : 0, month: m.scans && src === 'month' ? 1 : 0 });
+	};
+	setInterval(function () { if (WI.view === 'settings') return; if (tabHidden()) WI.missed.live = 1; else refresh({ live: 1 }); }, 60000);
+	setInterval(function () { if (tabHidden()) WI.missed.scans = 1; else refresh({ scans: 1 }); }, 300000);
+	document.addEventListener('visibilitychange', function () {
+		if (tabHidden()) return;
+		var m = WI.missed; WI.missed = {};
+		if (WI.redraw) render(); else renderView();   /* redrawn even if nothing changed: a canvas may have been dropped */
+		if (m.live && WI.view !== 'settings' || m.scans) refresh(m);
+	});
 }
 function setMesh(on) { WI.showMesh = on; store('mesh', on ? '1' : '0'); $('wiMesh').checked = on; $('wiMesh2').checked = on; renderView(); }
 function initial() {
