@@ -73,8 +73,8 @@ case "$cmd" in
 	isup) if [ -f "$F/$ifc.down" ]; then echo 0; else echo 1; fi ;;
 	dfs_ap_move)
 		[ "$ifc" = eth7 ] || { echo "wl: Unsupported" >&2; exit 1; }
-		if bg; then printf 'version: 2, move status=2\nAP Target Chanspec 100/80 (0xe06a)\nRadar Scan In Progress\n'
-		else echo "version: 2, move status=-1"
+		if bg; then printf 'version=1, move status=2\nAP Target Chanspec 52/80 (0xe03a)\nRadar Scan In Progress\n'
+		else printf 'version=1, move status=-1\ndfs AP move in IDLE state\nversion: 1, num_sub_status: 2\n@0: state: In-Service Monitoring(ISM), time elapsed: 0ms, chanspec: 100/160 (0xE872), chanspec last cleared: none, sub type: 0x00\n@1: state: IDLE, time elapsed: 0ms, chanspec: none, chanspec last cleared: none, sub type: 0x01\n'
 		fi ;;
 	chanspec) if [ "$ifc" = eth6 ]; then echo "1 (0x1001)"; else echo "100/160 (0xe872)"; fi ;;
 	channels) all ;;

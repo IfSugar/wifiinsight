@@ -74,9 +74,10 @@ case "$cmd" in
 		if bg; then
 			case "$(cat "$F/$ifc.bgfmt" 2>/dev/null)" in
 				text) printf 'AP Target Chanspec 100/80 (0xe06a)\nRadar Scan In Progress\n' ;;
-				*) printf 'version: 2, move status=2\nAP Target Chanspec 100/80 (0xe06a)\n@1: state: PRE-ISM Channel Availability Check(CAC), time elapsed: 12000ms\n' ;;
+				core) printf 'version=1, move status=-1\ndfs AP move in IDLE state\nversion: 1, num_sub_status: 2\n@0: state: In-Service Monitoring(ISM), time elapsed: 0ms, chanspec: 100/160 (0xE872), chanspec last cleared: none, sub type: 0x00\n@1: state: PRE-ISM Channel Availability Check(CAC), time elapsed: 9000ms, chanspec: 52/80 (0xE03A), chanspec last cleared: none, sub type: 0x01\n' ;;
+				*) printf 'version=1, move status=2\nAP Target Chanspec 52/80 (0xe03a)\nRadar Scan In Progress\nversion: 1, num_sub_status: 2\n@0: state: In-Service Monitoring(ISM), time elapsed: 0ms, chanspec: 100/160 (0xE872), chanspec last cleared: none, sub type: 0x00\n@1: state: PRE-ISM Channel Availability Check(CAC), time elapsed: 12000ms, chanspec: 52/80 (0xE03A), chanspec last cleared: none, sub type: 0x01\n' ;;
 			esac
-		else echo "version: 2, move status=-1"; echo "dfs AP move in IDLE state"
+		else printf 'version=1, move status=-1\ndfs AP move in IDLE state\nversion: 1, num_sub_status: 2\n@0: state: In-Service Monitoring(ISM), time elapsed: 0ms, chanspec: 100/160 (0xE872), chanspec last cleared: none, sub type: 0x00\n@1: state: IDLE, time elapsed: 0ms, chanspec: none, chanspec last cleared: none, sub type: 0x01\n'   # as an RT-AX86U says it (3004.388.13)
 		fi ;;
 	chanspec) if [ "$ifc" = eth6 ]; then echo "1 (0x1001)"; else echo "100/160 (0xe872)"; fi ;;
 	channels) all ;;
@@ -275,12 +276,13 @@ s = json.load(open(sys.argv[1])); sys.exit(0 if s['bands']['5g'] == 'busy' and '
 PY
 rm -f "$F/eth7.bgfmt"
 
-# 15: one that starts just as the full scan is asked for: refused, then waited for, then scanned
-n=$(mark); touch "$F/eth7.bgnext"
+# 15: one that starts just as the full scan is asked for: refused, then waited for, then scanned. Shown
+# only by the background core's state (@1), with the move status still idle.
+n=$(mark); touch "$F/eth7.bgnext"; echo core > "$F/eth7.bgfmt"
 scan
 expect "background check starting at the scan: waited, then scanned" "ok, 2 networks in 3 s, 19 channels measured" "$r5"
 expect "background check starting at the scan: then one full scan" "full" "$(calls $((n + 1)))"
 [ ! -f "$R/tmp/wifiinsight/refused_5g" ] && ok "background check starting at the scan: not taken for refused full scans" || bad "refused_5g written"
-rm -f "$F/eth7.bgcac"
+rm -f "$F/eth7.bgcac" "$F/eth7.bgfmt"
 
 [ $fail -eq 0 ] && echo "One channel at a time: all checks passed." || { echo "::error::One channel at a time: some checks failed."; exit 1; }
