@@ -2042,8 +2042,77 @@ status() {
 	fi
 }
 
-# Rebuild a damaged database from everything still readable (sqlite3 .dump; .recover isn't in every
-# build), with sampling and scans held off meanwhile. The damaged copy is kept next to it as .bad.
+# Rebuild a damaged database from everything still readable (salvage; .recover isn't in every build),
+# with sampling and scans held off meanwhile. The damaged copy is kept next to it as .bad.
+#
+# repair's copy of a damaged database. sqlite3 3.25.3 (Merlin 386.1 to 3004.388.5) doesn't read a damaged
+# page the same way twice: the same file's .dump kept 5701 of 5760 samples, or all 5760 with garbage, or
+# only the 365 before the damage (about one run in four). So each table is read in chunks of 100 rowids,
+# in one sqlite3 run that carries on past errors, and a chunk that fails is read again row by row: only
+# rows on damaged pages are lost, whatever the version. If sqlite3 itself dies on a damaged page, the run
+# carries on after the chunk it was reading. Rows keep their rowids, so a row read twice goes in once.
+# Every run over the damaged database starts with the schema check, with .bail on: if it fails, nothing
+# is read and the copy fails.
+TABLES="samples events scans aps chanim state"
+salvage_read() {   # sql-file -> runs it over $DB after the schema check (temp views first); errors in $sv/err
+	{ printf '.bail on\n%s\n.bail off\n' "$SQL_GUARD"; cat "$sv/views" "$1"; } > "$1.in"
+	"$SQLITE" -batch -noheader "$DB" < "$1.in" 2> "$sv/err"
+}
+salvage_ok() { ! grep -q 'not created by WiFi Insight' "$sv/err"; }
+salvage_put() { { echo "BEGIN;"; cat; echo "COMMIT;"; } | "$SQLITE" "$1" > /dev/null 2>&1; }   # new-db < INSERTs
+salvage_pass() {   # statements-file new-db failed-file: one statement a line, each ending "-- <table> <rowid>"
+	todo=$1; sn=0
+	while [ -s "$todo" ] && [ $sn -lt 20 ]; do
+		sn=$((sn + 1))
+		awk '{ printf ".print -- @@ %d\n%s\n", NR, $0 } END { print ".print -- @@ done" }' "$todo" > "$sv/run.sql"
+		salvage_read "$sv/run.sql" | awk -v f="$sv/last" '/^-- @@ / { l = $3 } { print } END { print l > f }' | salvage_put "$2"
+		salvage_ok || return 1
+		# the statements sqlite3 reported an error for (it names the line of its input)
+		sed -n 's/.*near line \([0-9][0-9]*\).*/\1/p' "$sv/err" > "$sv/lines"
+		awk 'NR == FNR { f[$1] = 1; next } (FNR in f) && match($0, /-- [a-z]+ [0-9]+$/) { print substr($0, RSTART + 3) }' "$sv/lines" "$sv/run.sql.in" >> "$3"
+		l=$(cat "$sv/last" 2>/dev/null)
+		case "$l" in done) break ;; [0-9]*) ;; *) break ;; esac
+		# sqlite3 stopped while reading statement $l (or soon after it): that one failed, the rest goes on
+		sed -n "${l}p" "$todo" | sed -n 's/.*-- \([a-z]*\) \([0-9]*\)$/\1 \2/p' >> "$3"
+		awk -v l="$l" 'NR > l' "$todo" > "$sv/todo.$sn"; todo="$sv/todo.$sn"
+	done
+	return 0
+}
+salvage() {   # new-db: creates it and copies every row of $DB it can read. 1: the schema check failed, 2: no new db
+	sv="$TMPD/salvage"; rm -rf "$sv"; mkdir -p "$sv"
+	rm -f "$1"; printf '%s\n' "$SCHEMA" | "$SQLITE" "$1" > /dev/null 2>&1 || return 2
+	# x_<table>: each row's rowid and its INSERT, as temp views (in memory, never in the damaged file)
+	for tb in $TABLES; do
+		cols=$("$SQLITE" "$1" "PRAGMA table_info($tb);" | awk -F'|' '{ printf "%s%s", (NR > 1 ? "," : ""), $2 }')
+		printf "CREATE TEMP VIEW x_%s AS SELECT rowid AS r, 'INSERT INTO %s(rowid,%s) VALUES(' || rowid%s || ');' AS s FROM main.%s;\n" \
+			"$tb" "$tb" "$cols" "$(echo "$cols" | awk -F, '{ for (i = 1; i <= NF; i++) printf " || \047,\047 || quote(%s)", $i }')" "$tb"
+	done > "$sv/views"
+	# each table's rowids: min and max; where the end of a table is damaged, the largest its first index holds
+	for tb in $TABLES; do echo "SELECT '$tb lo ' || coalesce(min(rowid), 'none') FROM $tb; SELECT '$tb hi ' || coalesce(max(rowid), 'none') FROM $tb;"; done > "$sv/range.sql"
+	salvage_read "$sv/range.sql" > "$sv/range"; salvage_ok || return 1
+	: > "$sv/p1.sql"
+	for tb in $TABLES; do
+		lo=$(sed -n "s/^$tb lo //p" "$sv/range"); hi=$(sed -n "s/^$tb hi //p" "$sv/range")
+		[ "$lo" = none ] && continue   # empty
+		case "$hi" in ''|*[!0-9]*)
+			ix=$("$SQLITE" "$1" "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = '$tb' LIMIT 1;")
+			echo "SELECT rowid FROM $tb INDEXED BY $ix;" > "$sv/ix.sql"
+			hi=$(salvage_read "$sv/ix.sql" | sort -n | tail -1); salvage_ok || return 1
+			case "$hi" in [0-9]*) hi=$((hi + 1000)) ;; *)
+				case "$lo" in [0-9]*) hi=$((lo + 200000)) ;; *) continue ;; esac ;;   # neither end readable: nothing to go on
+			esac ;;
+		esac
+		case "$lo" in [0-9]*) ;; *) lo=1 ;; esac
+		awk -v t="$tb" -v lo="$lo" -v hi="$hi" 'BEGIN { for (a = lo; a <= hi; a += 100) printf "SELECT s FROM x_%s WHERE r BETWEEN %d AND %d; -- %s %d\n", t, a, a + 99, t, a }' >> "$sv/p1.sql"
+	done
+	: > "$sv/failed"; salvage_pass "$sv/p1.sql" "$1" "$sv/failed" || return 1
+	# the chunks that failed, read again row by row: at most 50 of them
+	sort -u "$sv/failed" | head -50 | awk '{ for (r = $2; r < $2 + 100; r++) printf "SELECT s FROM x_%s WHERE r = %d; -- %s %d\n", $1, r, $1, r }' > "$sv/p2.sql"
+	if [ -s "$sv/p2.sql" ]; then salvage_pass "$sv/p2.sql" "$1" "$sv/lost" || return 1; fi
+	rm -rf "$sv"
+	return 0
+}
+
 repair() {   # [force]: rebuild even when the check finds nothing wrong
 	[ -x "$SQLITE" ] || die "sqlite3 isn't installed ($SQLITE)."
 	[ -f "$DB" ] || die "There's no database at $DB."
@@ -2070,9 +2139,17 @@ repair() {   # [force]: rebuild even when the check finds nothing wrong
 	[ "$free" -gt $((kb * 2)) ] 2>/dev/null || die "Not enough free space on the drive for a copy (${kb} KB needed twice); nothing was changed."
 	new="$DB.new"; bad="$DB.bad"; rm -f "$new" "$new-journal"
 	say "Copying everything still readable into a new database..."
-	printf '%s\n.dump\n' "$SQL_GUARD" | "$SQLITE" -batch -bail "$DB" 2>/dev/null | sed 's/^ROLLBACK;.*/COMMIT;/' | "$SQLITE" "$new" > /dev/null 2>&1
+	salvage "$new"; rc=$?
+	if [ $rc != 0 ]; then
+		rm -rf "$new" "$TMPD/salvage"
+		[ $rc = 1 ] && die "$DB holds something WiFi Insight didn't create, so it won't be repaired or used. Move it away, then run '$SCRIPT startup' to start a new one."
+		die "Couldn't create a new database next to it ($new); nothing was changed."
+	fi
 	nchk=$("$SQLITE" "$new" "PRAGMA integrity_check;" 2>&1 | head -1)
 	[ "$nchk" = ok ] || { rm -f "$new"; die "The new copy isn't sound either ($nchk); nothing was changed."; }
+	if [ "$("$SQLITE" "$new" "SELECT (SELECT count(*) FROM samples) + (SELECT count(*) FROM scans) + (SELECT count(*) FROM events);")" = 0 ]; then
+		rm -f "$new"; die "Nothing could be read from it, so it was left as it is. Move it away, then run '$SCRIPT startup' to start a new one."
+	fi
 	rm -f "$bad" "$bad-journal"
 	mv "$DB" "$bad" || { rm -f "$new"; die "Couldn't move the damaged database aside; nothing was changed."; }
 	[ -f "$DB-journal" ] && mv "$DB-journal" "$bad-journal"
