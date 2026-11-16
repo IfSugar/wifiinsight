@@ -2171,23 +2171,30 @@ repair() {   # [force]: rebuild even when the check finds nothing wrong
 	[ "$chk" = ok ] || say "It's damaged: $(printf '%s' "$chk" | head -1 | cut -c1-100)"
 	kb=$(du -k "$DB" | cut -f1); free=$(df -k "$DATA_DIR" | tail -1 | awk '{ print $(NF-2) }')
 	[ "$free" -gt $((kb * 2)) ] 2>/dev/null || die "Not enough free space on the drive for a copy (${kb} KB needed twice); nothing was changed."
-	new="$DB.new"; bad="$DB.bad"; rm -f "$new" "$new-journal"
+	# The new copy is made in a folder of its own, made just now under a name nobody can guess: mkdir fails
+	# if anything (a link, say) is already there, so the copy is never written through a link someone left
+	# in the data folder, on a drive others may write to. Left over from a repair cut short: removed.
+	rm -rf "$DATA_DIR"/repair.tmp.* "$DB.new" "$DB.new-journal"
+	wd="$DATA_DIR/repair.tmp.$$$(head -c 8 /dev/urandom 2>/dev/null | md5sum | cut -c1-12)"
+	mkdir -m 700 "$wd" || die "Couldn't create a folder for the new copy next to it ($wd); nothing was changed."
+	new="$wd/new.db"; bad="$DB.bad"
 	say "Copying everything still readable into a new database..."
 	salvage "$new"; rc=$?
 	if [ $rc != 0 ]; then
-		rm -rf "$new" "$TMPD/salvage"
+		rm -rf "$wd" "$TMPD/salvage"
 		[ $rc = 1 ] && die "$DB holds something WiFi Insight didn't create, so it won't be repaired or used. Move it away, then run '$SCRIPT startup' to start a new one."
 		die "Couldn't create a new database next to it ($new); nothing was changed."
 	fi
 	nchk=$("$SQLITE" "$new" "PRAGMA integrity_check;" 2>&1 | head -1)
-	[ "$nchk" = ok ] || { rm -f "$new"; die "The new copy isn't sound either ($nchk); nothing was changed."; }
+	[ "$nchk" = ok ] || { rm -rf "$wd"; die "The new copy isn't sound either ($nchk); nothing was changed."; }
 	if [ "$("$SQLITE" "$new" "SELECT (SELECT count(*) FROM samples) + (SELECT count(*) FROM scans) + (SELECT count(*) FROM events);")" = 0 ]; then
-		rm -f "$new"; die "Nothing could be read from it, so it was left as it is. Move it away, then run '$SCRIPT startup' to start a new one."
+		rm -rf "$wd"; die "Nothing could be read from it, so it was left as it is. Move it away, then run '$SCRIPT startup' to start a new one."
 	fi
 	rm -f "$bad" "$bad-journal"
-	mv "$DB" "$bad" || { rm -f "$new"; die "Couldn't move the damaged database aside; nothing was changed."; }
+	mv "$DB" "$bad" || { rm -rf "$wd"; die "Couldn't move the damaged database aside; nothing was changed."; }
 	[ -f "$DB-journal" ] && mv "$DB-journal" "$bad-journal"
-	mv "$new" "$DB" || { mv "$bad" "$DB"; die "Couldn't put the new copy in place; the database is as it was."; }
+	mv "$new" "$DB" || { mv "$bad" "$DB"; rm -rf "$wd"; die "Couldn't put the new copy in place; the database is as it was."; }
+	rm -rf "$wd"
 	init_db   # tables or indexes the damage took
 	rm -f "$DATA_DIR/damaged"
 	kept=$(sql "SELECT (SELECT count(*) FROM samples) || ' samples and ' || (SELECT count(DISTINCT band || ts) FROM scans) || ' scans';")

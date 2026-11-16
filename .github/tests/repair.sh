@@ -198,6 +198,28 @@ out=$(run repair 2>&1) || true
 has "nonsense range: repaired all the same" "Repaired: kept 5701 samples" "$out"
 big=$(sort -n "$t/liar.sizes" | tail -1); [ "$big" -lt 1000000 ] && ok "nonsense range: at most $big bytes of SQL a run" || bad "nonsense range: $big bytes of SQL in one run"
 sed -i "s|^SQLITE=.*|SQLITE=\"$sqlite\"|" "$R/jffs/addons/wifiinsight/config"
+
+# 3f: the data folder is on a drive others may write to. Someone who can put a link there while repair
+# runs (a stand-in sqlite3 does it each time it starts, as if racing it) must not get the new copy written
+# through it to a file elsewhere: here a startup script that doesn't exist yet, which sqlite3 would create
+# (as root, with rows the damaged database chose). A repair cut short earlier left its folder behind: that goes.
+mkdir -p "$t/scripts"; rm -f "$t/scripts/services-start"
+mkdir -p "$D/repair.tmp.123abc"; echo partial > "$D/repair.tmp.123abc/new.db"
+cat > "$t/racer" <<EOF
+#!/bin/sh
+[ -L "$D/wifiinsight.db.new" ] || ln -s "$t/scripts/services-start" "$D/wifiinsight.db.new" 2> /dev/null
+exec "$sqlite" "\$@"
+EOF
+chmod +x "$t/racer"
+sed -i "s|^SQLITE=.*|SQLITE=\"$t/racer\"|" "$R/jffs/addons/wifiinsight/config"
+rm -f "$D/wifiinsight.db.bad" "$D/damaged"; cp "$t/damaged.db" "$D/wifiinsight.db"
+out=$(run repair 2>&1) || true
+has "a link left in the data folder: repaired all the same" "Repaired: kept 5701 samples" "$out"
+[ ! -e "$t/scripts/services-start" ] && ok "a link left in the data folder: never written through" || bad "a link left in the data folder: written through, to $t/scripts/services-start"
+[ -f "$D/wifiinsight.db" ] && [ ! -L "$D/wifiinsight.db" ] && ok "a link left in the data folder: the database is a file of its own" || bad "the database is a link"
+expect "repair's own folder: gone afterwards, and one left from before too" "" "$(ls -d "$D"/repair.tmp.* 2> /dev/null)"
+rm -f "$D/wifiinsight.db.new"
+sed -i "s|^SQLITE=.*|SQLITE=\"$sqlite\"|" "$R/jffs/addons/wifiinsight/config"
 rm -f "$D/wifiinsight.db.bad"; mv "$t/kept.db" "$D/wifiinsight.db"; mv "$t/kept.bad" "$D/wifiinsight.db.bad"
 
 # 4: repair again: nothing to do, and the .bad copy stays as it was
