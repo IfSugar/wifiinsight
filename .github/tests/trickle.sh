@@ -41,7 +41,15 @@ done
 rm -f "$t/bin/date" "$t/bin/sleep" "$t/bin/logger"
 echo 1800000000 > "$F/clock"
 printf '#!%s sh\nif [ "$*" = "+%%s" ]; then cat "%s/clock"; else exec "%s" date "$@"; fi\n' "$bb" "$F" "$bb" > "$t/bin/date"
-printf '#!%s sh\necho $(( $(cat "%s/clock") + $1 )) > "%s/clock"\n' "$bb" "$F" "$F" > "$t/bin/sleep"
+# (a wait of 15 s or more in trickle notes whether the scan lock is free meanwhile: Scan now must not wait
+# for spread-out scans)
+cat > "$t/bin/sleep" <<EOF
+#!$bb sh
+if [ -f "$F/in_trickle" ] && [ "\$1" -ge 15 ]; then
+	if "$t/bin/flock" -n "$R/tmp/wifiinsight/scan.lock" true; then echo free >> "$F/lockwait"; else echo held >> "$F/lockwait"; fi
+fi
+echo \$(( \$(cat "$F/clock") + \$1 )) > "$F/clock"
+EOF
 printf '#!%s sh\nshift 2; echo "$*" >> "%s/log"\n' "$bb" "$F" > "$t/bin/logger"
 cat > "$t/bin/nvram" <<'EOF'
 #!/bin/sh
@@ -144,7 +152,7 @@ sched() {   # a scheduled scan (cron's 'scan --delay'), half an hour after the l
 }
 step() {   # cron's 'trickle', a minute after the last
 	echo $(( $(cat "$F/clock") + 60 )) > "$F/clock"
-	run trickle > /dev/null 2>&1 || true
+	touch "$F/in_trickle"; run trickle > /dev/null 2>&1 || true; rm -f "$F/in_trickle"
 	ts=$(q "SELECT max(ts) FROM scans WHERE band='5g'")
 }
 sample() {   # a sample of the router's own channel now: own traffic (tx + inbss) in percent
@@ -185,6 +193,7 @@ expect "trickle: in order" "36 40 44 48 52 56" "$(calls $((n + 1)))"
 expect "trickle: one sweep, at the latest channel's time" "6|$(cat "$F/clock" | awk '{ print $1 - 1 }')" "$(rows)|$ts"
 [ "$ts" -gt "$t1" ] && ok "trickle: the sweep moved forward" || bad "trickle: sweep time $t1 -> $ts"
 expect "trickle: measured, and the networks it heard" "6|1" "$(measured)|$(nets)"
+expect "trickle: the scan lock is free while it waits between channels" "free free free" "$(tr '\n' ' ' < "$F/lockwait" | sed 's/ $//')"
 expect "trickle: Site Survey keeps Far124 from the burst" "Far124@old Near36@new" "$(survey)"
 
 # 5: not twice in a minute
@@ -238,13 +247,15 @@ n=$(mark); step
 expect "full scans work again: trickle stops" "" "$(calls $((n + 1)))"
 
 # 10b: a driver that needs 25 s between single channels: the burst learns it, and trickle waits that long
-# between channels instead of asking 20 s after the last and being refused
+# between channels instead of asking 20 s after the last and being refused (every time: 5 times a channel).
+# Like the burst, it tries a second less each time one is taken at once (see 10d), so one in every other
+# minute or so is still refused.
 touch "$F/eth7.reject_full"; echo 25 > "$F/eth7.every"; rm -f "$F/eth7.lastok"
 sched   # the first refusal: the burst
 like "25 s driver: the burst learns the gap" "2[345]" "$(cat "$R/tmp/wifiinsight/gap_5g" 2>/dev/null)"
 sched; : > "$F/eth7.refused"; n=$(mark); step; step; step
 expect "25 s driver: 2 channels a minute all the same" "6" "$(calls $((n + 1)) | wc -w | tr -d ' ')"
-r=$(wc -l < "$F/eth7.refused" | tr -d ' '); [ "$r" -le 2 ] && ok "25 s driver: $r refused in 3 minutes" || bad "25 s driver: $r refused in 3 minutes"
+r=$(wc -l < "$F/eth7.refused" | tr -d ' '); [ "$r" -le 3 ] && ok "25 s driver: $r refused in 3 minutes" || bad "25 s driver: $r refused in 3 minutes"
 rm -f "$F/eth7.every"
 
 # 10c: a background radar check (zero-wait DFS): trickle leaves the radio alone while it runs, then carries on
@@ -253,6 +264,11 @@ expect "background radar check: trickle waits" "" "$(calls $((n + 1)))"
 expect "background radar check: no scan even asked for" "0" "$(wc -l < "$F/eth7.refused" | tr -d ' ')"
 step; step
 expect "background radar check over: trickle carries on" "4" "$(calls $((n + 1)) | wc -w | tr -d ' ')"
+
+# 10d: the driver takes channels at once again: the gap shrinks back to 20 s, a second each time
+: > "$F/eth7.refused"; step; step; step; step
+expect "gap shrinks: back to 20 s" "20" "$(cat "$R/tmp/wifiinsight/gap_5g" 2>/dev/null)"
+expect "gap shrinks: channels 20 s apart again, none refused" "20|0" "$(tail -2 "$F/eth7.times" | awk 'NR == 1 { a = $1 } NR == 2 { print $1 - a }')|$(wc -l < "$F/eth7.refused" | tr -d ' ')"
 rm -f "$F/eth7.reject_full" "$F/eth7.bgcac" "$R/tmp/wifiinsight/refused_5g" "$R/tmp/wifiinsight/sweep_5g" "$R/tmp/wifiinsight/trickle_5g.due" "$R/tmp/wifiinsight/gap_5g"
 sched
 

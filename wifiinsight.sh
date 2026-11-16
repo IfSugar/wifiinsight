@@ -810,12 +810,22 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 	lowprio
 	mkdir -p "$TMPD"
 	exec 7>"$TMPD/scan.lock"
-	# another scan, or one-channel trickle (up to ~35 s): wait for it rather than skip (BusyBox flock has no -w)
-	i=0; until flock -n 7; do i=$((i + 1)); [ $i -gt 30 ] && { say "A scan is already running."; log "scan skipped: another scan is still running"; return 0; }; sleep 2; done
-	[ "$1" = "--delay" ] && sleep 8
+	# Scan now is under way from here: the page sees it start even while it waits for another scan, or for
+	# trickle's channel (at most a few seconds: trickle lets go between channels). A scheduled scan tells the
+	# page nothing until it has the radios: the page may be waiting on a Scan now that's running, and must
+	# not take this one's giving up for that one's. BusyBox flock has no -w.
+	[ $sched = 0 ] && { scan_next_seq; scan_state running; }
+	i=0; until flock -n 7; do
+		i=$((i + 1))
+		if [ $i -gt 30 ]; then
+			[ $sched = 0 ] && scan_state error "" "Another scan is still running. Try again in a minute."
+			say "A scan is already running."; log "scan skipped: another scan is still running"; return 0
+		fi
+		sleep 2
+	done
+	[ $sched = 1 ] && { sleep 8; scan_next_seq; scan_state running; }
 	trap 'rm -f "$SCAN_FLAG"' EXIT; trap 'rm -f "$SCAN_FLAG"; exit 1' INT TERM HUP
 	touch "$SCAN_FLAG"
-	scan_next_seq; scan_state running
 	ownf=$(own_ssids_file); bands=""; notes=""
 	for r in $(radios); do
 		ifc=$(nvram get wl${r}_ifname)
@@ -968,18 +978,24 @@ trickle() {
 			off=$(cat "$nxt" 2>/dev/null); case "$off" in ''|*[!0-9]*) off=0 ;; esac
 			[ "$off" -lt "$nch" ] || off=0
 			c=$(echo $chs | cut -d' ' -f$((off + 1)))
-			w=$((sp - ($(now) - last))); [ $w -gt 0 ] && sleep $w   # spaced from the last channel taken
+			w=$((sp - ($(now) - last)))
+			if [ $w -gt 0 ]; then   # spaced from the last channel taken; a scan may go meanwhile, and then has the radio
+				flock -u 7; sleep $w
+				flock -n 7 || { [ $did = 1 ] && export_scans; return 0; }
+			fi
 			m0="$TMPD/chanim_$band.t0"; m1="$TMPD/chanim_$band.t1"; out="$TMPD/scan_$band.one"; err="$TMPD/scan_$band.err"
 			wl -i "$ifc" chanim_stats all > "$m0" 2>/dev/null
+			tk=0
 			if ! wl -i "$ifc" scan -c "$c" > /dev/null 2> "$err"; then
-				tk=0
 				# refused soon after the last one taken: this driver needs longer between single channels.
 				# Ask again each second for up to 10 s, and keep how long it took (see scan_each).
 				if [ $j -gt 1 ] && ! grep -q 'Bad Channel' "$err" && ! bg_radar "$ifc" "$band"; then
 					tw=$(now)
 					while [ $(( $(now) - tw )) -lt 10 ]; do
 						sleep 1
-						if wl -i "$ifc" scan -c "$c" > /dev/null 2> "$err"; then tk=1; gap_set "$band" $(( $(now) - last )) > /dev/null; break; fi
+						if wl -i "$ifc" scan -c "$c" > /dev/null 2> "$err"; then
+							tk=1; sp=$(gap_set "$band" $(( $(now) - last ))); [ "$sp" -gt 20 ] || sp=20; break
+						fi
 					done
 				fi
 				if [ $tk = 0 ]; then
@@ -992,6 +1008,9 @@ trickle() {
 					break   # refused: the same channel next time
 				fi
 			fi
+			# taken at once after waiting the gap out (when it's over 20 s): the next waits a second less, so
+			# a one-off refusal doesn't keep the channels further apart for good
+			if [ $j -gt 1 ] && [ $tk = 0 ] && [ "$sp" -gt 20 ]; then sp=$((sp - 1)); gap_set "$band" "$sp" > /dev/null; fi
 			t2=$(now); last=$t2; echo "$t2" > "$lastf"; p=""; sleep 1
 			while :; do   # done when the channel has new figures or a network, or the results are in
 				el=$(( $(now) - t2 ))
@@ -2059,13 +2078,17 @@ salvage_read() {   # sql-file -> runs it over $DB after the schema check (temp v
 	"$SQLITE" -batch -noheader "$DB" < "$1.in" 2> "$sv/err"
 }
 salvage_ok() { ! grep -q 'not created by WiFi Insight' "$sv/err"; }
-salvage_put() { { echo "BEGIN;"; cat; echo "COMMIT;"; } | "$SQLITE" "$1" > /dev/null 2>&1; }   # new-db < INSERTs
+salvage_put() { { echo "PRAGMA synchronous=OFF;"; echo "BEGIN;"; cat; echo "COMMIT;"; } | "$SQLITE" "$1" > /dev/null 2>&1; }   # new-db < INSERTs
+# Each statement is preceded by a marker (".print -- @@<key> N") that sqlite3 prints before running it, and
+# the INSERTs between two markers go in as one transaction: if sqlite3 dies, its output can stop halfway
+# through a line, and only that statement's rows are lost (then read again row by row). The key is new
+# each time, so a value in the damaged database (it can hold line breaks) can't pass for a marker.
 salvage_pass() {   # statements-file new-db failed-file: one statement a line, each ending "-- <table> <rowid>"
-	todo=$1; sn=0
+	todo=$1; sn=0; key="$$x$(now)x$(head -c 8 /dev/urandom 2>/dev/null | md5sum | cut -c1-12)"
 	while [ -s "$todo" ] && [ $sn -lt 20 ]; do
 		sn=$((sn + 1))
-		awk '{ printf ".print -- @@ %d\n%s\n", NR, $0 } END { print ".print -- @@ done" }' "$todo" > "$sv/run.sql"
-		salvage_read "$sv/run.sql" | awk -v f="$sv/last" '/^-- @@ / { l = $3 } { print } END { print l > f }' | salvage_put "$2"
+		awk -v k="$key" '{ printf ".print -- @@%s %d\n%s\n", k, NR, $0 } END { print ".print -- @@" k " done" }' "$todo" > "$sv/run.sql"
+		salvage_read "$sv/run.sql" | awk -v k="-- @@$key" -v f="$sv/last" '$1 " " $2 == k { l = $3; print "COMMIT;"; print "BEGIN;"; next } { print } END { print l > f }' | salvage_put "$2"
 		salvage_ok || return 1
 		# the statements sqlite3 reported an error for (it names the line of its input)
 		sed -n 's/.*near line \([0-9][0-9]*\).*/\1/p' "$sv/err" > "$sv/lines"
@@ -2087,23 +2110,34 @@ salvage() {   # new-db: creates it and copies every row of $DB it can read. 1: t
 		printf "CREATE TEMP VIEW x_%s AS SELECT rowid AS r, 'INSERT INTO %s(rowid,%s) VALUES(' || rowid%s || ');' AS s FROM main.%s;\n" \
 			"$tb" "$tb" "$cols" "$(echo "$cols" | awk -F, '{ for (i = 1; i <= NF; i++) printf " || \047,\047 || quote(%s)", $i }')" "$tb"
 	done > "$sv/views"
-	# each table's rowids: min and max; where the end of a table is damaged, the largest its first index holds
-	for tb in $TABLES; do echo "SELECT '$tb lo ' || coalesce(min(rowid), 'none') FROM $tb; SELECT '$tb hi ' || coalesce(max(rowid), 'none') FROM $tb;"; done > "$sv/range.sql"
+	# each table's rowids: min and max. No table can hold more rows than 200 a page of the file, so a range
+	# wider than that (or backwards) means a damaged end read as nonsense (one damaged page could make it
+	# 2^40 rows of chunks, in RAM); then, and when an end can't be read, the chunks go by what the file
+	# could hold and by the table's first index.
+	{ echo "SELECT 'pages ' || page_count FROM pragma_page_count();"
+	  for tb in $TABLES; do echo "SELECT '$tb lo ' || coalesce(min(rowid), 'none') FROM $tb; SELECT '$tb hi ' || coalesce(max(rowid), 'none') FROM $tb;"; done
+	} > "$sv/range.sql"
 	salvage_read "$sv/range.sql" > "$sv/range"; salvage_ok || return 1
+	most=$(sed -n 's/^pages //p' "$sv/range"); case "$most" in ''|*[!0-9]*) most=5000 ;; esac; most=$((most * 200))
 	: > "$sv/p1.sql"
 	for tb in $TABLES; do
 		lo=$(sed -n "s/^$tb lo //p" "$sv/range"); hi=$(sed -n "s/^$tb hi //p" "$sv/range")
 		[ "$lo" = none ] && continue   # empty
-		case "$hi" in ''|*[!0-9]*)
+		case "$lo" in *[!0-9]*) lo="" ;; esac; case "$hi" in *[!0-9]*) hi="" ;; esac   # unreadable, or below 0
+		if [ -n "$lo" ] && [ -n "$hi" ] && [ "$hi" -ge "$lo" ] && [ $((hi - lo)) -le "$most" ]; then
+			awk -v t="$tb" -v lo="$lo" -v hi="$hi" 'BEGIN { for (a = lo; a <= hi; a += 100) printf "SELECT s FROM x_%s WHERE r BETWEEN %d AND %d; -- %s %d\n", t, a, a + 99, t, a }' >> "$sv/p1.sql"
+		else
+			# from the first rowid (if it reads), as many as the file could hold; and wherever the table's
+			# first index has rows (an index can be damaged too, so not the index alone)
+			l0=${lo:-1}
 			ix=$("$SQLITE" "$1" "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = '$tb' LIMIT 1;")
 			echo "SELECT rowid FROM $tb INDEXED BY $ix;" > "$sv/ix.sql"
-			hi=$(salvage_read "$sv/ix.sql" | sort -n | tail -1); salvage_ok || return 1
-			case "$hi" in [0-9]*) hi=$((hi + 1000)) ;; *)
-				case "$lo" in [0-9]*) hi=$((lo + 200000)) ;; *) continue ;; esac ;;   # neither end readable: nothing to go on
-			esac ;;
-		esac
-		case "$lo" in [0-9]*) ;; *) lo=1 ;; esac
-		awk -v t="$tb" -v lo="$lo" -v hi="$hi" 'BEGIN { for (a = lo; a <= hi; a += 100) printf "SELECT s FROM x_%s WHERE r BETWEEN %d AND %d; -- %s %d\n", t, a, a + 99, t, a }' >> "$sv/p1.sql"
+			salvage_read "$sv/ix.sql" | awk -v t="$tb" -v lo="$l0" -v n="$most" -v whole="${lo:+1}" '
+				function chunk(a) { if (!(a in s)) { s[a] = 1; printf "SELECT s FROM x_%s WHERE r BETWEEN %d AND %d; -- %s %d\n", t, a, a + 99, t, a } }
+				BEGIN { if (whole) for (a = lo; a <= lo + n; a += 100) chunk(a) }
+				/^[0-9]+$/ && $1 >= lo { chunk(lo + int(($1 - lo) / 100) * 100) }' >> "$sv/p1.sql"
+			salvage_ok || return 1
+		fi
 	done
 	: > "$sv/failed"; salvage_pass "$sv/p1.sql" "$1" "$sv/failed" || return 1
 	# the chunks that failed, read again row by row: at most 50 of them

@@ -158,11 +158,21 @@ done
 expect "again and again: 5701 samples kept every time" " 5701 5701 5701 5701 5701 5701 5701 5701 5701 5701" "$fixed"
 expect "again and again: sound, scans and events kept" "ok|336|1" "$(q "PRAGMA integrity_check")|$(q "SELECT count(DISTINCT ts) FROM scans")|$(q "SELECT count(*) FROM events")"
 
-# 3d: sqlite3 itself dies on a damaged page (old versions can): the copy carries on after the chunk it was
-# reading, and that chunk is read again row by row. A stand-in sqlite3 dies when asked for rows 2001-2100.
-# (only runs that read their SQL from stdin, over the damaged database, are looked at)
-printf '#!/bin/sh\n[ $# = 3 ] && [ "$3" = "%s" ] || exec "%s" "$@"\nin=%s/crashy.$$; cat > "$in"\nn=$(grep -n "BETWEEN 2001 AND 2100;" "$in" | head -1 | cut -d: -f1)\nif [ -n "$n" ]; then head -n $((n - 1)) "$in" | "%s" "$@"; rm -f "$in"; echo x >> %s/crashed; kill -SEGV $$; fi\n"%s" "$@" < "$in"; rc=$?; rm -f "$in"; exit $rc\n' \
-	"$D/wifiinsight.db" "$sqlite" "$t" "$sqlite" "$t" "$sqlite" > "$t/crashy"
+# 3d: sqlite3 itself dies on a damaged page (old versions can). What it hadn't written out yet is lost, so
+# its output can stop halfway through a line. The copy keeps every chunk before that one, carries on after
+# it, and reads that one again row by row. A stand-in sqlite3 dies 1500 bytes into rows 2001-2100: the
+# middle of a line. (Only runs that read their SQL from stdin, over the damaged database, are looked at.)
+cat > "$t/crashy" <<EOF
+#!/bin/sh
+[ \$# = 3 ] && [ "\$3" = "$D/wifiinsight.db" ] || exec "$sqlite" "\$@"
+in=$t/crashy.\$\$; cat > "\$in"
+n=\$(grep -n "BETWEEN 2001 AND 2100;" "\$in" | head -1 | cut -d: -f1)
+if [ -n "\$n" ]; then
+	k=\$(head -n \$((n - 1)) "\$in" | "$sqlite" "\$@" 2> /dev/null | wc -c)
+	head -n "\$n" "\$in" | "$sqlite" "\$@" | head -c \$((k + 1500)); rm -f "\$in"; echo x >> $t/crashed; kill -SEGV \$\$
+fi
+"$sqlite" "\$@" < "\$in"; rc=\$?; rm -f "\$in"; exit \$rc
+EOF
 chmod +x "$t/crashy"
 sed -i "s|^SQLITE=.*|SQLITE=\"$t/crashy\"|" "$R/jffs/addons/wifiinsight/config"
 rm -f "$D/wifiinsight.db.bad" "$D/damaged"; cp "$t/damaged.db" "$D/wifiinsight.db"
@@ -170,6 +180,23 @@ out=$(run repair 2>&1) || true
 has "sqlite3 dies: repaired all the same" "Repaired: kept 5701 samples" "$out"
 expect "sqlite3 dies: it did, once" "1" "$(wc -l < "$t/crashed" 2>/dev/null | tr -d ' ')"
 expect "sqlite3 dies: the rows it died on are there" "100" "$(q "SELECT count(*) FROM samples WHERE rowid BETWEEN 2001 AND 2100")"
+
+# 3e: a damaged end of a table can read as nonsense: here the samples table's last rowid reads as 2^40.
+# Chunks over that range would fill the router's RAM (/tmp, for hours); the copy goes by what the file
+# could hold and by the table's index instead. A stand-in sqlite3 tells that lie and notes how much SQL
+# each run is sent.
+cat > "$t/liar" <<EOF
+#!/bin/sh
+[ \$# = 3 ] && [ "\$3" = "$D/wifiinsight.db" ] || exec "$sqlite" "\$@"
+cat > $t/liar.in; wc -c < $t/liar.in >> $t/liar.sizes
+"$sqlite" "\$@" < $t/liar.in | sed 's/^samples hi [0-9]*\$/samples hi 1099511627776/'
+EOF
+chmod +x "$t/liar"
+sed -i "s|^SQLITE=.*|SQLITE=\"$t/liar\"|" "$R/jffs/addons/wifiinsight/config"
+rm -f "$D/wifiinsight.db.bad" "$D/damaged"; cp "$t/damaged.db" "$D/wifiinsight.db"
+out=$(run repair 2>&1) || true
+has "nonsense range: repaired all the same" "Repaired: kept 5701 samples" "$out"
+big=$(sort -n "$t/liar.sizes" | tail -1); [ "$big" -lt 1000000 ] && ok "nonsense range: at most $big bytes of SQL a run" || bad "nonsense range: $big bytes of SQL in one run"
 sed -i "s|^SQLITE=.*|SQLITE=\"$sqlite\"|" "$R/jffs/addons/wifiinsight/config"
 rm -f "$D/wifiinsight.db.bad"; mv "$t/kept.db" "$D/wifiinsight.db"; mv "$t/kept.bad" "$D/wifiinsight.db.bad"
 

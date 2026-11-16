@@ -125,4 +125,30 @@ case_ "5 GHz radio off" "ok, 2 networks in 3 s" "off"
 reset; echo never > "$F/eth6.ready"
 case_ "2.4 GHz gives up after 20 s" "empty, wl said \"Not Ready\" for 21 s" "ok, 2 networks in 3 s"
 
+# Another scan holds the lock for good: Scan now says it's under way at once (the page waits for that),
+# waits a minute, then gives up and tells the page why, without touching the radios
+reset; rm -f "$F"/*.started
+exec 9> "$R/tmp/wifiinsight/scan.lock"; "$t/bin/flock" -n 9
+s0=$(cat "$R/tmp/wifiinsight/scan_seq" 2>/dev/null || echo 0)
+out=$(run scan 2>&1) || true
+exec 9>&-
+case "$out" in *"A scan is already running."*) ok "lock held: says so" ;; *) bad "lock held: output"; printf '%s\n' "$out" | sed 's/^/      | /' ;; esac
+[ -z "$(ls "$F"/*.started 2>/dev/null)" ] && ok "lock held: no radio scanned" || bad "lock held: a radio was scanned"
+python3 - "$R/www/user/wifiinsight/scanstate.htm" "$s0" <<'EOF' && ok "lock held: the page is told, under a new scan number" || bad "lock held: scanstate.htm"
+import json, sys
+s = json.load(open(sys.argv[1]))
+sys.exit(0 if s['state'] == 'error' and s['seq'] == int(sys.argv[2]) + 1 and 'Another scan is still running' in s['msg'] else 1)
+EOF
+grep -q '^scan skipped: another scan is still running$' "$F/log" && ok "lock held: logged" || { bad "lock held: syslog"; cat "$F/log"; }
+
+# A scheduled scan waiting for a Scan now (a long one: one channel at a time) gives up without a word to
+# the page, which is waiting on the Scan now and must not show this one's "still running" as its result
+printf '{"state":"running","seq":7,"ts":1,"bands":{},"notes":{},"msg":""}\n' > "$R/www/user/wifiinsight/scanstate.htm"
+: > "$F/log"; exec 9> "$R/tmp/wifiinsight/scan.lock"; "$t/bin/flock" -n 9
+run scan --delay > /dev/null 2>&1 || true
+exec 9>&-
+[ "$(cat "$R/www/user/wifiinsight/scanstate.htm")" = '{"state":"running","seq":7,"ts":1,"bands":{},"notes":{},"msg":""}' ] \
+	&& ok "scheduled scan, lock held: the page's scan state left alone" || { bad "scheduled scan, lock held: scanstate.htm"; cat "$R/www/user/wifiinsight/scanstate.htm"; }
+grep -q '^scan skipped: another scan is still running$' "$F/log" && ok "scheduled scan, lock held: logged" || { bad "scheduled scan, lock held: syslog"; cat "$F/log"; }
+
 [ $fail -eq 0 ] && echo "Scan wait: all checks passed." || { echo "::error::Scan wait: some checks failed."; exit 1; }
