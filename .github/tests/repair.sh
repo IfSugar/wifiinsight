@@ -107,6 +107,72 @@ out=$(run status 2>&1) || true
 hasnt "repair: status is clean" "DAMAGED" "$out"
 hasnt "repair: no sqlite errors in status" "malformed" "$out"
 
+# The same day of samples, on a fixed date (so the same bytes every run); damaged the same way, or with
+# two of the samples table's pages unreadable.
+mv "$D/wifiinsight.db" "$t/kept.db"; mv "$D/wifiinsight.db.bad" "$t/kept.bad"
+"$sqlite" "$t/sound.db" < "$t/schema.sql"
+python3 - "$t/sound.db" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1]); t0 = 1794810725
+c.executemany('insert into samples(ts,band,obss,nocat,tx,inbss,idle,noise) values(?,?,?,?,?,?,?,?)',
+              [(t0 - i * 30, b, i % 7, 1, 2, 3, 90, -90) for i in range(2880) for b in ('2g', '5g')])
+c.executemany('insert into scans(ts,band,ch,score,aps) values(?,?,?,?,?)',
+              [(t0 - i * 1800, '5g', ch, 1.0, 2) for i in range(336) for ch in (36, 40, 44, 48)])
+c.execute("insert into events values(?, '5g', 'auto', '100/80', '36/160', '')", (t0,))
+c.commit(); c.close()
+PY
+python3 - "$t/sound.db" "$t/damaged.db" "$t/two.db" "$t/two.lost" <<'PY'
+import sqlite3, sys
+pg = 4096; src = open(sys.argv[1], 'rb').read()
+d = bytearray(src)
+for n in (20, 21, 22, 60):
+    d[n * pg + 100:n * pg + 900] = b'\xff' * 800
+open(sys.argv[2], 'wb').write(d)
+# two leaf pages of the samples table, the 4th and the 20th, with a page type sqlite doesn't know
+c = sqlite3.connect(sys.argv[1])
+leaves = [r for r in c.execute("SELECT pageno, ncell FROM dbstat WHERE name = 'samples' AND pagetype = 'leaf' ORDER BY pageno")]
+two = (leaves[3], leaves[19]); c.close()
+d = bytearray(src)
+for p, n in two: d[(p - 1) * pg] = 0xff
+open(sys.argv[3], 'wb').write(d); open(sys.argv[4], 'w').write(str(sum(n for p, n in two)))
+PY
+
+# 3b: two unreadable pages in one table. sqlite3's .dump (every version) reads a table from the start to
+# the first one, then from the end back to the last one, and loses everything between: 3660 of 5760 here.
+# Reading in chunks loses only the rows on those two pages.
+rm -f "$D/wifiinsight.db.bad" "$D/damaged"; cp "$t/two.db" "$D/wifiinsight.db"
+out=$(run repair 2>&1) || true
+expect "two damaged pages: only their rows lost" "$((5760 - $(cat "$t/two.lost")))" "$(q "SELECT count(*) FROM samples")"
+expect "two damaged pages: sound, scans and events kept" "ok|336|1" "$(q "PRAGMA integrity_check")|$(q "SELECT count(DISTINCT ts) FROM scans")|$(q "SELECT count(*) FROM events")"
+
+# 3c: the same damage as in 2, repaired again and again. sqlite3 3.25.3 (Merlin 386.1 to 3004.388.5)
+# doesn't read a damaged page the same way twice: its .dump of this very file kept 5701 samples, or only
+# the 365 before the damage, now and then (so this test failed now and then on GitHub). It must keep the
+# 5701 every time.
+fixed=""; i=0
+while [ $i -lt 10 ]; do
+	i=$((i + 1)); rm -f "$D/wifiinsight.db.bad" "$D/damaged"; cp "$t/damaged.db" "$D/wifiinsight.db"
+	run repair > /dev/null 2>&1 || true
+	fixed="$fixed $(q "SELECT count(*) FROM samples")"
+done
+expect "again and again: 5701 samples kept every time" " 5701 5701 5701 5701 5701 5701 5701 5701 5701 5701" "$fixed"
+expect "again and again: sound, scans and events kept" "ok|336|1" "$(q "PRAGMA integrity_check")|$(q "SELECT count(DISTINCT ts) FROM scans")|$(q "SELECT count(*) FROM events")"
+
+# 3d: sqlite3 itself dies on a damaged page (old versions can): the copy carries on after the chunk it was
+# reading, and that chunk is read again row by row. A stand-in sqlite3 dies when asked for rows 2001-2100.
+# (only runs that read their SQL from stdin, over the damaged database, are looked at)
+printf '#!/bin/sh\n[ $# = 3 ] && [ "$3" = "%s" ] || exec "%s" "$@"\nin=%s/crashy.$$; cat > "$in"\nn=$(grep -n "BETWEEN 2001 AND 2100;" "$in" | head -1 | cut -d: -f1)\nif [ -n "$n" ]; then head -n $((n - 1)) "$in" | "%s" "$@"; rm -f "$in"; echo x >> %s/crashed; kill -SEGV $$; fi\n"%s" "$@" < "$in"; rc=$?; rm -f "$in"; exit $rc\n' \
+	"$D/wifiinsight.db" "$sqlite" "$t" "$sqlite" "$t" "$sqlite" > "$t/crashy"
+chmod +x "$t/crashy"
+sed -i "s|^SQLITE=.*|SQLITE=\"$t/crashy\"|" "$R/jffs/addons/wifiinsight/config"
+rm -f "$D/wifiinsight.db.bad" "$D/damaged"; cp "$t/damaged.db" "$D/wifiinsight.db"
+out=$(run repair 2>&1) || true
+has "sqlite3 dies: repaired all the same" "Repaired: kept 5701 samples" "$out"
+expect "sqlite3 dies: it did, once" "1" "$(wc -l < "$t/crashed" 2>/dev/null | tr -d ' ')"
+expect "sqlite3 dies: the rows it died on are there" "100" "$(q "SELECT count(*) FROM samples WHERE rowid BETWEEN 2001 AND 2100")"
+sed -i "s|^SQLITE=.*|SQLITE=\"$sqlite\"|" "$R/jffs/addons/wifiinsight/config"
+rm -f "$D/wifiinsight.db.bad"; mv "$t/kept.db" "$D/wifiinsight.db"; mv "$t/kept.bad" "$D/wifiinsight.db.bad"
+
 # 4: repair again: nothing to do, and the .bad copy stays as it was
 m=$(ls -l "$D/wifiinsight.db.bad" | awk '{ print $5 }')
 out=$(run repair 2>&1) || true
