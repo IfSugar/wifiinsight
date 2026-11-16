@@ -1047,14 +1047,21 @@ wl_said() {   # errfile seconds fallback -> 'wl said "Not Ready" for 45 s', or '
 # driver refuses scans, and a scan would cut the check short: ASUS's own Site Survey aborts it and starts
 # it again afterwards. WiFi Insight never interrupts it: it waits for the check to end, or scans that band
 # next time, and a refusal during a check isn't taken for a driver that refuses full scans. `wl
-# dfs_ap_move` (read-only without arguments) reports "move status=2" (a check running) or 4 (switching
-# modes for it), with "Radar Scan In Progress"; drivers without background checks answer an error.
+# dfs_ap_move` (read-only without arguments) answers, on an idle RT-AX86U (3004.388.13):
+#   version=1, move status=-1
+#   dfs AP move in IDLE state
+#   version: 1, num_sub_status: 2
+#   @0: state: IDLE, time elapsed: 0ms, chanspec: 44l (0xD82E), chanspec last cleared: none, sub type: 0x00
+#   @1: state: IDLE, time elapsed: 0ms, chanspec: none, chanspec last cleared: none, sub type: 0x01
+# A check running: move status 2 ("Radar Scan In Progress"), or 4 (switching modes for one), or the
+# background core (@1) in "PRE-ISM Channel Availability Check(CAC)". Drivers without it answer an error.
 BG_WAIT=90
 bg_radar() {   # ifc band -> true while the radio runs a background radar check
 	case "$2" in 5g*) ;; *) return 1 ;; esac
 	wl -i "$1" dfs_ap_move 2>/dev/null | awk '
 		{ l = tolower($0) }
 		l ~ /radar scan in progress|mode switch in progress/ { b = 1 }
+		l ~ /^@1:.*state: *pre-ism channel availability check/ { b = 1 }
 		match(l, /move status *[=:] *-?[0-9]+/) { s = substr(l, RSTART, RLENGTH); sub(/.*[=:] */, "", s); if (s + 0 == 2 || s + 0 == 4) b = 1 }
 		END { exit !b }'
 }
