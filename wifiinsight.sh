@@ -816,13 +816,14 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 	# not take this one's giving up for that one's. BusyBox flock has no -w.
 	[ $sched = 0 ] && { scan_next_seq; scan_state running; }
 	i=0; until flock -n 7; do
-		i=$((i + 1))
+		i=$((i + 1)); [ $i = 1 ] && lock_unstick scan 7 && break
 		if [ $i -gt 30 ]; then
 			[ $sched = 0 ] && scan_state error "" "Another scan is still running. Try again in a minute."
 			say "A scan is already running."; log "scan skipped: another scan is still running"; return 0
 		fi
 		sleep 2
 	done
+	lock_note scan scan
 	[ $sched = 1 ] && { sleep 8; scan_next_seq; scan_state running; }
 	trap 'rm -f "$SCAN_FLAG"' EXIT; trap 'rm -f "$SCAN_FLAG"; exit 1' INT TERM HUP
 	touch "$SCAN_FLAG"
@@ -942,7 +943,8 @@ trickle() {
 	ready || return 0
 	mkdir -p "$TMPD"
 	exec 7>"$TMPD/scan.lock"
-	flock -n 7 || return 0
+	flock -n 7 || lock_unstick scan 7 || { lock_busy scan trickle; return 0; }
+	lock_note scan trickle
 	lowprio
 	ownf=""; did=0
 	for r in $(radios); do
@@ -1328,13 +1330,77 @@ export_scans() {
 export_all() { export_live; export_week; export_month; export_scans; }
 
 # ---- scheduled entry points --------------------------------------------------
+# ---- runs that hang ------------------------------------------------------------
+# A command can hang for good: on some firmware, nvram get waits for an answer from the kernel that never
+# comes (issue #28: the firmware's own processes hung the same way). The run that called it kept its lock,
+# and every later run skipped without a word: no samples for hours, until a reboot. So each run that takes
+# a lock notes itself in <lock>.run (its PID, when, and what it is), and a run that finds the lock taken
+# looks there: a collect, trickle or scan going on far longer than one ever takes is stopped, with all it
+# started, and the syslog says what it was stuck in. Prune, repair and migrate can take long: left alone.
+lock_note() {   # lock action: this run just took the lock
+	echo "$$ $(now) $2" > "$TMPD/$1.run"
+}
+run_max() {   # action -> how long a run of it can take before it counts as stuck; nothing: never stopped
+	case "$1" in collect) echo 300 ;; trickle) echo 600 ;; scan) echo 1200 ;; esac
+}
+proc_cmd() { tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null | sed 's/ $//'; }
+lock_unstick() {   # lock fd: the lock is taken. 0 when its holder was a stuck run, now stopped, and the lock is this run's
+	_lf="$TMPD/$1.lock"
+	read -r _sp _st _sa < "$TMPD/$1.run" 2>/dev/null || return 1
+	_mx=$(run_max "$_sa"); [ -n "$_mx" ] || return 1
+	_ag=$(( $(now) - _st )); [ "$_ag" -ge "$_mx" ] 2>/dev/null || return 1
+	eval "exec $2>&-"   # this run's own copy of the lock file, so it isn't counted among the holders
+	# Who has the lock file open: the stuck run and what it started (subshells and commands inherit it),
+	# a command whose run is gone, or a WiFi Insight run waiting for the lock (prune, repair: left alone).
+	_h=$(ls -l /proc/[0-9]*/fd 2>/dev/null | awk -v f="$_lf" '/^\/proc\/[0-9]+\/fd\/?:$/ { split($0, a, "/"); p = a[3]; next } $NF == f { print p }' | sort -u)
+	_k=""; _other=0
+	case "$(proc_cmd "$_sp")" in
+		*"$NAME"*" $_sa"*)   # the run is still there: it and all it started, when it does hold the lock
+			[ "$_sp" = "$$" ] && { eval "exec $2>\"\$_lf\""; return 1; }
+			_k=$(cat /proc/[0-9]*/stat 2>/dev/null | sed -n 's/^\([0-9]*\) (.*) [A-Za-z] \([0-9]*\) .*/\1 \2/p' | awk -v r="$_sp" '
+				{ pp[$1] = $2 }
+				END { k[r] = 1; do { c = 0; for (p in pp) if (!(p in k) && (pp[p] in k)) { k[p] = 1; c = 1 } } while (c); for (p in k) print p }')
+			_held=0; for _p in $_h; do case " $(echo $_k) " in *" $_p "*) _held=1 ;; esac; done
+			[ $_held = 1 ] || _k="" ;;
+	esac
+	for _p in $_h; do
+		case " $(echo $_k) " in *" $_p "*) continue ;; esac
+		case "$(proc_cmd "$_p")" in *"$NAME"*) _other=1 ;; *) _k="$_k $_p" ;; esac
+	done
+	[ $_other = 1 ] && [ -z "$(echo $_k)" ] && { eval "exec $2>\"\$_lf\""; return 1; }
+	_in=""
+	for _p in $(echo $_k | tr ' ' '\n' | sort -n); do   # in the order they started
+		[ "$_p" = "$$" ] && continue
+		_c=$(proc_cmd "$_p"); case "$_c" in ''|*"$NAME"*) ;; *) _in="${_in:+$_in, }$_c" ;; esac
+	done
+	if [ -n "$(echo $_k)" ]; then
+		kill $_k 2>/dev/null
+		_j=0; while [ $_j -lt 3 ]; do _a=""; for _p in $_k; do kill -0 "$_p" 2>/dev/null && _a="$_a $_p"; done; [ -z "$_a" ] && break; sleep 1; _j=$((_j + 1)); done
+		[ -n "$_a" ] && kill -9 $_a 2>/dev/null
+		log "stopped a $_sa run stuck for $((_ag / 60)) min${_in:+, in: $_in}"
+	fi
+	eval "exec $2>\"\$_lf\""
+	_j=0; until flock -n "$2"; do _j=$((_j + 1)); [ $_j -gt 5 ] && return 1; sleep 1; done
+	return 0
+}
+lock_busy() {   # lock who: this run skips. When the lock has been held for long, say so (every 30 min at most)
+	read -r _sp _st _sa < "$TMPD/$1.run" 2>/dev/null || return 0
+	_ag=$(( $(now) - _st )); [ "$_ag" -ge 300 ] 2>/dev/null || return 0
+	_w=$(cat "$TMPD/$1.warned" 2>/dev/null)
+	[ -n "$_w" ] && [ $(( $(now) - _w )) -lt 1800 ] 2>/dev/null && return 0
+	now > "$TMPD/$1.warned"
+	log "$2 skipped: a $_sa run has had the $1 lock for $((_ag / 60)) min"
+}
+
 collect() {
 	[ "$COLLECTION" = off ] && return 0   # return, not exit: install calls this too
 	ready || exit 0
 	lowprio
 	mkdir -p "$TMPD"
 	exec 6>"$TMPD/collect.lock"
-	flock -n 6 || exit 0   # previous run still busy, or prune/VACUUM running: skip this minute
+	# previous run still busy, or prune/VACUUM running: skip this minute (unless that run is stuck)
+	flock -n 6 || lock_unstick collect 6 || { lock_busy collect collect; exit 0; }
+	lock_note collect collect
 	t0=$(now)
 	detect_restart
 	detect_radar
@@ -1359,7 +1425,12 @@ prune() {
 	exec 6>"$TMPD/collect.lock"
 	# Wait (up to 2 min) for the current collect, then hold sampling off while we run.
 	# BusyBox flock has no -w, so poll with -n.
-	i=0; until flock -n 6; do i=$((i + 1)); [ $i -gt 60 ] && exit 0; sleep 2; done
+	i=0; until flock -n 6; do
+		i=$((i + 1)); [ $i = 1 ] && lock_unstick collect 6 && break
+		if [ $i -gt 60 ]; then read -r _x _y a < "$TMPD/collect.run" 2>/dev/null; log "prune skipped: a ${a:-WiFi Insight} run kept the database busy for 2 min"; exit 0; fi
+		sleep 2
+	done
+	lock_note collect prune
 	t=$(now); cut=$((t - RETAIN_DAYS * 86400)); evcut=$((t - 365 * 86400))
 	sql "DELETE FROM samples WHERE ts<$cut; DELETE FROM scans WHERE ts<$cut; DELETE FROM chanim WHERE ts<$cut; DELETE FROM aps WHERE ts<$cut; DELETE FROM events WHERE ts<$evcut; PRAGMA optimize;"
 	# Once a week, compact the file, but only when a quarter or more of it is free pages: it rewrites the
@@ -1667,9 +1738,11 @@ migrate_data() {
 	fi
 	mkdir -p "$TMPD"
 	exec 7>"$TMPD/scan.lock"
-	_i=0; until flock -n 7; do _i=$((_i + 1)); [ $_i -gt 150 ] && { say "A scan is still running: the history stays in $_old for now."; return 0; }; sleep 2; done
+	_i=0; until flock -n 7; do _i=$((_i + 1)); [ $_i = 1 ] && lock_unstick scan 7 && break; [ $_i -gt 150 ] && { say "A scan is still running: the history stays in $_old for now."; return 0; }; sleep 2; done
+	lock_note scan migrate
 	exec 6>"$TMPD/collect.lock"
-	_i=0; until flock -n 6; do _i=$((_i + 1)); [ $_i -gt 60 ] && { flock -u 7; say "Sampling is still running: the history stays in $_old for now."; return 0; }; sleep 2; done
+	_i=0; until flock -n 6; do _i=$((_i + 1)); [ $_i = 1 ] && lock_unstick collect 6 && break; [ $_i -gt 60 ] && { flock -u 7; say "Sampling is still running: the history stays in $_old for now."; return 0; }; sleep 2; done
+	lock_note collect migrate
 	_real=$(readlink -f "$_old")
 	rmdir "$_new" 2>/dev/null
 	if mv "$_real" "$_new" 2>/dev/null; then
@@ -2049,6 +2122,11 @@ status() {
 	if [ -f "$DB" ]; then
 		t=$(now)
 		sql "SELECT '  ' || band || ': ' || count(*) || ' samples, last ' || ($t - max(ts)) || 's ago' FROM samples GROUP BY band;"
+		# no new samples for 10 min while collecting: something stops it (the syslog says what, when it knows)
+		if [ "$COLLECTION" != off ]; then
+			ls_=$(sql "SELECT max(ts) FROM samples;")
+			[ -n "$ls_" ] && [ $((t - ls_)) -gt 600 ] && say "  Sampling looks stuck: no new samples for $(( (t - ls_) / 60 )) min. The system log may say why (lines from $NAME)."
+		fi
 		sql "SELECT '  last scan: ' || ($t - max(ts)) || 's ago' FROM scans;"
 		say "Recent events:"
 		sql "SELECT '  ' || datetime(ts,'unixepoch','localtime') || '  ' || band || '  ' || tag || '  ' || coalesce(old,'') || ' -> ' || coalesce(new,'') FROM events ORDER BY ts DESC LIMIT 8;"
@@ -2152,9 +2230,11 @@ repair() {   # [force]: rebuild even when the check finds nothing wrong
 	[ -f "$DB" ] || die "There's no database at $DB."
 	mkdir -p "$TMPD"
 	exec 7>"$TMPD/scan.lock"
-	i=0; until flock -n 7; do i=$((i + 1)); [ $i -gt 150 ] && die "A scan is still running. Try again in a few minutes."; sleep 2; done
+	i=0; until flock -n 7; do i=$((i + 1)); [ $i = 1 ] && lock_unstick scan 7 && break; [ $i -gt 150 ] && die "A scan is still running. Try again in a few minutes."; sleep 2; done
+	lock_note scan repair
 	exec 6>"$TMPD/collect.lock"
-	i=0; until flock -n 6; do i=$((i + 1)); [ $i -gt 60 ] && die "Sampling is still running. Try again in a minute."; sleep 2; done
+	i=0; until flock -n 6; do i=$((i + 1)); [ $i = 1 ] && lock_unstick collect 6 && break; [ $i -gt 60 ] && die "Sampling is still running. Try again in a minute."; sleep 2; done
+	lock_note collect repair
 	sql_guard
 	g=$("$SQLITE" -batch -noheader -bail "$DB" "$SQL_GUARD SELECT 'mine';" 2>&1 | head -2)
 	case "$g" in

@@ -5,6 +5,7 @@ What changed in each release of WiFi Insight. The release workflow copies a vers
 ## Unreleased
 
 - **Colours that follow the router's theme.** On ROG and TUF routers, whose pages are black with red or amber, WiFi Insight's cards, controls and charts turn black too, with red (ROG) or amber (TUF) for the open tab and the router's channel, as Arteria does. The data's colours stay as they are on every router: other networks, yours, non-Wi-Fi, radar and the rest mean the same everywhere.
+- **Sampling no longer stops for good when a command it runs hangs** (#28). On some firmware, `nvram get` can wait forever for an answer from the kernel (the firmware's own processes hang the same way). The run stuck in it kept its lock, and every later run skipped without a word: no samples for hours, until a reboot. Now the next run stops a sampling run stuck for over 5 minutes (a scan: 20 minutes), with everything it started, and the system log says what it was stuck in; sampling carries on the next minute. Prune and repair, which can take long, are never stopped. When a run is still skipped because another has held the lock for long, the log says so (every 30 minutes at most), and `status` and the page warn when there have been no new samples for 10 minutes. Thanks to somar05 for the diagnosis.
 
 ## 2.1.0
 

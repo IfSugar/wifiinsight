@@ -686,9 +686,18 @@ function noScansMsg() {
 	var why = lastScanTrouble();
 	return why ? esc(why) + ' Press <b>Scan now</b> to try again, or wait for the next scheduled scan.' : 'No scans yet. Press <b>Scan now</b> or wait for the next scheduled scan.';
 }
-/* The database on the USB drive is damaged (a power cut mid-write): say so until it's repaired. */
+/* The database on the USB drive is damaged (a power cut mid-write): say so until it's repaired. And when
+   sampling has stopped (live.htm, which each sampling run writes, is over 10 minutes old while collecting),
+   say that: up to 2.1.0 a run stuck in a command kept sampling stopped for hours without a word. */
 function dbWarn() {
-	var w = $('wiWarn'), d = WI.live && WI.live.damaged;
+	var w = $('wiWarn'), L = WI.live, d = L && L.damaged, age = L && L.generated ? Date.now() / 1000 - L.generated : 0;
+	if (!d && L && L.collection !== 'off' && age > 600) {
+		w.innerHTML = 'No new samples since ' + esc(new Date(L.generated * 1000).toLocaleString()) + ' (' + ago(age) + '): sampling looks stuck. ' +
+			'WiFi Insight stops a run stuck in a command within minutes and says so in the system log (lines from wifiinsight). If this stays, ' +
+			'run <code>/jffs/addons/wifiinsight/wifiinsight.sh status</code> over SSH, or restart the router.';
+		w.style.display = 'block';
+		return;
+	}
 	if (!d) { w.style.display = 'none'; return; }
 	w.innerHTML = 'The history database is damaged (noticed ' + new Date(d * 1000).toLocaleString() + '), so some charts may have gaps or stop updating. ' +
 		'To repair it, run <code>/jffs/addons/wifiinsight/wifiinsight.sh repair</code> over SSH.' + (WI.live.fs_note ? ' ' + esc(WI.live.fs_note) : '');
