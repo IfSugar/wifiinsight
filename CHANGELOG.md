@@ -2,6 +2,10 @@
 
 What changed in each release of WiFi Insight. The release workflow copies a version's section into its GitHub release notes, so write for people running the addon.
 
+## Unreleased
+
+- **Colours that follow the router's theme.** On ROG and TUF routers, whose pages are black with red or amber, WiFi Insight's cards, controls and charts turn black too, with red (ROG) or amber (TUF) for the open tab and the router's channel, as Arteria does. The data's colours stay as they are on every router: other networks, yours, non-Wi-Fi, radar and the rest mean the same everywhere.
+
 ## 2.1.0
 
 Gentler scanning on routers that limit one-channel scans or check for radar in the background, a `repair` that keeps nearly everything still readable, and a page that waits while its tab is hidden.

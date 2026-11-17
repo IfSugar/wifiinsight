@@ -33,13 +33,21 @@
 	--unclass: #c98500;
 	--plcp: #d55181;
 	--fail: #e66767;
-	--accent: #ffcc00;
+	--accent: #ffcc00;           /* the router's channel, the open tab, focus */
+	--accent-soft: rgba(255,204,0,0.25);
+	--cur-bg: #5c4e14;           /* the router's channel in the networks table */
+	--cur-ink: #ffe27a;
+	--field: #1f282b;            /* fields, code, the quiet-hours grid */
+	--tip: #1c2427;              /* tooltips */
+	--chip: #3e4d52;             /* tags and the signal bar's track */
+	--cell: #3a474b;             /* the quiet-hours grid's cell borders */
+	--check: var(--sel);         /* ticked boxes */
 	font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
 	color: var(--ink);
 	font-size: 12px;
 }
 #wi * { box-sizing: border-box; }
-#wi code { background: #1f282b; padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+#wi code { background: var(--field); padding: 1px 5px; border-radius: 4px; font-size: 11px; }
 #wi .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--axis); margin: 2px 0 12px; }
 #wi .tabs button { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--ink-2); font: inherit; font-size: 13px; padding: 8px 12px 7px; cursor: pointer; margin-bottom: -1px; }
 #wi .tabs button:hover { color: var(--ink); }
@@ -80,7 +88,7 @@
 #wi .legend { display: flex; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
 #wi .legend label, #wi .legend span.li { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-2); user-select: none; white-space: nowrap; }
 #wi .legend label { cursor: pointer; }
-#wi .legend input { margin: 0; accent-color: var(--sel); }
+#wi .legend input { margin: 0; accent-color: var(--check); }
 #wi .chartbox { position: relative; height: 230px; }
 #wi .chartbox.sm { height: 170px; }
 #wi .empty { color: var(--muted); text-align: center; padding: 40px 0; }
@@ -89,7 +97,7 @@
 #wi .foot { display: flex; align-items: center; gap: 16px; margin-top: 8px; color: var(--ink-2); flex-wrap: wrap; }
 #wi .ramp { display: inline-flex; align-items: center; gap: 6px; }
 #wi .ramp i { display: inline-block; width: 120px; height: 8px; border-radius: 4px; }
-#wi .tip { position: absolute; pointer-events: none; background: #1c2427; border: 1px solid var(--axis); border-radius: 6px; padding: 7px 9px; font-size: 11px; line-height: 1.5; color: var(--ink); white-space: nowrap; z-index: 5; display: none; box-shadow: 0 4px 14px rgba(0,0,0,.35); }
+#wi .tip { position: absolute; pointer-events: none; background: var(--tip); border: 1px solid var(--axis); border-radius: 6px; padding: 7px 9px; font-size: 11px; line-height: 1.5; color: var(--ink); white-space: nowrap; z-index: 5; display: none; box-shadow: 0 4px 14px rgba(0,0,0,.35); }
 #wi .tip .m { color: var(--muted); }
 #wi table.t { width: 100%; border-collapse: collapse; }
 #wi table.t th { text-align: left; color: var(--muted); font-weight: 500; font-size: 11px; padding: 6px 8px; border-bottom: 1px solid var(--axis); white-space: nowrap; }
@@ -100,15 +108,15 @@
 #wi table.t td.mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; color: var(--ink-2); }
 #wi table.t td.dim { color: var(--muted); }
 #wi table.t tr:last-child td { border-bottom: 0; }
-#wi .tag { display: inline-block; padding: 2px 7px; border-radius: 10px; font-size: 11px; background: #3e4d52; color: var(--ink); white-space: nowrap; }
+#wi .tag { display: inline-block; padding: 2px 7px; border-radius: 10px; font-size: 11px; background: var(--chip); color: var(--ink); white-space: nowrap; }
 #wi .tag.radar { background: #6b2b2b; }
 #wi .tag.manual { background: #2f4f6b; }
 #wi .tag.auto, #wi .tag.bandwidth { background: #2c5a49; }
 #wi .tag.restart, #wi .tag.scheduled { background: #4a4a3a; }
 #wi .pill { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 8px; font-size: 10px; background: var(--sel); color: #fff; vertical-align: 1px; white-space: nowrap; }
-#wi .pill.dfs { background: #3e4d52; color: var(--ink-2); }
-#wi .pill.cur { background: #5c4e14; color: #ffe27a; }
-#wi .sig { display: inline-block; width: 42px; height: 5px; background: #3e4d52; border-radius: 3px; vertical-align: middle; margin-right: 6px; overflow: hidden; }
+#wi .pill.dfs { background: var(--chip); color: var(--ink-2); }
+#wi .pill.cur { background: var(--cur-bg); color: var(--cur-ink); }
+#wi .sig { display: inline-block; width: 42px; height: 5px; background: var(--chip); border-radius: 3px; vertical-align: middle; margin-right: 6px; overflow: hidden; }
 #wi .sig i { display: block; height: 100%; background: var(--ink-2); border-radius: 3px; }
 #wi .more { background: none; border: 0; color: var(--muted); font: inherit; cursor: pointer; padding: 6px 0 0; text-decoration: underline; }
 #wi .note { color: var(--muted); font-size: 11px; line-height: 1.5; margin: 4px 2px 0; }
@@ -116,13 +124,13 @@
 #wi .form { display: grid; grid-template-columns: 200px 1fr; gap: 14px 16px; align-items: start; }
 #wi .form .lbl { color: var(--ink); padding-top: 6px; }
 #wi .form .hint { color: var(--muted); font-size: 11px; margin-top: 4px; line-height: 1.4; }
-#wi select, #wi input[type=text] { background-color: #1f282b; border: 1px solid var(--axis); color: var(--ink); font: inherit; padding: 6px 12px; border-radius: 6px; }
+#wi select, #wi input[type=text] { background-color: var(--field); border: 1px solid var(--axis); color: var(--ink); font: inherit; padding: 6px 12px; border-radius: 6px; }
 /* Own chevron with the same 12px inset as the text, instead of the browser's arrow hugging the edge */
 #wi select { -webkit-appearance: none; -moz-appearance: none; appearance: none; padding-right: 34px; cursor: pointer;
 	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%2393a9b1' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 	background-repeat: no-repeat; background-position: right 12px center; background-size: 12px 8px; }
 #wi select:hover { border-color: var(--muted); }
-#wi select option { background-color: #1f282b; color: var(--ink); }
+#wi select option { background-color: var(--field); color: var(--ink); }
 #wi input[type=text] { width: 100%; max-width: 380px; }
 #wi .saved { color: #7fd1ad; margin-left: 10px; display: none; }
 #wi .scannote { color: var(--muted); font-size: 12px; }
@@ -143,12 +151,12 @@
 #wi .qrow > .g6 { margin-right: 6px; }
 #wi .qrow > .gl { margin-right: 0; }
 #wi .qrow.qhead > span.qt { color: var(--muted); font-size: 10px; white-space: nowrap; overflow: visible; }
-#wi .qrow > button { height: 22px; padding: 0; border-radius: 2px; border: 1px solid #3a474b; background: #1f282b; cursor: pointer; }
+#wi .qrow > button { height: 22px; padding: 0; border-radius: 2px; border: 1px solid var(--cell); background: var(--field); cursor: pointer; }
 #wi .qrow > button:hover { border-color: var(--muted); }
 #wi .qrow > button.on { background: var(--unclass); border-color: var(--unclass); }
 #wi .qrow > button.on:hover { border-color: #ffd27a; }
 #wi .qrow > button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-#wi .qsum { margin-top: 12px; background: #1f282b; border: 1px solid var(--axis); border-radius: 6px; padding: 9px 12px; line-height: 1.6; }
+#wi .qsum { margin-top: 12px; background: var(--field); border: 1px solid var(--axis); border-radius: 6px; padding: 9px 12px; line-height: 1.6; }
 #wi .qsum .k { color: var(--muted); }
 #wi .qkey { display: inline-flex; align-items: center; gap: 6px; }
 #wi .qkey i { display: inline-block; width: 12px; height: 12px; border-radius: 2px; box-sizing: border-box; }
@@ -158,6 +166,13 @@
 #wi .qband .t { flex: none; text-align: right; padding-right: 6px; color: var(--muted); font-size: 11px; }
 #wi .qband .b { flex: 1; height: 22px; margin: 0 5px 0 1px; border-radius: 3px; border: 1px dashed var(--unclass); color: #f3e2b4; font-size: 11px;
 	display: flex; align-items: center; justify-content: center; background: repeating-linear-gradient(135deg, rgba(201,133,0,0.16) 0 6px, transparent 6px 12px); }
+/* The router's own theme: ROG and TUF models' pages are black, with red or amber (the firmware says which: rog_support,
+   tuf_support, in its state.js). WiFi Insight follows, as Arteria does: its cards, controls and highlights (the router's
+   channel, the open tab). The data's colours stay: they mean the same on every router. Warnings look the same too. */
+#wi.th-rog, #wi.th-tuf { --surface: #17181a; --axis: #3d4043; --muted: #a2a6a9; --sel: #4c5054; --field: #101112; --tip: #101112;
+	--chip: #2d2f32; --cell: #2d2f32; --check: #6c7075; }
+#wi.th-rog { --accent: #ff3349; --accent-soft: rgba(255,51,73,0.25); --cur-bg: #5c1a22; --cur-ink: #ff9aa5; }
+#wi.th-tuf { --accent: #ffbb28; --accent-soft: rgba(255,187,40,0.25); --cur-bg: #5a4210; --cur-ink: #ffd88a; }
 </style>
 <script type="text/javascript">
 var custom_settings = <% get_custom_settings(); %>;
@@ -204,13 +219,29 @@ var TAGS = {
 };
 var PHY = { be: 'Wi-Fi 7', ax: 'Wi-Fi 6', ac: 'Wi-Fi 5', n: 'Wi-Fi 4', g: 'Legacy', a: 'Legacy' };
 var RAMP = ['#eff4fc', '#d8e7fd', '#c3d9fa', '#afccf5', '#9bbff0', '#88b2ea', '#75a4e3', '#6297dd', '#4e8ad5', '#397dce', '#216fc6', '#0062ba'];   /* clean (near-white) -> busy (deep blue), even OKLab lightness steps */
-var C = { others: '#3987e5', nonwifi: '#d95926', yours: '#199e70', rx: '#9085e9', unclass: '#c98500', plcp: '#d55181', fail: '#e66767', idle: '#46555a', grid: 'rgba(255,255,255,0.07)', tick: '#93a9b1', ink2: '#c3c2b7', surface: '#2b3539' };
+var C = { others: '#3987e5', nonwifi: '#d95926', yours: '#199e70', rx: '#9085e9', unclass: '#c98500', plcp: '#d55181', fail: '#e66767', idle: '#46555a', grid: 'rgba(255,255,255,0.07)', tick: '#93a9b1', ink2: '#c3c2b7', surface: '#2b3539',
+	axis: '#4a585d', tip: '#1c2427', nodata: '#2f3a3e', accent: '#ffcc00', noise: '#5f7d87' };   /* the last five, tick, idle and surface follow the router's theme (theme()) */
 /* live sample columns / 15-minute aggregate columns */
 var FL = { obss: 1, nocat: 2, tx: 3, inbss: 4, idle: 5, glitch: 6, noise: 7, nopkt: 11, doze: 12, txop: 13, goodtx: 14, badtx: 15, badplcp: 16, knoise: 17 };
 var FW = { obss: 1, nocat: 2, yours: 3, idle: 4, glitch: 6, badplcp: 7, noise: 8, nopkt: 9, tx: 10, inbss: 11, goodtx: 12, badtx: 13 };
 
 function store(k, v) { try { if (v === undefined) return localStorage.getItem('wi_' + k); localStorage.setItem('wi_' + k, v); } catch (e) { return null; } }
 function $(id) { return document.getElementById(id); }
+function alpha(hex, a) {   /* '#rrggbb' at opacity a */
+	var n = parseInt(hex.slice(1), 16);
+	return 'rgba(' + (n >> 16) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+}
+/* The router's own theme: the firmware says which (rog_support, tuf_support, in its state.js). ROG and TUF pages are black
+   with red or amber: the page follows (the CSS's .th-rog, .th-tuf), and so do the charts' axes, tooltips and the router's
+   channel. */
+function theme() {
+	var t = '';
+	try { t = window.rog_support ? 'rog' : (window.tuf_support ? 'tuf' : ''); } catch (e) { /* no firmware globals: the standard theme */ }
+	if (!t) return;
+	$('wi').classList.add('th-' + t);
+	C.accent = t === 'rog' ? '#ff3349' : '#ffbb28';
+	C.tick = '#a2a6a9'; C.axis = '#3d4043'; C.tip = '#101112'; C.surface = '#17181a'; C.nodata = '#2b2d30'; C.idle = '#46494d'; C.noise = '#686c70';
+}
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
 function pad(n) { return (n < 10 ? '0' : '') + n; }
 function hm(ts) { var d = new Date(ts * 1000); return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
@@ -270,7 +301,7 @@ function chanTags(ch) { return isWx(ch) ? 'DFS, weather radar' : isDfs(ch) ? 'DF
 /* The DFS bracket under a channel axis, with the weather-radar channels as a heavier part of it.
    xr(c) gives a channel's [left, right] in pixels. */
 function dfsBracket(ctx, ch, xr, y) {
-	ctx.strokeStyle = 'rgba(147,169,177,0.6)'; ctx.lineWidth = 1; ctx.setLineDash([]);
+	ctx.strokeStyle = alpha(C.tick, 0.6); ctx.lineWidth = 1; ctx.setLineDash([]);
 	ctx.fillStyle = C.tick; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
 	var runs = [], cur = null;
 	ch.forEach(function (c) {
@@ -283,7 +314,7 @@ function dfsBracket(ctx, ch, xr, y) {
 		ctx.beginPath(); ctx.moveTo(x1, y - 3); ctx.lineTo(x1, y); ctx.lineTo(x2, y); ctx.lineTo(x2, y - 3); ctx.stroke();
 		if (run.wa != null) {
 			var w1 = xr(run.wa)[0] + 2, w2 = xr(run.wb)[1] - 2;
-			ctx.fillStyle = 'rgba(147,169,177,0.9)'; ctx.fillRect(w1, y - 1, w2 - w1, 3); ctx.fillStyle = C.tick;
+			ctx.fillStyle = alpha(C.tick, 0.9); ctx.fillRect(w1, y - 1, w2 - w1, 3); ctx.fillStyle = C.tick;
 			ctx.fillText(ctx.measureText('Weather radar').width < w2 - w1 ? 'Weather radar' : 'Weather', (w1 + w2) / 2, y + 3);
 			lx = (w1 - x1 >= x2 - w2) ? (x1 + w1) / 2 : (w2 + x2) / 2; ly = y + 3;   /* "DFS" on the wider side, level with it */
 			if (Math.abs(w1 - x1) < 30 && Math.abs(x2 - w2) < 30) return;
@@ -450,7 +481,7 @@ function drawChart(key, boxId, type, datasets, o) {
 		if (WI.hidden[key + ':' + d.label]) d.hidden = true;
 	});
 	var scales = {
-		x: o.x || { type: 'linear', grid: { color: C.grid, drawTicks: false }, border: { color: '#4a585d' }, ticks: { color: C.tick, maxTicksLimit: 8, padding: 6, font: { size: 11 } } },
+		x: o.x || { type: 'linear', grid: { color: C.grid, drawTicks: false }, border: { color: C.axis }, ticks: { color: C.tick, maxTicksLimit: 8, padding: 6, font: { size: 11 } } },
 		y: { grid: { color: C.grid, drawTicks: false }, border: { display: false }, ticks: { color: C.tick, padding: 6, font: { size: 11 } } }
 	};
 	if (o.yMin !== undefined) scales.y.min = o.yMin;
@@ -470,7 +501,7 @@ function drawChart(key, boxId, type, datasets, o) {
 			plugins: {
 				legend: { display: false },
 				tooltip: {
-					backgroundColor: '#1c2427', borderColor: '#4a585d', borderWidth: 1, titleColor: '#f0efec', bodyColor: '#f0efec',
+					backgroundColor: C.tip, borderColor: C.axis, borderWidth: 1, titleColor: '#f0efec', bodyColor: '#f0efec',
 					padding: 9, boxWidth: 10, boxHeight: 3,
 					filter: function (it) { return it.parsed.y != null; },
 					callbacks: {
@@ -696,7 +727,7 @@ function renderHeat() {
 	var colW = (P.w - padL - padR) / ch.length, gx = colW > 8 ? 2 : 1, gy = rowH >= 8 ? 2 : (rowH >= 5 ? 1 : 0);
 	for (var i = 0; i < rows.length; i++) for (var j = 0; j < ch.length; j++) {
 		var c = rows[i].cells[ch[j]], v = cellVal(c, src);
-		ctx.fillStyle = v == null ? '#2f3a3e' : rampColor(src === 'measured' ? Math.min(100, v * 2) : v);   /* measured: full colour at 50% of airtime */
+		ctx.fillStyle = v == null ? C.nodata : rampColor(src === 'measured' ? Math.min(100, v * 2) : v);   /* measured: full colour at 50% of airtime */
 		if (rowH < 3) ctx.fillRect(padL + j * colW + gx / 2, padT + i * rowH, colW - gx, rowH + 0.6);
 		else roundRect(ctx, padL + j * colW + gx / 2, padT + i * rowH + gy / 2, colW - gx, rowH - gy, rowH >= 8 ? 3 : 1);
 	}
@@ -729,7 +760,7 @@ function activeBox(ctx, ch, r, padL, colW, top, h) {
 	if (!sp.length && ch.indexOf(r.ctl) >= 0) sp = [r.ctl];
 	if (!sp.length) return;
 	var a = ch.indexOf(sp[0]), b = ch.indexOf(sp[sp.length - 1]);
-	ctx.strokeStyle = '#ffcc00'; ctx.lineWidth = 2; ctx.setLineDash([]);
+	ctx.strokeStyle = C.accent; ctx.lineWidth = 2; ctx.setLineDash([]);
 	ctx.strokeRect(padL + a * colW + 1, top, (b - a + 1) * colW - 2, h);
 }
 function roundRect(ctx, x, y, w, h, r) {
@@ -827,7 +858,7 @@ function renderSignalMap(list) {
 	// router's channel band
 	if (r) {
 		var e = g.edges({ center: r.center, width: r.width, ctl: r.ctl });
-		if (e) { ctx.fillStyle = 'rgba(255,204,0,0.07)'; ctx.fillRect(e[0], g.padT, e[1] - e[0], g.gh); ctx.strokeStyle = 'rgba(255,204,0,0.6)'; ctx.setLineDash([4, 3]); ctx.strokeRect(e[0], g.padT, e[1] - e[0], g.gh); ctx.setLineDash([]); }
+		if (e) { ctx.fillStyle = alpha(C.accent, 0.07); ctx.fillRect(e[0], g.padT, e[1] - e[0], g.gh); ctx.strokeStyle = alpha(C.accent, 0.6); ctx.setLineDash([4, 3]); ctx.strokeRect(e[0], g.padT, e[1] - e[0], g.gh); ctx.setLineDash([]); }
 	}
 	// shapes: weakest first so strong ones sit on top
 	var shapes = [];
@@ -946,7 +977,7 @@ function renderChannels() {
 	$('wiCntSub').textContent = 'Counted by primary channel in the latest scan' + (olderN ? ', and in earlier scans for channels it didn\'t cover' : '') + '.'
 		+ (anyMine ? '' : ' Your router doesn\'t hear its own network; the shaded area is its channel.');
 	var barBase = { borderRadius: { topLeft: 4, topRight: 4 }, borderSkipped: 'bottom', categoryPercentage: 0.72, barPercentage: 0.9, borderWidth: { top: 2 }, borderColor: C.surface };
-	var xCat = { type: 'category', grid: { display: false }, border: { color: '#4a585d' }, ticks: { color: C.tick, font: { size: 11 }, autoSkip: ch.length > 30, autoSkipPadding: 6, maxRotation: 0 } };   /* 6 GHz has 59 channels */
+	var xCat = { type: 'category', grid: { display: false }, border: { color: C.axis }, ticks: { color: C.tick, font: { size: 11 }, autoSkip: ch.length > 30, autoSkipPadding: 6, maxRotation: 0 } };   /* 6 GHz has 59 channels */
 	drawChart('cnt', 'wiCntChart', 'bar', [
 		Object.assign({ label: 'Other networks', data: others, backgroundColor: C.others }, barBase),
 		Object.assign({ label: 'Yours', data: mine, backgroundColor: C.yours }, barBase)
@@ -984,7 +1015,7 @@ function renderChannels() {
 	$('wiNzChCard').style.display = anyNz ? '' : 'none';
 	if (anyNz) {
 		var nzMin = Math.min.apply(null, nz.filter(function (v) { return v != null; })), nzMax = Math.max.apply(null, nz.filter(function (v) { return v != null; }));
-		drawChart('nzch', 'wiNzChChart', 'bar', [Object.assign({ label: 'Noise floor', data: nz.map(function (v) { return v == null ? null : [-110, v]; }), backgroundColor: '#5f7d87',
+		drawChart('nzch', 'wiNzChChart', 'bar', [Object.assign({ label: 'Noise floor', data: nz.map(function (v) { return v == null ? null : [-110, v]; }), backgroundColor: C.noise,
 			borderRadius: { topLeft: 4, topRight: 4 } }, bar)],
 			{ labels: labels, x: xCat, yMin: Math.max(-110, Math.floor((nzMin - 5) / 5) * 5), yMax: Math.min(-40, Math.ceil((nzMax + 5) / 5) * 5), plugins: [curBand(curIdx), dfsAxis(ch)], padBottom: kind() === '5g' ? 22 : 0,
 				yStep: 5, yFmt: function (v) { return v + ' dBm'; }, ttTitle: title, ttLabel: function (it) { return ' Noise floor: ' + nz[it.dataIndex] + ' dBm'; } });
@@ -1005,8 +1036,8 @@ function curBand(idx) {   // translucent band behind the router's channel(s), li
 		if (!idx.length) return;
 		var x = chart.scales.x, a = chart.chartArea, ctx = chart.ctx, half = (x.getPixelForValue(1) - x.getPixelForValue(0)) / 2;
 		var x0 = x.getPixelForValue(idx[0]) - half, x1 = x.getPixelForValue(idx[idx.length - 1]) + half;
-		ctx.save(); ctx.fillStyle = 'rgba(255,204,0,0.08)'; ctx.fillRect(x0, a.top, x1 - x0, a.bottom - a.top);
-		ctx.strokeStyle = 'rgba(255,204,0,0.6)'; ctx.setLineDash([4, 3]); ctx.strokeRect(x0, a.top, x1 - x0, a.bottom - a.top); ctx.restore();
+		ctx.save(); ctx.fillStyle = alpha(C.accent, 0.08); ctx.fillRect(x0, a.top, x1 - x0, a.bottom - a.top);
+		ctx.strokeStyle = alpha(C.accent, 0.6); ctx.setLineDash([4, 3]); ctx.strokeRect(x0, a.top, x1 - x0, a.bottom - a.top); ctx.restore();
 	} };
 }
 var BLOCKS = {
@@ -1458,6 +1489,7 @@ function scanNow() {
 	});
 }
 function boot() {
+	theme();
 	var hash = (location.hash || '').replace('#', '');
 	WI.view = VIEWS.some(function (v) { return v[0] === hash; }) ? hash : (store('view') || 'insight');
 	if (!VIEWS.some(function (v) { return v[0] === WI.view; })) WI.view = 'insight';
@@ -1623,7 +1655,7 @@ window.WiFiInsight = {
 			</div>
 			<div class="foot">
 				<span class="ramp">Clean <i id="wiRamp"></i> Busy<span id="wiRampNote"></span></span>
-				<span><span style="display:inline-block;width:14px;height:10px;border:2px solid #ffcc00;border-radius:2px;vertical-align:-1px;margin-right:5px"></span>Router's channel</span>
+				<span><span style="display:inline-block;width:14px;height:10px;border:2px solid var(--accent);border-radius:2px;vertical-align:-1px;margin-right:5px"></span>Router's channel</span>
 				<span class="qkey" id="wiHeatQuietKey" style="display:none"><i style="border:1px dashed #c98500"></i>Quiet hours</span>
 			</div>
 		</div>
@@ -1638,7 +1670,7 @@ window.WiFiInsight = {
 		<div class="card">
 			<div class="head">
 				<div class="grow"><h3>Signal map</h3><div class="sub" id="wiSurveySub"></div></div>
-				<div class="legend"><span class="li"><span class="sq" style="background:var(--others)"></span>Other networks</span><span class="li"><span class="sq" style="background:var(--yours)"></span>Your network</span><span class="li"><span class="sq" style="background:rgba(255,204,0,0.25);border:1px dashed #ffcc00"></span>Router's channel</span></div>
+				<div class="legend"><span class="li"><span class="sq" style="background:var(--others)"></span>Other networks</span><span class="li"><span class="sq" style="background:var(--yours)"></span>Your network</span><span class="li"><span class="sq" style="background:var(--accent-soft);border:1px dashed var(--accent)"></span>Router's channel</span></div>
 			</div>
 			<div class="rel">
 				<canvas class="full" id="wiMap"></canvas>
@@ -1661,7 +1693,7 @@ window.WiFiInsight = {
 		<div class="card">
 			<div class="head">
 				<div class="grow"><h3 id="wiLoadTitle">Estimated load per channel</h3><div class="sub" id="wiLoadSub"></div></div>
-				<div class="legend"><label id="wiMeshLbl2"><input type="checkbox" id="wiMesh2" onchange="WiFiInsight.setMesh(this.checked)"/>Include my mesh</label><span class="li"><span class="sq" style="background:rgba(255,204,0,0.25);border:1px dashed #ffcc00"></span>Router's channel</span></div>
+				<div class="legend"><label id="wiMeshLbl2"><input type="checkbox" id="wiMesh2" onchange="WiFiInsight.setMesh(this.checked)"/>Include my mesh</label><span class="li"><span class="sq" style="background:var(--accent-soft);border:1px dashed var(--accent)"></span>Router's channel</span></div>
 			</div>
 			<div class="legend srcrow" id="wiLoadSrc"></div>
 			<div class="chartbox sm" id="wiLoadChart"></div>
@@ -1738,7 +1770,7 @@ window.WiFiInsight = {
 			<div class="qgrid" id="qGrid"></div>
 			<div class="foot" style="margin-top:10px">
 				<span class="qkey"><i style="background:#c98500"></i>Quiet: no scheduled scans</span>
-				<span class="qkey"><i style="background:#1f282b;border:1px solid #4a585d"></i>Scans allowed</span>
+				<span class="qkey"><i style="background:var(--field);border:1px solid var(--axis)"></i>Scans allowed</span>
 				<span style="color:var(--muted)">Times are the router's local time.</span>
 			</div>
 			<div class="qsum" id="qSum"></div>
