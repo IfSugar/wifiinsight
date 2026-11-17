@@ -52,8 +52,16 @@ events() { "$sqlite" "$D/wifiinsight.db" "SELECT ts || ' ' || band || ' ' || det
 
 # A log over the last 30 days (summer time ends inside it), naming the radio as ethN, wlN or not at all,
 # one line dated ahead (so last year's), and lines that aren't dated as syslog lines are (skipped).
+# A syslog time carries no year (one over a day ahead is last year's) and no zone: in the hour the clocks
+# go back, which happens twice, it can be read either way, and either reading counts (alt: the other one).
 now=$(date +%s); y=$(date +%Y)
-: > "$t/want"
+reading() {   # mm-dd hh:mm:ss -> epoch seconds, as date -d reads it, in the year it belongs to
+	_r=$(date -d "$y-$1 $2" +%s); [ "$_r" -gt $((now + 86400)) ] && _r=$(date -d "$((y - 1))-$1 $2" +%s); echo "$_r"
+}
+twin() {   # the other instant with the same local time, if the clocks went back over it
+	_s=$(date -d "@$1" '+%F %T'); for _o in $(($1 + 3600)) $(($1 - 3600)); do [ "$(date -d "@$_o" '+%F %T')" != "$_s" ] || echo "$_o $1"; done
+}
+: > "$t/want"; : > "$t/alt"
 i=0; while [ $i -lt 120 ]; do
 	at=$((now - 30 * 86400 + i * 21600 + 7))
 	case $((i % 4)) in
@@ -64,19 +72,20 @@ i=0; while [ $i -lt 120 ]; do
 	esac
 	stamp=$(date -d "@$at" '+%b %e %H:%M:%S')
 	echo "$stamp router kernel: $w Radar detected on channel 100 (test $i)" >> "$R/tmp/syslog.log"
-	echo "$(date -d "$y-$(date -d "@$at" +%m-%d) $(date -d "@$at" +%H:%M:%S)" +%s) $b" >> "$t/want"
+	a=$(reading "$(date -d "@$at" +%m-%d)" "$(date -d "@$at" +%H:%M:%S)")
+	echo "$a $b" >> "$t/want"; twin "$a" >> "$t/alt"
 	i=$((i + 1))
 done
 ahead=$((now + 40 * 86400)); md=$(date -d "@$ahead" +%m-%d); hms=$(date -d "@$ahead" +%H:%M:%S)
 echo "$(date -d "@$ahead" '+%b %e %H:%M:%S') router kernel: eth7: Radar detected" >> "$R/tmp/syslog.log"
-echo "$(date -d "$((y - 1))-$md $hms" +%s) 5g Radar detected on eth7" >> "$t/want"
+echo "$(date -d "$((y - 1))-$md $hms" +%s) 5g Radar detected on eth7" >> "$t/want"; twin "$(date -d "$((y - 1))-$md $hms" +%s)" >> "$t/alt"
 printf 'Foo 13 12:00:00 router kernel: Radar detected\nNov 13 1:00:00 router kernel: Radar detected\n2026-11-13T12:00:00+02:00 router kernel: Radar detected\n' >> "$R/tmp/syslog.log"
 sort -n -k1,1 -k2,2 -k3 "$t/want" | sort -u > "$t/want.sorted"
 
 : > "$t/date.calls"; run collect --once 2> "$t/err" || true; dates=$(wc -l < "$t/date.calls" | tr -d ' ')
 [ -s "$t/err" ] && { bad "collect printed errors"; sed 's/^/      | /' "$t/err"; }
-events | sort -u > "$t/got"
-if cmp -s "$t/want.sorted" "$t/got"; then ok "every line: the same time as date -d gives, and its radio ($(wc -l < "$t/got") events)"
+events | awk -v alt="$t/alt" 'BEGIN { while ((getline l < alt) > 0) { split(l, a, " "); m[a[1]] = a[2] } } ($1 in m) { $1 = m[$1] } { print }' | sort -u > "$t/got"
+if cmp -s "$t/want.sorted" "$t/got"; then ok "every line: the same time as date -d gives, and its radio ($(wc -l < "$t/got") events; $(wc -l < "$t/alt" | tr -d ' ') in the hour the clocks go back)"
 else bad "events differ from date -d's"; diff "$t/want.sorted" "$t/got" | head -8 | sed 's/^/      | /'; fi
 expect "a date ahead is last year's" "1" "$(grep -c "^$(date -d "$((y - 1))-$md $hms" +%s) " "$t/got")"
 expect "lines not dated as syslog lines are skipped" "0" "$(grep -c 'Foo\|T12:00' "$t/got" || true)"
