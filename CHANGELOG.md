@@ -4,6 +4,7 @@ What changed in each release of WiFi Insight. The release workflow copies a vers
 
 ## Unreleased
 
+- **The install no longer takes Asuswrt-Merlin for stock firmware on routers with Entware's coreutils** (#30). WiFi Insight put Entware's folders before the firmware's own, so `uname` was GNU's, which doesn't say Asuswrt-Merlin, and every run used Entware's GNU tools instead of the firmware's, which WiFi Insight is written and tested for. The firmware's folders now come first, as in Arteria.
 - **Colours that follow the router's theme.** On ROG and TUF routers, whose pages are black with red or amber, WiFi Insight's cards, controls and charts turn black too, with red (ROG) or amber (TUF) for the open tab and the router's channel, as Arteria does. The data's colours stay as they are on every router: other networks, yours, non-Wi-Fi, radar and the rest mean the same everywhere.
 
 ## 2.1.0
