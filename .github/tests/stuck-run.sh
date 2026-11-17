@@ -23,7 +23,14 @@ sqlite=$(command -v sqlite3) || { echo "::error::stuck-run.sh needs sqlite3 inst
 hflock=$(command -v flock) || { echo "::error::stuck-run.sh needs flock installed"; exit 1; }
 bash_bin=$(command -v bash)
 t=$(mktemp -d)
-cleanup() { for p in $(cat "$t/pids" 2>/dev/null); do kill -9 "$p" 2>/dev/null || true; done; rm -rf "$t"; }
+# On the way out, whatever this suite left running: only processes that are still its own (a stand-in from
+# $t, or a run with this suite's WI_ROOT), never a PID noted earlier: by now it may be another suite's.
+cleanup() {
+	for d in /proc/[0-9]*; do
+		if grep -qsF "$t/" "$d/cmdline" || grep -qsF "WI_ROOT=$t/" "$d/environ"; then kill -9 "${d#/proc/}" 2> /dev/null || true; fi
+	done
+	rm -rf "$t"
+}
 trap cleanup EXIT
 fail=0
 ok()  { echo "ok    $*"; }
@@ -42,7 +49,7 @@ mkfifo "$t/fifo"
 # nvram: blocks for good on wl1_ifname while $t/hang exists (it notes its PID in $t/hung first)
 cat > "$t/bin/nvram" <<EOF
 #!/bin/sh
-if [ "\$2" = wl1_ifname ] && [ -f "$t/hang" ]; then echo \$\$ > "$t/hung"; echo \$\$ >> "$t/pids"; read x < "$t/fifo"; fi
+if [ "\$2" = wl1_ifname ] && [ -f "$t/hang" ]; then echo \$\$ > "$t/hung"; read x < "$t/fifo"; fi
 case "\$2" in ntp_ready) echo 1 ;; wl0_ifname) echo eth6 ;; wl1_ifname) echo eth7 ;; wl0_nband) echo 2 ;; wl1_nband) echo 1 ;; esac
 EOF
 cat > "$t/bin/wl" <<'EOF'
@@ -61,7 +68,7 @@ held() { ! "$hflock" -n "$TM/$1.lock" true; }   # is the lock taken?
 alive() { [ -n "$1" ] && kill -0 "$1" 2>/dev/null && [ "$(awk '{ print $3 }' "/proc/$1/stat" 2>/dev/null)" != Z ]; }
 start_stuck() {   # action: a run of it, stuck in nvram get wl1_ifname with its lock taken
 	rm -f "$t/hung"; touch "$t/hang"
-	( run "$@" > /dev/null 2>&1 ) & bg=$!; disown "$bg" 2> /dev/null || true; echo "$bg" >> "$t/pids"
+	( run "$@" > /dev/null 2>&1 ) & bg=$!; disown "$bg" 2> /dev/null || true
 	i=0; until [ -s "$t/hung" ]; do i=$((i + 1)); [ $i -gt 100 ] && { bad "the stuck run never reached nvram"; return 1; }; sleep 0.1; done
 	stuck=$(cat "$t/hung"); rm -f "$t/hang"
 }
