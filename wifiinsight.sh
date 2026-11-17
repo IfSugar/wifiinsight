@@ -40,7 +40,10 @@ REPO="IfSugar/wifiinsight"
 RAW_BASE="https://raw.githubusercontent.com/$REPO"
 RAW_URL="${WI_RAW_URL:-$RAW_BASE/main}"   # WI_RAW_URL: test hook only
 
-[ -z "$ROOT" ] && PATH="/opt/bin:/opt/sbin:/sbin:/bin:/usr/sbin:/usr/bin:$PATH"
+# The firmware's own commands (BusyBox), which WiFi Insight is written and tested for, before Entware's:
+# Entware's coreutils has a GNU uname, whose -o says GNU/Linux, so the install took Merlin for stock
+# firmware; and every run used GNU date, sort, sed... sqlite3 is always called by its full path.
+[ -z "$ROOT" ] && PATH="/sbin:/bin:/usr/sbin:/usr/bin:$PATH:/opt/bin:/opt/sbin"
 export PATH
 if [ -z "$TZ" ] && [ -f "$ROOT/etc/TZ" ]; then TZ="$(cat "$ROOT/etc/TZ")"; export TZ; fi
 
