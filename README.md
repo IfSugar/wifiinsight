@@ -157,7 +157,9 @@ SQLITE="/usr/sbin/sqlite3"                # the firmware's, or Entware's /opt/bi
 
 ## amtm
 
-With no arguments in a terminal the script shows its menu. `wifiinsight.sh amtmupdate check` exits 0 when amtm may update it (1 when turned off in the menu), and `wifiinsight.sh amtmupdate` installs the latest release and prints two lines. Until WiFi Insight is in amtm's list, add `/jffs/addons/wifiinsight/wifiinsight.sh` there as a personal script.
+WiFi Insight is in amtm, the Asuswrt-Merlin Terminal Menu: amtm installs it, opens its menu, and amtm's update check and its automatic script updates cover it. To keep amtm from updating WiFi Insight, turn that off with menu option 7 (or `AMTM_UPDATE=off`); `wifiinsight.sh update` still works.
+
+For amtm's module, WiFi Insight follows amtm's conventions for third-party scripts: with no arguments in a terminal the script shows its menu; `wifiinsight.sh amtmupdate check` exits 0 when amtm may update it (1 when turned off in the menu), and `wifiinsight.sh amtmupdate` installs the latest release and prints two lines. A development version (`update dev`) carries amtm's `# amtm NoMD5check` line, so amtm doesn't take it for an update of the release with the same number, and `amtmupdate` replaces it only with a newer release.
 
 <details>
 <summary>For amtm's maintainer</summary>
