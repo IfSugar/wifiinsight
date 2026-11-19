@@ -62,14 +62,15 @@ exit 6
 EOF
 chmod +x "$t/bin/logger" "$t/bin/nvram" "$t/bin/wl" "$t/bin/cru" "$t/bin/curl"
 
-# A build of the current files with another version and a label; its "install" copies itself in.
+# A build of the current files with another version and a label; its "install" only puts itself in place,
+# with the script's own put_script (a development version gets amtm's NoMD5check line, a release doesn't).
 build() {   # dir version label
 	mkdir -p "$1"
 	sed "s/^VERSION=\"[0-9.]*\"/VERSION=\"$2\"/" "$script" > "$1/wifiinsight.sh"
 	sed "s/wifiinsight-version: [0-9.]* /wifiinsight-version: $2 /" "$asp" > "$1/wifiinsight.asp"
 	printf '# test build: %s\n' "$3" >> "$1/wifiinsight.sh"
-	sed -i 's|^	install)       install ;;|	install)       cp "$0" "$SCRIPT.new" \&\& mv -f "$SCRIPT.new" "$SCRIPT"; exit 0 ;;|' "$1/wifiinsight.sh"
-	grep -q 'SCRIPT.new" && mv' "$1/wifiinsight.sh" || { echo "::error::couldn't build a test version"; exit 1; }
+	sed -i 's|^	install)       install ;;|	install)       put_script "$0"; exit 0 ;;|' "$1/wifiinsight.sh"
+	grep -q '^	install)       put_script "\$0"; exit 0 ;;' "$1/wifiinsight.sh" || { echo "::error::couldn't build a test version"; exit 1; }
 }
 branch() {   # name commit version
 	build "$GH/$2" "$3" "branch $1"; mkdir -p "$(dirname "$GH/branches/$1")"; printf '%s' "$2" > "$GH/branches/$1"
@@ -84,6 +85,7 @@ reset_install() {
 echo 'enable -n test [ printf echo' > "$t/no-builtins.sh"
 run() { WI_ROOT="$R" TZ=UTC PATH="$t/bin" BASH_ENV="$t/no-builtins.sh" "$bash_bin" "$A/wifiinsight.sh" "$@"; }
 label() { sed -n 's/^# test build: //p' "$A/wifiinsight.sh"; }
+nomd5() { echo "$(grep -c '^# amtm NoMD5check' "$A/wifiinsight.sh")|$(sed -n 2p "$A/wifiinsight.sh" | cut -c1-17)"; }   # how many, and is it line 2
 buildfile() { cut -d' ' -f1-3 "$A/build" 2>/dev/null || echo none; }
 ver=$(sed -n 's/^VERSION="\([0-9][0-9.]*\)".*/\1/p' "$script" | head -1)
 C1=1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d; C2=9f8e7d6c5b4a39281706f5e4d3c2b1a0f9e8d7c6
@@ -97,6 +99,11 @@ expect "update dev: installs main at its newest commit" "0|branch main|dev main 
 case "$(run status 2>&1 | head -1)" in "WiFi Insight $ver (development version: main @ 1a2b3c4, installed "*) ok "status says it's a development version" ;;
 	*) bad "status first line: $(run status 2>&1 | head -1)" ;; esac
 grep -q 'development version installed: main @ 1a2b3c4' "$F/log" && ok "update dev: logged" || bad "update dev: no syslog line"
+# amtm takes a script that differs from the release with the same number for an "MD5 update", and taking it
+# put the release back over the development version: a development version carries the line amtm reads to skip that
+expect "update dev: tells amtm not to compare it with the release by MD5 (line 2), and still runs" "1|# amtm NoMD5check|ok" "$(nomd5)|$(sh -n "$A/wifiinsight.sh" && echo ok)"
+rc=0; run update dev > /dev/null 2>&1 || rc=$?
+expect "update dev again: still one such line" "0|1|# amtm NoMD5check" "$rc|$(nomd5)"
 
 reset_install
 rc=0; run update dev feature/x > /dev/null 2>&1 || rc=$?
@@ -133,10 +140,23 @@ sed -i "s/wifiinsight-version: [0-9.]* /wifiinsight-version: 0.0.1 /" "$GH/00000
 rc=0; out=$(run update dev broken 2>&1) || rc=$?
 expect "update dev with a page from another version: refused" "1||none" "$rc|$(label)|$(buildfile)"
 
+# ---- through amtm, a development version is replaced only by a newer release -------------------------------
+reset_install; run update dev > /dev/null 2>&1
+rc=0; out=$(run amtmupdate 2>&1) || rc=$?
+expect "amtmupdate, the release has the same number: keeps the development version" "0|branch main|dev main 1a2b3c4|1|# amtm NoMD5check" "$rc|$(label)|$(buildfile)|$(nomd5)"
+grep -q "Kept the development version: main @ 1a2b3c4, installed .*: the latest release, $ver, isn't newer. '.*wifiinsight.sh update' goes back to it." "$R/tmp/wifiinsight/amtmupdate.log" \
+	&& ok "...and says so" || { bad "amtmupdate log"; sed 's/^/      | /' "$R/tmp/wifiinsight/amtmupdate.log"; }
+release 9.9.10
+rc=0; out=$(run amtmupdate 2>&1) || rc=$?
+expect "amtmupdate, a newer release: installs it, as its own file" "0|release 9.9.10|none|0|same" "$rc|$(label)|$(buildfile)|$(grep -c '^# amtm NoMD5check' "$A/wifiinsight.sh")|$(cmp -s "$A/wifiinsight.sh" "$GH/9.9.10/wifiinsight.sh" && echo same)"
+release "$ver"
+
 # ---- plain update stays on releases ---------------------------------------------------------------------
 reset_install; run update dev > /dev/null 2>&1
 rc=0; out=$(run update 2>&1) || rc=$?
 expect "update from a development version, release has the same number: installs the release" "0|release $ver|none" "$rc|$(label)|$(buildfile)"
+expect "...as the release's own file (no NoMD5check line)" "0|same" "$(grep -c '^# amtm NoMD5check' "$A/wifiinsight.sh")|$(cmp -s "$A/wifiinsight.sh" "$GH/$ver/wifiinsight.sh" && echo same)"
+case "$out" in *"Updating $ver (development version: main @ 1a2b3c4, installed "*") -> $ver, the release (settings and history are kept)"*) ok "...and says it replaces the development version" ;; *) bad "update message: $out" ;; esac
 rc=0; out=$(run update 2>&1) || rc=$?
 case "$out" in *"Already up to date ($ver)."*) ok "update on the release: already up to date" ;; *) bad "update on the release: $out" ;; esac
 

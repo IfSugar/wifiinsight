@@ -1891,6 +1891,17 @@ check_support() {
 	return 0
 }
 
+# Puts a script in place, renamed in: a running copy of the old one (during an update, say) keeps reading
+# its own file. A development version (WI_BUILD) gets "# amtm NoMD5check" under its first line: amtm takes
+# a script that differs from the release with the same number for an "MD5 update", and taking that update
+# put the release back over the development version. A release goes in as its own file, without that line.
+put_script() {   # file
+	if [ -n "$WI_BUILD" ]; then
+		{ head -n 1 "$1"; echo '# amtm NoMD5check (a development version: not the release with this number)'; tail -n +2 "$1" | grep -v '^# amtm NoMD5check'; } > "$SCRIPT.new"
+	else
+		grep -v '^# amtm NoMD5check' "$1" > "$SCRIPT.new"
+	fi && mv -f "$SCRIPT.new" "$SCRIPT"
+}
 install() {
 	src="$(cd "$(dirname "$0")" && pwd)"
 	say "Installing $TITLE $VERSION"
@@ -1918,8 +1929,7 @@ install() {
 			done
 			[ $got -eq 1 ] || { rm -f "$asp"; die "Couldn't get $NAME.asp $VERSION. Put it in the same folder as $NAME.sh and run install again."; }
 		fi
-		# rename into place: a running copy of the old script (e.g. during update) keeps reading its own file
-		cp -f "$src/$NAME.sh" "$SCRIPT.new" && mv -f "$SCRIPT.new" "$SCRIPT"
+		put_script "$src/$NAME.sh"
 		cp -f "$asp" "$PAGE_SRC.new" && mv -f "$PAGE_SRC.new" "$PAGE_SRC"
 		rm -f "$TMPD/$NAME.asp.dl"
 		[ -f "$src/chart.umd.min.js" ] && cp -f "$src/chart.umd.min.js" "$ADDON_DIR/"
@@ -2032,6 +2042,11 @@ update() {   # [force]  fetch the latest release from GitHub and reinstall over 
 	if [ "$new" = "$VERSION" ] && [ "$1" != "force" ] && [ ! -f "$BUILD_FILE" ]; then
 		rm -rf "$dl"; say "Already up to date ($VERSION)."; return 0
 	fi
+	# amtm asks for an update when the script differs from the release with the same number: a development
+	# version does. Through amtm, it's replaced only by a newer release ('update' itself goes back to the release).
+	if [ -n "$WI_AMTM" ] && [ -f "$BUILD_FILE" ] && ! ver_gt "$new" "$VERSION"; then
+		rm -rf "$dl"; say "Kept the $(build_text): the latest release, $new, isn't newer. '$SCRIPT update' goes back to it."; return 0
+	fi
 	if ver_gt "$VERSION" "$new" && [ "$1" != "force" ]; then
 		rm -rf "$dl"
 		say "This is $VERSION$( [ -f "$BUILD_FILE" ] && printf ' (a development version)'), newer than the latest release ($new). Nothing was changed; 'update force' installs $new."
@@ -2040,7 +2055,7 @@ update() {   # [force]  fetch the latest release from GitHub and reinstall over 
 	if ! fetch "$rel/$NAME.asp" "$dl/$NAME.asp" || ! grep -q "wifiinsight-version: $new " "$dl/$NAME.asp"; then
 		rm -rf "$dl"; die "Couldn't download the matching web page; nothing was changed."
 	fi
-	say "Updating $VERSION -> $new (settings and history are kept)"
+	say "Updating $VERSION$( [ -f "$BUILD_FILE" ] && printf ' (%s)' "$(build_text)") -> $new$( [ -f "$BUILD_FILE" ] && printf ', the release') (settings and history are kept)"
 	sh "$dl/$NAME.sh" install; rc=$?
 	rm -rf "$dl"
 	[ $rc -eq 0 ] && rm -f "$BUILD_FILE"   # a release now, whatever that release's installer knows
@@ -2339,7 +2354,7 @@ amtm_update() {   # [check]
 	fi
 	say "  i  Running function amtmupdate"
 	mkdir -p "$TMPD"; alog="$TMPD/amtmupdate.log"
-	( update ) > "$alog" 2>&1; rc=$?
+	( WI_AMTM=1 update ) > "$alog" 2>&1; rc=$?
 	now_ver=$(sed -n 's/^VERSION="\([0-9][0-9.]*\)".*/\1/p' "$SCRIPT" 2>/dev/null | head -1)
 	if [ $rc -eq 0 ]; then
 		say "  ✔  $TITLE ${now_ver:-$VERSION} amtmupdate complete"
