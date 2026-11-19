@@ -17,7 +17,7 @@ A WiFi Insight-style dashboard for Broadcom-based Asuswrt-Merlin routers, with v
 | **Troubleshooting** | Airtime breakdown, glitch counters, transmit success vs failure, noise floor and the raw `chanim_stats` counters. |
 | **Settings** | Collection on, scans paused or off, sample and scan intervals, history length, extra SSIDs to treat as yours, and quiet hours with no scheduled scans. |
 
-Ranges from 10 minutes to 30 days. Each radio has its own button: 2.4, 5 and 6 GHz, and 5 GHz-1/5 GHz-2 or 6 GHz-1/6 GHz-2 on routers with two radios on one band.
+Ranges from 10 minutes to 30 days. Each radio has its own button: 2.4, 5 and 6 GHz, and 5 GHz-1/5 GHz-2 or 6 GHz-1/6 GHz-2 on routers with two radios on one band. On ROG and TUF routers, the page follows the router's black theme, with red or amber.
 
 <details>
 <summary>Screenshots</summary>
