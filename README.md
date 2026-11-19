@@ -67,7 +67,7 @@ Ranges from 10 minutes to 30 days. Each radio has its own button: 2.4, 5 and 6 G
 | RT-AX58U (V1), RT-AX68U, RT-AX88U Pro, RT-BE86U, RT-BE58 Go | 2.4 + 5 GHz | Should work |
 | GT-AXE11000, RT-BE92U, GT-BE19000AI | 2.4 + 5 + 6 GHz | Should work |
 | GT-AX11000, GT-AX11000 Pro, ZenWiFi Pro XT12 | 2.4 + 5 + 5 GHz | Should work since 2.0.0: 5 GHz-1 and 5 GHz-2 kept apart |
-| GT-AXE16000 | 2.4 + 5 + 5 + 6 GHz | Should work since 2.0.0 |
+| GT-AXE16000 | 2.4 + 5 + 5 + 6 GHz | Works (user report); 5 GHz scans refused at times |
 | GT-BE98 Pro | 2.4 + 5 + 6 + 6 GHz | Should work since 2.0.0: 6 GHz-1 and 6 GHz-2 kept apart |
 
 *Should work*: meets the requirements and its radio layout comes from the Merlin source, but nobody has reported running it yet. Models on a sibling's firmware (RT-AX3000 V1, RT-AX86S, RT-BE7200) should match it; older models and Gnuton's firmware are untried. `check` tells you before anything is installed, and a [router report](https://github.com/IfSugar/wifiinsight/issues/new/choose) helps add your model.
@@ -76,7 +76,7 @@ Ranges from 10 minutes to 30 days. Each radio has its own button: 2.4, 5 and 6 G
 
 ## Install
 
-Over SSH on the router:
+In amtm (7.3 or later), install it as **in**. Or over SSH on the router:
 
 ```sh
 curl -fsL --retry 3 "https://github.com/IfSugar/wifiinsight/releases/latest/download/wifiinsight.sh" -o /tmp/wifiinsight.sh && sh /tmp/wifiinsight.sh install
@@ -101,7 +101,7 @@ Open **Wireless → WiFi Insight**. If the tab doesn't show, reload with **Ctrl+
 
 **Updating:** `/jffs/addons/wifiinsight/wifiinsight.sh update` installs the latest release, keeping settings, history and the page slot. An install from before 2.0.0 moves its history from `/opt/var/lib/wifiinsight` to `wifiinsight/` on the same drive: a rename, nothing is copied, and a link is left at the old path. `update dev` installs the newest unreleased code on `main` (or `update dev <branch>`), for testing a fix.
 
-**Menu and amtm:** run the script with no arguments for a menu. It supports amtm's script updates; see [amtm](#amtm).
+**Menu and amtm:** run the script with no arguments for a menu. amtm installs, opens and updates it as **in**; see [amtm](#amtm).
 
 ## How it works
 
@@ -109,6 +109,7 @@ Open **Wireless → WiFi Insight**. If the tab doesn't show, reload with **Ctrl+
 - **Every other channel:** a neighbour scan (`wl scan`) every 30 minutes by default, outside quiet hours. Each scan takes the radio off-channel for about a second. Where the driver reports it (the RT-AX86U on 3004.388, the GT-AX6000 on 3006.102), the page shows the airtime the radio **measured** on each channel while scanning; otherwise an **estimate** from the networks heard there, by overlap, signal and advertised load. Your own networks, AiMesh nodes included, are kept out unless you tick *Include my mesh*.
 - **Refused scans:** a full scan is always tried first. If the driver refuses it, the band is scanned one channel at a time at once, then spread over about a third of the scan interval at later scans (a short trip off-channel each, at most 3 a minute and at least 20 s apart, never in quiet hours). Where the driver takes a channel only every so often, WiFi Insight learns how long it needs and waits that out instead of asking again and again. A full scan is retried every 6 hours. *Scan now* always scans the whole band.
 - **Background radar checks:** with zero-wait DFS, a 5 GHz radio can listen to another channel for radar before moving there (a minute, ten on weather-radar channels), and the driver refuses scans meanwhile. WiFi Insight never interrupts one: it waits up to 90 s for it to end, or scans that band next time.
+- **Runs that hang:** on some firmware, a command such as `nvram get` can hang for good. The next run stops a sampling run stuck for over 5 minutes (a scan: 20), with everything it started, and the system log says what it was stuck in. Prune and repair, which can take long, are never stopped. If sampling stops anyway, `status` and the page say so after 10 minutes.
 - **Channel events:** a changed setting is *Manually configured*, a radar line in the syslog is *Regulatory (RADAR)*, a new width on the same channel is *Adaptive bandwidth*, and acsd's choice is *Optimized automatically*. Reboots are spotted from the uptime, and matched to your reboot schedule.
 
 **Quiet hours:** mark the half hours of the week when a scan's hiccup would get in the way (gaming, calls), on the Settings grid or from a preset. Sampling carries on and *Scan now* still works. **Collection** switches everything: *On*, *Scans paused* (sampling only), or *Off* (nothing runs, nothing is lost).
