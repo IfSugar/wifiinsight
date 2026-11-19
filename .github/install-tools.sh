@@ -1,20 +1,19 @@
 #!/bin/sh
-# busybox and sqlite3 for the checks. Their packages are kept in ~/debs, which the workflow keeps in the
-# Actions cache: installing them from there takes a second, while apt took anything from 10 to 90 s (a slow
-# mirror). When the cached ones are missing or don't install (a newer runner image, say), they come from apt
-# again, and ~/debs is filled for the next run.
+# busybox and sqlite3 for the checks. apt took anything from 10 to 90 s a job (a slow mirror), as long as the
+# suites themselves, so the packages it downloads are kept in ~/debs, which the workflow keeps in the Actions
+# cache (one per runner image version): from there they install in a second. When they're missing or don't
+# install, apt installs them as before, downloading into ~/debs for the next run.
 d=$HOME/debs
-if ls "$d"/*.deb > /dev/null 2>&1 && sudo dpkg -i "$d"/*.deb > /dev/null 2>&1 \
-	&& busybox true 2> /dev/null && sqlite3 -version > /dev/null 2>&1; then
+have() { busybox true 2> /dev/null && sqlite3 -version > /dev/null 2>&1; }
+if ls "$d"/*.deb > /dev/null 2>&1 && sudo dpkg -i "$d"/*.deb > /dev/null 2>&1 && have; then
 	echo "busybox and sqlite3: from the cache"; exit 0
 fi
-rm -rf "$d"; mkdir -p "$d"
-fetch() { (cd "$d" && apt-get download busybox sqlite3 > /dev/null 2>&1); }
-fetch || { sudo apt-get update -qq; fetch; } || true
-if ! { ls "$d"/*.deb > /dev/null 2>&1 && sudo dpkg -i "$d"/*.deb > /dev/null 2>&1; }; then
-	rm -rf "$d"   # nothing worth keeping: this run installs them the usual way
-	sudo apt-get install -y -qq --no-install-recommends busybox sqlite3 > /dev/null 2>&1 \
-		|| { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends busybox sqlite3 > /dev/null; }
-fi
-busybox true && sqlite3 -version > /dev/null || { echo "::error::Couldn't install busybox and sqlite3"; exit 1; }
-echo "busybox and sqlite3: from apt"
+rm -rf "$d"; mkdir -p "$d/partial"
+inst() {   # with what they depend on, keeping what's downloaded in $d
+	sudo apt-get install -y -qq --no-install-recommends -o Dir::Cache::Archives="$d" -o APT::Keep-Downloaded-Packages=true \
+		busybox sqlite3 > /dev/null 2>&1
+}
+inst || { sudo apt-get update -qq && inst; } || { echo "::error::Couldn't install busybox and sqlite3"; exit 1; }
+sudo rm -rf "$d/partial" "$d/lock"
+have || { echo "::error::busybox or sqlite3 doesn't run"; exit 1; }
+echo "busybox and sqlite3: from apt ($(ls "$d"/*.deb 2> /dev/null | wc -l) packages kept for the next run)"
