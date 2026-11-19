@@ -1,19 +1,34 @@
 #!/bin/sh
-# busybox and sqlite3 for the checks. apt took anything from 10 to 90 s a job (a slow mirror), as long as the
-# suites themselves, so the packages it downloads are kept in ~/debs, which the workflow keeps in the Actions
-# cache (one per runner image version): from there they install in a second. When they're missing or don't
-# install, apt installs them as before, downloading into ~/debs for the next run.
-d=$HOME/debs
-have() { busybox true 2> /dev/null && sqlite3 -version > /dev/null 2>&1; }
-if ls "$d"/*.deb > /dev/null 2>&1 && sudo dpkg -i "$d"/*.deb > /dev/null 2>&1 && have; then
-	echo "busybox and sqlite3: from the cache"; exit 0
-fi
-rm -rf "$d"; mkdir -p "$d/partial"
-inst() {   # with what they depend on, keeping what's downloaded in $d
-	sudo apt-get install -y -qq --no-install-recommends -o Dir::Cache::Archives="$d" -o APT::Keep-Downloaded-Packages=true \
-		busybox sqlite3 > /dev/null 2>&1
-}
-inst || { sudo apt-get update -qq && inst; } || { echo "::error::Couldn't install busybox and sqlite3"; exit 1; }
-sudo rm -rf "$d/partial" "$d/lock"
-have || { echo "::error::busybox or sqlite3 doesn't run"; exit 1; }
-echo "busybox and sqlite3: from apt ($(ls "$d"/*.deb 2> /dev/null | wc -l) packages kept for the next run)"
+# busybox and sqlite3 for the checks. Installing them with apt took anything from 10 to 100 s a job: right
+# after boot, the runner's own package updates hold dpkg's lock, and apt waits for it. So a tool the runner
+# image lacks is taken from its package without installing it: unpacked into ~/tools/x (dpkg-deb needs no
+# lock), linked into ~/tools/bin, which goes first in PATH for the later steps (GITHUB_PATH). The package
+# is kept in ~/debs, which the workflow keeps in the Actions cache, so the next run doesn't download it.
+# Only if that doesn't give a working tool does apt install it, as before.
+d=$HOME/debs; t=$HOME/tools
+mkdir -p "$d" "$t/bin"; PATH="$t/bin:$PATH"
+works() { case "$1" in busybox) busybox true 2> /dev/null ;; sqlite3) sqlite3 -version > /dev/null 2>&1 ;; esac; }
+for p in busybox sqlite3; do
+	works "$p" && { echo "$p: on the runner image"; continue; }
+	if ! ls "$d/${p}"_*.deb > /dev/null 2>&1; then
+		( cd "$d" && { apt-get download "$p" > /dev/null 2>&1 || { sudo apt-get update -qq && apt-get download "$p" > /dev/null 2>&1; }; } )
+		from=downloaded
+	else
+		from="from the cache"
+	fi
+	f=$(ls "$d/${p}"_*.deb 2> /dev/null | head -1)
+	if [ -n "$f" ] && dpkg-deb -x "$f" "$t/x" 2> /dev/null && b=$(find "$t/x" -type f -name "$p" -perm -100 | head -1) && [ -n "$b" ]; then
+		ln -sf "$b" "$t/bin/$p"
+	fi
+	if works "$p"; then
+		echo "$p: unpacked, $from ($(basename "$f"))"
+	else
+		rm -f "$t/bin/$p" "$d/${p}"_*.deb
+		sudo apt-get install -y -qq --no-install-recommends "$p" > /dev/null 2>&1 \
+			|| { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends "$p" > /dev/null; }
+		works "$p" || { echo "::error::Couldn't install $p"; exit 1; }
+		echo "$p: installed with apt"
+	fi
+done
+[ -n "$GITHUB_PATH" ] && echo "$t/bin" >> "$GITHUB_PATH"
+exit 0

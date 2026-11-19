@@ -37,11 +37,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/debs
-          key: debs-${{ steps.image.outputs.v }}
+          key: tools-${{ steps.image.outputs.v }}
+
+      - name: Install busybox and sqlite3
+        run: sh .github/install-tools.sh
 
       - name: Check the script runs on a router shell
         run: |
-          sh .github/install-tools.sh
           busybox ash -n wifiinsight.sh   # the router's shell
           sh -n wifiinsight.sh            # dash, a strict POSIX shell
           if grep -n 'command -v' wifiinsight.sh; then
@@ -118,7 +120,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/debs
-          key: debs-${{ steps.image.outputs.v }}
+          key: tools-${{ steps.image.outputs.v }}
 
       - name: Install busybox and sqlite3
         run: sh .github/install-tools.sh

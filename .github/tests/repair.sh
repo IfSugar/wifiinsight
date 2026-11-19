@@ -161,15 +161,21 @@ expect "again and again: sound, scans and events kept" "ok|336|1" "$(q "PRAGMA i
 # 3d: sqlite3 itself dies on a damaged page (old versions can). What it hadn't written out yet is lost, so
 # its output can stop halfway through a line. The copy keeps every chunk before that one, carries on after
 # it, and reads that one again row by row. A stand-in sqlite3 dies 1500 bytes into rows 2001-2100: the
-# middle of a line. (Only runs that read their SQL from stdin, over the damaged database, are looked at.)
+# middle of a line. (Only runs that read their SQL from stdin, over the damaged database, are looked at; and only
+# the samples table's chunk: another table's damaged end can read as a nonsense rowid, and its chunks then
+# cover the whole file, rows 2001-2100 too.)
 cat > "$t/crashy" <<EOF
 #!/bin/sh
 [ \$# = 3 ] && [ "\$3" = "$D/wifiinsight.db" ] || exec "$sqlite" "\$@"
 in=$t/crashy.\$\$; cat > "\$in"
-n=\$(grep -n "BETWEEN 2001 AND 2100;" "\$in" | head -1 | cut -d: -f1)
+n=\$(grep -n "FROM x_samples WHERE r BETWEEN 2001 AND 2100;" "\$in" | head -1 | cut -d: -f1)
 if [ -n "\$n" ]; then
-	k=\$(head -n \$((n - 1)) "\$in" | "$sqlite" "\$@" 2> /dev/null | wc -c)
-	head -n "\$n" "\$in" | "$sqlite" "\$@" | head -c \$((k + 1500)); rm -f "\$in"; echo x >> $t/crashed; kill -SEGV \$\$
+	# the output, cut 1500 bytes past the marker of that chunk, in this same output: a damaged page can read
+	# differently from one run to the next, so a count of the bytes before it, taken in another run, can be off
+	head -n "\$n" "\$in" | "$sqlite" "\$@" > "\$in.out"
+	mk=\$(sed -n "\$((n - 1))p" "\$in" | sed 's/^\\.print //')
+	c=\$(LC_ALL=C awk -v mk="\$mk" '\$0 == mk { print b + length(\$0) + 1 + 1500; f = 1; exit } { b += length(\$0) + 1 } END { if (!f) print b }' "\$in.out")
+	head -c "\$c" "\$in.out"; rm -f "\$in" "\$in.out"; echo x >> $t/crashed; kill -SEGV \$\$
 fi
 "$sqlite" "\$@" < "\$in"; rc=\$?; rm -f "\$in"; exit \$rc
 EOF
