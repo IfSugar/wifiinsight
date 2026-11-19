@@ -1347,6 +1347,10 @@ run_max() {   # action -> how long a run of it can take before it counts as stuc
 	case "$1" in collect) echo 300 ;; trickle) echo 600 ;; scan) echo 1200 ;; esac
 }
 proc_cmd() { tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null | sed 's/ $//'; }
+proc_alive() {   # pid: still running (a zombie, ended but not yet reaped by its parent, isn't)
+	kill -0 "$1" 2>/dev/null || return 1
+	case "$(sed 's/^.*) //' "/proc/$1/stat" 2>/dev/null)" in Z*|'') return 1 ;; esac
+}
 lock_unstick() {   # lock fd: the lock is taken. 0 when its holder was a stuck run, now stopped, and the lock is this run's
 	_lf="$TMPD/$1.lock"
 	read -r _sp _st _sa < "$TMPD/$1.run" 2>/dev/null || return 1
@@ -1378,7 +1382,7 @@ lock_unstick() {   # lock fd: the lock is taken. 0 when its holder was a stuck r
 	done
 	if [ -n "$(echo $_k)" ]; then
 		kill $_k 2>/dev/null
-		_j=0; while [ $_j -lt 3 ]; do _a=""; for _p in $_k; do kill -0 "$_p" 2>/dev/null && _a="$_a $_p"; done; [ -z "$_a" ] && break; sleep 1; _j=$((_j + 1)); done
+		_j=0; while [ $_j -lt 3 ]; do _a=""; for _p in $_k; do proc_alive "$_p" && _a="$_a $_p"; done; [ -z "$_a" ] && break; sleep 1; _j=$((_j + 1)); done
 		[ -n "$_a" ] && kill -9 $_a 2>/dev/null
 		log "stopped a $_sa run stuck for $((_ag / 60)) min${_in:+, in: $_in}"
 	fi

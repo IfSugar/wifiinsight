@@ -52,9 +52,10 @@ cat > "$t/bin/nvram" <<EOF
 if [ "\$2" = wl1_ifname ] && [ -f "$t/hang" ]; then echo \$\$ > "$t/hung"; read x < "$t/fifo"; fi
 case "\$2" in ntp_ready) echo 1 ;; wl0_ifname) echo eth6 ;; wl1_ifname) echo eth7 ;; wl0_nband) echo 2 ;; wl1_nband) echo 1 ;; esac
 EOF
-cat > "$t/bin/wl" <<'EOF'
+# wl: the radios are up, unless $t/off exists (then a scan is over at once: the scan check needs only the lock)
+cat > "$t/bin/wl" <<EOF
 #!/bin/sh
-case "$2:$3" in eth6:chanspec) echo "6 (0x1006)" ;; eth7:chanspec) echo "36/80 (0xe02a)" ;; *:isup) echo 1 ;; *) exit 1 ;; esac
+case "\$2:\$3" in eth6:chanspec) echo "6 (0x1006)" ;; eth7:chanspec) echo "36/80 (0xe02a)" ;; *:isup) [ -f "$t/off" ] && echo 0 || echo 1 ;; *) exit 1 ;; esac
 EOF
 rm -f "$t/bin/logger"; printf '#!%s sh\nshift 2; echo "$*" >> "%s/log"\n' "$bb" "$t" > "$t/bin/logger"
 chmod +x "$t/bin/nvram" "$t/bin/wl" "$t/bin/logger"
@@ -126,7 +127,7 @@ expect "prune: not stopped; the skipped run says so, once" "collect skipped: a p
 start_stuck scan
 held scan && ok "a scan stuck in nvram keeps the scan lock" || bad "scan: the lock isn't held"
 age_note scan 1260
-run scan > /dev/null 2>&1 || true
+touch "$t/off"; run scan > /dev/null 2>&1 || true; rm -f "$t/off"
 gone_in "$stuck" 5 && gone_in "$bg" 5 && ok "scan: the stuck one is stopped" || bad "scan: still there"
 grep -q "^stopped a scan run stuck for 21 min, in: .*nvram get wl1_ifname" "$t/log" && ok "scan: logged" || { bad "scan: syslog"; sed 's/^/      | /' "$t/log"; }
 held scan && bad "scan: the lock is still taken" || ok "scan: the lock is free again"
