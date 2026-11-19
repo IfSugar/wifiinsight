@@ -31,7 +31,9 @@ jobs:
 
       - name: Check the script runs on a router shell
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq busybox sqlite3 > /dev/null
+          # from the runner image's own package lists; only if that fails, refresh them first (a slow mirror once took 90 s)
+          sudo apt-get install -y -qq --no-install-recommends busybox sqlite3 > /dev/null 2>&1 \
+            || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends busybox sqlite3 > /dev/null; }
           busybox ash -n wifiinsight.sh   # the router's shell
           sh -n wifiinsight.sh            # dash, a strict POSIX shell
           if grep -n 'command -v' wifiinsight.sh; then
@@ -101,7 +103,10 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Install busybox and sqlite3
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq busybox sqlite3 > /dev/null
+        # from the runner image's own package lists; only if that fails, refresh them first (a slow mirror once took 90 s)
+        run: |
+          sudo apt-get install -y -qq --no-install-recommends busybox sqlite3 > /dev/null 2>&1 \
+            || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends busybox sqlite3 > /dev/null; }
 
       - name: Restore the firmware's sqlite3 ${{ matrix.sqlite }}
         id: fwsqlite
