@@ -1290,8 +1290,9 @@ export_live() {
 		printf '"collection":"%s","quiet":"%s","tz_off":%s,"build":"%s",' "$COLLECTION" "$QUIET" "$(tz_off)" "$(js "$( [ -f "$BUILD_FILE" ] && awk '$1 == "dev" { print $2 "@" $3 }' "$BUILD_FILE")")"
 		printf '"measured":{%s},"country":"%s","territory":"%s","radios":%s,' "$mj" "$(js "$(country_code)")" "$(js "$(territory_code)")" "$(radios_json)"
 		printf '"damaged":%s,' "$(jnum "$(cat "$DATA_DIR/damaged" 2>/dev/null)")"   # when sqlite first said the database is damaged; null = fine
-		printf '"first":%s,"samples":' "$(jnum "$(cat "$TMPD/first" 2>/dev/null)")"   # the oldest sample: when the history starts (see export_week)
-		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(ts,obss,nocat,tx,inbss,idle,glitch,noise,ctl,width,center,nopkt,doze,txop,goodtx,badtx,badplcp,knoise)) AS a FROM (SELECT * FROM samples WHERE ts>=$since ORDER BY band, ts) GROUP BY band);"
+		# the oldest sample (when the history starts, for the page's "history since"), in the same sqlite3 run as
+		# the day of samples: an index lookup, no extra run
+		json_out '"first":null,"samples":{}' "SELECT '\"first\":' || coalesce((SELECT min(ts) FROM samples), 'null') || ',\"samples\":' || coalesce((SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(ts,obss,nocat,tx,inbss,idle,glitch,noise,ctl,width,center,nopkt,doze,txop,goodtx,badtx,badplcp,knoise)) AS a FROM (SELECT * FROM samples WHERE ts>=$since ORDER BY band, ts) GROUP BY band)), '{}');"
 		printf ',"events":'
 		json_out '[]' "SELECT json_group_array(json_array(ts,band,tag,old,new,detail)) FROM (SELECT * FROM events WHERE ts>=$evsince ORDER BY ts DESC LIMIT 500);"
 		printf '}\n'
@@ -1313,11 +1314,8 @@ samples_agg() {   # days bucket-seconds -> JSON on stdout ({} if the DB is busy)
 }
 
 export_week() {   # 7 days in 15-minute buckets
-	wd=$(web_dir); mkdir -p "$wd" "$TMPD"; t=$(now)
+	wd=$(web_dir); mkdir -p "$wd"; t=$(now)
 	{ printf '{"generated":%s,"bucket":900,"agg":' "$t"; samples_agg 7 900; printf '}\n'; } | write_atomic "$wd/week.htm"
-	# when the history starts, for live.htm's "history since": it only moves when prune drops a day, so every
-	# 15 minutes is often enough (an index lookup, but one more sqlite3 run). Kept as it was if the DB is busy.
-	_fs=$(sql "SELECT min(ts) FROM samples;"); case "$_fs" in ''|*[!0-9]*) ;; *) echo "$_fs" > "$TMPD/first" ;; esac
 }
 
 # 30 days: airtime in 1-hour buckets, and channel scans in 6-hour buckets
