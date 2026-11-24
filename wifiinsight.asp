@@ -258,7 +258,7 @@ function histSince(ts) {   // when the history starts: today 16:18, yesterday 16
 	var d = new Date(ts * 1000), n = new Date(nowTs() * 1000);
 	var day0 = new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime() / 1000;
 	if (ts >= day0) return 'today ' + hm(ts);
-	if (ts >= day0 - 86400) return 'yesterday ' + hm(ts);
+	if (ts >= new Date(n.getFullYear(), n.getMonth(), n.getDate() - 1).getTime() / 1000) return 'yesterday ' + hm(ts);   /* not day0 - 24 h: a day the clocks change is 23 or 25 */
 	return MONS[d.getMonth()] + ' ' + d.getDate() + (d.getFullYear() !== n.getFullYear() ? ' ' + d.getFullYear() : '');
 }
 function ago(sec) {
@@ -975,17 +975,26 @@ function channelLoads() {   // average and peak load per channel across scans in
 	});
 	return { avg: avg, peak: peak, comp: comp, noise: noise, src: src, info: info, n: info.scans, latestOnly: info.latestOnly, filled: filled };
 }
-function ownLoad() {   // the router's own channel over the range, from what it measures there every sample: like a scan's measured cell
-	var s = series(['obss', 'nocat', 'nopkt', 'noise']), F = { 7: 'obss', 8: 'nocat', 9: 'nopkt' }, comp = {}, any = false, pk = 0, v = 0;
-	var mean = function (a) { var t = 0, n = 0; a.forEach(function (p) { if (p.y != null) { t += p.y; n++; } }); return n ? t / n : null; };
-	MEAS.forEach(function (m) { var a = mean(s[F[m[1]]]); comp[m[0]] = a == null ? null : Math.round(a * 10) / 10; if (a != null) any = true; });
+function ownLoad(r) {   // the router's own channel over the range, from what it measures there every sample: like a scan's measured cell
+	/* Only while it was on the channel it's on now: from its last channel or width change (the newest such event for
+	   this radio), and in the day of samples, only rows on this channel and width. The 7- and 30-day files have no
+	   channel per bucket: the event is what keeps another channel's figures out of those. */
+	var R = rangeInfo(), cfg = R.cfg, from = R.from, rows, map, live = cfg.src === 'live';
+	bandEvents().forEach(function (e) { if (e[1] === WI.band && TAGS[e[2]] && ['restart', 'scheduled'].indexOf(e[2]) < 0 && e[0] > from) from = e[0]; });
+	if (live) { rows = (WI.live && WI.live.samples && WI.live.samples[WI.band]) || []; map = FL; }
+	else { var src = cfg.src === 'week' ? WI.week : WI.month; rows = (src && src.agg && src.agg[WI.band]) || []; map = FW; }
+	rows = rows.filter(function (x) { return x[0] >= from && (!live || (x[10] == null || x[10] === r.center) && (x[9] == null || x[9] === r.width)); });
+	if (!rows.length) return null;
+	var F = { 7: 'obss', 8: 'nocat', 9: 'nopkt' }, comp = {}, any = false, pk = 0, v = 0;
+	var mean = function (f) { var t = 0, n = 0; rows.forEach(function (x) { var y = x[map[f]]; if (y != null) { t += y; n++; } }); return n ? t / n : null; };
+	MEAS.forEach(function (m) { var a = mean(F[m[1]]); comp[m[0]] = a == null ? null : Math.round(a * 10) / 10; if (a != null) any = true; });
 	if (!any) return null;
 	MEAS.forEach(function (m) { if (!WI.hidden['meas:' + m[0]]) v += comp[m[0]] || 0; });
-	s.obss.forEach(function (p, i) {
-		var t = 0; MEAS.forEach(function (m) { var q = s[F[m[1]]][i]; if (!WI.hidden['meas:' + m[0]] && q && q.y != null) t += q.y; });
+	rows.forEach(function (x) {
+		var t = 0; MEAS.forEach(function (m) { var y = x[map[F[m[1]]]]; if (!WI.hidden['meas:' + m[0]] && y != null) t += y; });
 		if (t > pk) pk = t;
 	});
-	var nz = mean(s.noise);
+	var nz = mean('noise');
 	return { avg: Math.min(100, Math.round(v * 10) / 10), peak: Math.round(Math.min(100, pk)), comp: comp, noise: nz == null ? null : Math.round(nz) };
 }
 function renderChannels() {
@@ -1018,9 +1027,10 @@ function renderChannels() {
 	/* The router's own channel, when no scan in range measured it: some drivers won't scan the DFS channels, theirs
 	   included, while on one (an RT-BE88U on 136/80). Then it comes from what the router measures on its own channel
 	   with every sample, over the same range, so the chart and Your current still show it. */
-	var own = meas && cur.length && cur.every(function (c) { return ch.indexOf(c) >= 0 && L.avg[c] == null; }) ? ownLoad() : null;
+	var own = meas && cur.length && cur.every(function (c) { return ch.indexOf(c) >= 0 && L.avg[c] == null; }) ? ownLoad(r) : null;
+	L.own = {};   /* filled from the router's own samples: for the chart and Your current, never a suggestion */
 	if (own) cur.forEach(function (c) {
-		L.avg[c] = own.avg; L.peak[c] = own.peak; MEAS.forEach(function (m) { L.comp[m[0]][c] = own.comp[m[0]]; });
+		L.own[c] = true; L.avg[c] = own.avg; L.peak[c] = own.peak; MEAS.forEach(function (m) { L.comp[m[0]][c] = own.comp[m[0]]; });
 		if (L.noise[c] == null) L.noise[c] = own.noise;
 	});
 	$('wiLoadSrc').innerHTML = srcControls(L.info, L.src, 'wiMeshLbl2');
@@ -1100,9 +1110,10 @@ function renderBest(L, ch, r) {
 	var rows = [];
 	widths.forEach(function (w) {
 		var cands = [];
+		var known = function (c) { return L.avg[c] != null && !(L.own && L.own[c]); };   /* measured by scans */
 		if (w === 20) {
-			(kind() === '2g' ? [1, 6, 11] : ch).forEach(function (c) { if (L.avg[c] != null) cands.push([c]); });
-		} else ((BLOCKS[kind()] || {})[w] || []).forEach(function (b) { if (b.every(function (c) { return L.avg[c] != null; })) cands.push(b); });
+			(kind() === '2g' ? [1, 6, 11] : ch).forEach(function (c) { if (known(c)) cands.push([c]); });
+		} else ((BLOCKS[kind()] || {})[w] || []).forEach(function (b) { if (b.every(known)) cands.push(b); });
 		var score = function (b) {
 			var s = b.reduce(function (t, c) { return t + L.avg[c]; }, 0) / b.length, pk = Math.max.apply(null, b.map(function (c) { return L.peak[c]; }));
 			return { b: b, s: Math.round(s * 10) / 10, pk: pk, dfs: b.some(isDfs), wx: b.some(isWx) };
