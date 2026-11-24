@@ -40,8 +40,13 @@ cat > "$t/bin/wl" <<'EOF'
 #!/bin/sh
 case "$2:$3" in eth6:chanspec) echo "6 (0x1006)" ;; eth7:chanspec) echo "36/80 (0xe02a)" ;; eth8:chanspec) echo "100/80 (0xe06a)" ;; *:isup) echo 1 ;; *) exit 1 ;; esac
 EOF
-# date counts its calls: the old code ran date -d for every line
-rm -f "$t/bin/date"; printf '#!%s sh\necho x >> "%s/date.calls"\nexec "%s" date "$@"\n' "$bb" "$t" "$bb" > "$t/bin/date"
+# A fixed clock, Nov 14 2026: summer time ends in the 30 days before it (one line falls in the hour the
+# clocks go back), and the line dated 40 days ahead is still in the same year. With the real clock, from
+# Nov 22 that line fell in January: a date already past this year, which the script rightly reads as this
+# year's, not last year's, so the check failed every year from late November to the new year.
+now=1794619807; y=$(date -d "@$now" +%Y)
+# date counts its calls (the old code ran date -d for every line) and tells the script that time
+rm -f "$t/bin/date"; printf '#!%s sh\necho x >> "%s/date.calls"\ncase "$*" in "+%%s") echo %s; exit 0 ;; "+%%Y") echo %s; exit 0 ;; esac\nexec "%s" date "$@"\n' "$bb" "$t" "$now" "$y" "$bb" > "$t/bin/date"
 chmod +x "$t/bin/nvram" "$t/bin/wl" "$t/bin/date"
 echo 'enable -n test [ printf echo' > "$t/no-builtins.sh"
 R=$t/root; D=$t/data; mkdir -p "$R/jffs/addons/wifiinsight" "$R/tmp" "$D"
@@ -54,7 +59,6 @@ events() { "$sqlite" "$D/wifiinsight.db" "SELECT ts || ' ' || band || ' ' || det
 # one line dated ahead (so last year's), and lines that aren't dated as syslog lines are (skipped).
 # A syslog time carries no year (one over a day ahead is last year's) and no zone: in the hour the clocks
 # go back, which happens twice, it can be read either way, and either reading counts (alt: the other one).
-now=$(date +%s); y=$(date +%Y)
 reading() {   # mm-dd hh:mm:ss -> epoch seconds, as date -d reads it, in the year it belongs to
 	_r=$(date -d "$y-$1 $2" +%s); [ "$_r" -gt $((now + 86400)) ] && _r=$(date -d "$((y - 1))-$1 $2" +%s); echo "$_r"
 }
