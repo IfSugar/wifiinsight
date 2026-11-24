@@ -2,7 +2,9 @@
 
 What changed in each release of WiFi Insight. The release workflow copies a version's section into its GitHub release notes, so write for people running the addon.
 
-## Unreleased
+## 2.3.0
+
+The 7- and 30-day views work again on routers west of UTC, one-channel scans get through a band of refused DFS channels, and the page shows your channel's load whichever it is, and when its history starts.
 
 - **The 7- and 30-day views were empty on every router west of UTC** (since 1.0.9). Their data lines its hours and days up with the router's local time by subtracting the UTC offset, which is negative in the Americas: the query then read *--18000*, which SQL takes for the start of a comment, so it failed and the page got no data for 7D and 30D on any tab. The offset is now in brackets. Thanks to SashaSolitaire and ColDen for the reports.
 - **One-channel scans no longer get stuck on channels the driver won't take.** Where the driver refuses full scans (some do on a DFS channel), WiFi Insight scans the band one channel at a time, spread out, and asked again for a refused channel a minute later until the driver took it. A driver that refused a channel every time held up the rest of the band: the sweep was dropped after an hour without a channel taken and started over from the first one, so the channels after it, often including the router's own, were never measured. scootertramp's RT-BE88U on 136/80 refused every other DFS channel (52–144) and had load figures only for 36–48: no sweep had finished in over a day. Now a channel refused 5 times in a row is skipped until the next sweep, which skips it at its first refusal; a skip counts as the sweep moving on, so it's no longer dropped; and a channel refused right after a skip isn't asked again every second for 10 s (that's for drivers that need a pause after a channel taken), so the driver gets about a fifth as many requests. Each sweep's line in the system log names what it skipped (*…, 4 channels measured; skipped, refused every time: 52 56 … 144*). Thanks to scootertramp for the reports and the output that showed it.
