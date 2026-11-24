@@ -103,4 +103,28 @@ if live.get('first') != first:
 print(f"{'ok  ' if live.get('first') == first else 'FAIL'} history start in live.htm: {live.get('first')} (expected {first})")
 sys.exit(1 if bad else 0)
 EOF
+# West of UTC: the 7- and 30-day files line their buckets up with local time by subtracting the UTC offset,
+# which is negative there, and "-$off" made "--12600": an SQL comment, so the query failed and both files
+# were empty (1.0.9 to 2.2.0, every router in the Americas). Newfoundland's -3:30 also checks the buckets
+# line up with local time when the offset isn't a whole number of hours.
+TZ="NST3:30NDT,M3.2.0,M11.1.0" run export 2> "$t/err.west"
+[ -s "$t/err.west" ] && { echo "::error::'export' west of UTC printed errors:"; cat "$t/err.west"; fail=1; }
+python3 - "$R/www/user/wifiinsight" <<'EOF' || fail=1
+import json, os, sys
+web = sys.argv[1]
+live, week, month = (json.load(open(os.path.join(web, f))) for f in ('live.htm', 'week.htm', 'month.htm'))
+off = live['tz_off']
+checks = [
+    ('west of UTC: the offset', off == -12600, off),
+    ('west of UTC: 7 days of samples', all(len(week['agg'].get(b, [])) > 0 for b in ('2g', '5g')), {b: len(v) for b, v in week['agg'].items()}),
+    ('west of UTC: 30 days of samples', all(len(month['agg'].get(b, [])) > 0 for b in ('2g', '5g')), {b: len(v) for b, v in month['agg'].items()}),
+    ('west of UTC: 30 days of scans', all(len(month['scans'].get(b, [])) > 0 for b in ('2g', '5g')), {b: len(v) for b, v in month['scans'].items()}),
+    ('west of UTC: hours start on local hours', all((r[0] + off) % 3600 == 0 for v in month['agg'].values() for r in v), 'misaligned'),
+    ('west of UTC: scan buckets start at local 00, 06, 12, 18 h', all((r[0] + off) % 21600 == 0 for v in month['scans'].values() for r in v), 'misaligned'),
+]
+for name, good, got in checks:
+    print(f"{'ok  ' if good else 'FAIL'} {name}" + ('' if good else f": {got}"))
+sys.exit(0 if all(c[1] for c in checks) else 1)
+EOF
+
 [ $fail -eq 0 ] && echo "Large history: data files complete." || { echo "::error::Large history: data is lost."; exit 1; }
