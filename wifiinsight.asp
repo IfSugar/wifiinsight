@@ -254,6 +254,13 @@ function when(ts) {
 	if (ts >= day0 - 86400) return 'Yesterday ' + hm(ts);
 	return MONS[d.getMonth()] + ' ' + d.getDate() + ' ' + hm(ts);
 }
+function histSince(ts) {   // when the history starts: today 16:18, yesterday 16:18, Nov 13 (Dec 20 2025 from another year)
+	var d = new Date(ts * 1000), n = new Date(nowTs() * 1000);
+	var day0 = new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime() / 1000;
+	if (ts >= day0) return 'today ' + hm(ts);
+	if (ts >= day0 - 86400) return 'yesterday ' + hm(ts);
+	return MONS[d.getMonth()] + ' ' + d.getDate() + (d.getFullYear() !== n.getFullYear() ? ' ' + d.getFullYear() : '');
+}
 function ago(sec) {
 	if (sec < 90) return Math.max(0, Math.round(sec)) + ' s ago';
 	if (sec < 5400) return Math.round(sec / 60) + ' min ago';
@@ -339,7 +346,7 @@ function num(x) { return x == null ? x : Number(x); }
 function numRows(o) { Object.keys(o || {}).forEach(function (b) { o[b] = (o[b] || []).map(function (r) { return Array.isArray(r) ? r.map(num) : num(r); }); }); return o; }
 function numKeys(o, keys) { keys.forEach(function (k) { if (o && k in o) o[k] = num(o[k]); }); return o; }
 function cleanLive(d) {
-	numKeys(d, ['generated', 'sample_interval', 'scan_interval', 'retain_days', 'db_bytes', 'tz_off', 'damaged']);
+	numKeys(d, ['generated', 'sample_interval', 'scan_interval', 'retain_days', 'db_bytes', 'tz_off', 'damaged', 'first']);
 	numRows(d.samples);
 	Object.keys(d.measured || {}).forEach(function (b) { d.measured[b] = num(d.measured[b]); });
 	(d.radios || []).forEach(function (r) { numKeys(r, ['radio', 'ctl', 'width', 'center', 'noise', 'dfs_ms']); r.channels = (r.channels || []).map(num); });
@@ -1447,7 +1454,7 @@ function render() {
 		var L = WI.live, scans = L.collection === 'off' ? 'collection off' : L.collection === 'paused' ? 'neighbour scans paused'
 			: 'neighbour scans ' + (L.scan_interval > 0 ? 'every ' + L.scan_interval + ' min' + (L.quiet ? ' outside quiet hours' : '') : 'off');
 		$('wiFoot').innerHTML = 'Updated ' + hm(L.generated) + ' · samples every ' + L.sample_interval + ' s · ' + scans
-			+ ' · history kept ' + L.retain_days + ' days · v' + esc(L.version) + (L.build ? ' (development: ' + esc(L.build) + ')' : '') + (r ? ' · ' + esc(r.iface) : '');
+			+ (L.first ? ' · history since ' + histSince(L.first) : '') + ' · v' + esc(L.version) + (L.build ? ' (development: ' + esc(L.build) + ')' : '') + (r ? ' · ' + esc(r.iface) : '');
 	}
 	renderQuietMarks();
 }

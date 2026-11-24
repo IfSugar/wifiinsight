@@ -96,6 +96,11 @@ if want['samples in live.htm'] < 5000:
 bad = [k for k in want if got[k] < want[k]]
 for k in want:
     print(f"{'ok  ' if k not in bad else 'FAIL'} {k}: {got[k]} (expected {want[k]})")
+# when the history starts (the footer's "history since"): the oldest sample
+first = one("SELECT min(ts) FROM samples")
+if live.get('first') != first:
+    bad.append('first')
+print(f"{'ok  ' if live.get('first') == first else 'FAIL'} history start in live.htm: {live.get('first')} (expected {first})")
 sys.exit(1 if bad else 0)
 EOF
 [ $fail -eq 0 ] && echo "Large history: data files complete." || { echo "::error::Large history: data is lost."; exit 1; }
