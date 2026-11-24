@@ -975,6 +975,19 @@ function channelLoads() {   // average and peak load per channel across scans in
 	});
 	return { avg: avg, peak: peak, comp: comp, noise: noise, src: src, info: info, n: info.scans, latestOnly: info.latestOnly, filled: filled };
 }
+function ownLoad() {   // the router's own channel over the range, from what it measures there every sample: like a scan's measured cell
+	var s = series(['obss', 'nocat', 'nopkt', 'noise']), F = { 7: 'obss', 8: 'nocat', 9: 'nopkt' }, comp = {}, any = false, pk = 0, v = 0;
+	var mean = function (a) { var t = 0, n = 0; a.forEach(function (p) { if (p.y != null) { t += p.y; n++; } }); return n ? t / n : null; };
+	MEAS.forEach(function (m) { var a = mean(s[F[m[1]]]); comp[m[0]] = a == null ? null : Math.round(a * 10) / 10; if (a != null) any = true; });
+	if (!any) return null;
+	MEAS.forEach(function (m) { if (!WI.hidden['meas:' + m[0]]) v += comp[m[0]] || 0; });
+	s.obss.forEach(function (p, i) {
+		var t = 0; MEAS.forEach(function (m) { var q = s[F[m[1]]][i]; if (!WI.hidden['meas:' + m[0]] && q && q.y != null) t += q.y; });
+		if (t > pk) pk = t;
+	});
+	var nz = mean(s.noise);
+	return { avg: Math.min(100, Math.round(v * 10) / 10), peak: Math.round(Math.min(100, pk)), comp: comp, noise: nz == null ? null : Math.round(nz) };
+}
 function renderChannels() {
 	$('wiBestSub').textContent = 'Best channel for each width, based on the load above.' + (kind() === '5g' ? ' DFS channels can be forced to change if radar is detected.' : '') +
 		(kind() === '2g' ? ' Only 1, 6 and 11 are suggested: they\'re the three that don\'t overlap.' : '');
@@ -1002,17 +1015,26 @@ function renderChannels() {
 		ttTitle: function (it) { return 'Channel ' + it[0].label + (isDfs(+it[0].label) ? ' (' + chanTags(+it[0].label) + ')' : ''); } });
 
 	var L = channelLoads(), meas = L.src === 'measured';
+	/* The router's own channel, when no scan in range measured it: some drivers won't scan the DFS channels, theirs
+	   included, while on one (an RT-BE88U on 136/80). Then it comes from what the router measures on its own channel
+	   with every sample, over the same range, so the chart and Your current still show it. */
+	var own = meas && cur.length && cur.every(function (c) { return ch.indexOf(c) >= 0 && L.avg[c] == null; }) ? ownLoad() : null;
+	if (own) cur.forEach(function (c) {
+		L.avg[c] = own.avg; L.peak[c] = own.peak; MEAS.forEach(function (m) { L.comp[m[0]][c] = own.comp[m[0]]; });
+		if (L.noise[c] == null) L.noise[c] = own.noise;
+	});
 	$('wiLoadSrc').innerHTML = srcControls(L.info, L.src, 'wiMeshLbl2');
 	$('wiLoadTitle').textContent = meas ? 'Load per channel' : 'Estimated load per channel';
 	var mn = L.info.mscans, part = meas && !L.latestOnly && mn < L.n;   /* scans from before the update have no measurements */
 	var sc = function (n) { return n + ' scan' + (n === 1 ? '' : 's'); };
 	$('wiLoadSub').textContent = (meas ? 'Measured by the radio' : 'Estimated from the networks heard')
 		+ (L.latestOnly ? ' in the latest scan' : part ? ' in ' + mn + ' of the ' + sc(L.n) + ' in range' : ', averaged over ' + sc(L.n)) + '. Lower is better.'
-		+ (L.filled ? ' ' + L.filled + ' channel' + (L.filled === 1 ? '' : 's') + ' the ' + (L.latestOnly || L.n === 1 ? 'scan' : 'scans') + ' didn\'t cover: from the newest earlier scan that did.' : '');
+		+ (L.filled ? ' ' + L.filled + ' channel' + (L.filled === 1 ? '' : 's') + ' the ' + (L.latestOnly || L.n === 1 ? 'scan' : 'scans') + ' didn\'t cover: from the newest earlier scan that did.' : '')
+		+ (own ? ' Your channel isn\'t scanned here, so it shows what the router measures on it itself.' : '');
 	var data = ch.map(function (c) { return L.avg[c]; });
 	var maxV = Math.max.apply(null, data.map(function (v) { return v || 0; }));
 	var curIdx = ch.map(function (c, i) { return cur.indexOf(c) >= 0 ? i : -1; }).filter(function (i) { return i >= 0; });
-	var title = function (it) { return 'Channel ' + it[0].label + (isDfs(+it[0].label) ? ' (' + chanTags(+it[0].label) + ')' : '') + (cur.indexOf(+it[0].label) >= 0 ? ' · in use' : ''); };
+	var title = function (it) { return 'Channel ' + it[0].label + (isDfs(+it[0].label) ? ' (' + chanTags(+it[0].label) + ')' : '') + (cur.indexOf(+it[0].label) >= 0 ? ' · in use' + (own ? ', measured by the router itself' : '') : ''); };
 	var bar = { borderSkipped: 'bottom', categoryPercentage: 0.72, barPercentage: 0.9 };
 	var yMax = Math.min(100, Math.max(20, Math.ceil((maxV + 5) / 10) * 10));
 	if (meas) {   /* stacked: the measured parts that are switched on */
