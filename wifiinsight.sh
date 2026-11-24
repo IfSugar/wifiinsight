@@ -1307,10 +1307,11 @@ tz_off() {
 }
 
 # Airtime averages per time bucket: [b, obss, nocat, yours, idle, max(obss+nocat), glitch, badplcp,
-# noise, nopkt, tx, inbss, goodtx, badtx]. b is the bucket start, aligned to local time.
+# noise, nopkt, tx, inbss, goodtx, badtx]. b is the bucket start, aligned to local time. The offset is in
+# brackets: west of UTC it's negative, and "-$aoff" would be "--18000", which SQL reads as a comment.
 samples_agg() {   # days bucket-seconds -> JSON on stdout ({} if the DB is busy)
 	asince=$(( $(now) - $1 * 86400 )); B=$2; aoff=$(tz_off)
-	json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(b, o, n, u, i, m, g, bp, nz, np, tx, ib, gt, bt)) AS a FROM (SELECT band, ((ts+$aoff)/$B)*$B-$aoff AS b, round(avg(obss),1) AS o, round(avg(nocat),1) AS n, round(avg(tx+inbss),1) AS u, round(avg(idle),1) AS i, max(obss+nocat) AS m, round(avg(glitch)) AS g, round(avg(badplcp)) AS bp, round(avg(noise),1) AS nz, round(avg(nopkt),1) AS np, round(avg(tx),1) AS tx, round(avg(inbss),1) AS ib, round(avg(goodtx),1) AS gt, round(avg(badtx),1) AS bt FROM samples WHERE ts>=$asince GROUP BY band, b ORDER BY band, b) GROUP BY band);"
+	json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(b, o, n, u, i, m, g, bp, nz, np, tx, ib, gt, bt)) AS a FROM (SELECT band, ((ts+($aoff))/$B)*$B-($aoff) AS b, round(avg(obss),1) AS o, round(avg(nocat),1) AS n, round(avg(tx+inbss),1) AS u, round(avg(idle),1) AS i, max(obss+nocat) AS m, round(avg(glitch)) AS g, round(avg(badplcp)) AS bp, round(avg(noise),1) AS nz, round(avg(nopkt),1) AS np, round(avg(tx),1) AS tx, round(avg(inbss),1) AS ib, round(avg(goodtx),1) AS gt, round(avg(badtx),1) AS bt FROM samples WHERE ts>=$asince GROUP BY band, b ORDER BY band, b) GROUP BY band);"
 }
 
 export_week() {   # 7 days in 15-minute buckets
@@ -1326,7 +1327,7 @@ export_month() {
 		printf '{"generated":%s,"bucket":3600,"agg":' "$t"
 		samples_agg 30 3600
 		printf ',"scan_bucket":21600,"scans":'
-		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json(CASE WHEN mn = 0 THEN json_array(b, ch, sc, ap, be, ow, n) ELSE json_array(b, ch, sc, ap, be, ow, n, mo, mc, mp, mz, mg, mn) END)) AS a FROM (SELECT s.band, ((s.ts+$off)/21600)*21600-$off AS b, s.ch, round(avg(s.score),1) AS sc, max(s.aps) AS ap, max(s.best) AS be, round(avg(s.own),1) AS ow, count(*) AS n, round(avg(m.obss),1) AS mo, round(avg(m.nocat),1) AS mc, round(avg(m.nopkt),1) AS mp, round(avg(m.noise)) AS mz, round(avg(m.glitch)) AS mg, count(m.obss) AS mn FROM scans s LEFT JOIN chanim m ON m.band=s.band AND m.ts=s.ts AND m.ch=s.ch WHERE s.ts>=$since GROUP BY s.band, b, s.ch ORDER BY s.band, b, s.ch) GROUP BY band);"
+		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json(CASE WHEN mn = 0 THEN json_array(b, ch, sc, ap, be, ow, n) ELSE json_array(b, ch, sc, ap, be, ow, n, mo, mc, mp, mz, mg, mn) END)) AS a FROM (SELECT s.band, ((s.ts+($off))/21600)*21600-($off) AS b, s.ch, round(avg(s.score),1) AS sc, max(s.aps) AS ap, max(s.best) AS be, round(avg(s.own),1) AS ow, count(*) AS n, round(avg(m.obss),1) AS mo, round(avg(m.nocat),1) AS mc, round(avg(m.nopkt),1) AS mp, round(avg(m.noise)) AS mz, round(avg(m.glitch)) AS mg, count(m.obss) AS mn FROM scans s LEFT JOIN chanim m ON m.band=s.band AND m.ts=s.ts AND m.ch=s.ch WHERE s.ts>=$since GROUP BY s.band, b, s.ch ORDER BY s.band, b, s.ch) GROUP BY band);"
 		printf '}\n'
 	} | write_atomic "$wd/month.htm"
 }
