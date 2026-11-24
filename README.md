@@ -13,7 +13,7 @@ A WiFi Insight-style dashboard for Broadcom-based Asuswrt-Merlin routers, with v
 |---|---|
 | **Insight** | Live tiles, interference on your channel over time with event markers, a spectrum heatmap of every channel, and a log of channel changes, radar detections and reboots. |
 | **Site Survey** | A signal map of the networks around you and a sortable list (BSSID, channel, width, Wi-Fi standard, security, signal, load). Your own networks and AiMesh nodes are marked. |
-| **Channel Statistics** | Networks and load per channel, the noise floor per channel, and the quietest channel for each width (on 5 GHz with and without DFS, weather-radar channels marked). |
+| **Channel Statistics** | Networks and load per channel, the noise floor per channel, and the quietest channel for each width (on 2.4 GHz one of 1, 6 and 11, the three that don't overlap; on 5 GHz with and without DFS, weather-radar channels marked) next to the load of the channel you're on. |
 | **Troubleshooting** | Airtime breakdown, glitch counters, transmit success vs failure, noise floor and the raw `chanim_stats` counters. |
 | **Settings** | Collection on, scans paused or off, sample and scan intervals, history length, extra SSIDs to treat as yours, and quiet hours with no scheduled scans. |
 

@@ -5,6 +5,7 @@ What changed in each release of WiFi Insight. The release workflow copies a vers
 ## Unreleased
 
 - **One-channel scans no longer get stuck on a channel the driver won't take.** Where the driver refuses full scans (some do on a DFS channel), WiFi Insight scans the band one channel at a time, spread out, and asked again for a refused channel a minute later until the driver took it. A driver that refused one channel every time held up the rest of the band: the sweep was dropped after an hour and started over from the first channel, so the channels after the refused one, often including the router's own, were never measured. Now a channel refused 5 times in a row is skipped until the next sweep, and the sweep's line in the system log names it (*…, 17 channels measured; skipped, refused 5 times in a row: 56*). Thanks to scootertramp for the report that led to it.
+- **Channel Statistics shows the load of your 2.4 GHz channel whichever it is.** *Quietest options* suggests only 1, 6 or 11 on 2.4 GHz, the three channels that don't overlap, and showed *Your current* only when the router was on one of them: on channel 9, say, or at 40 MHz, it said "–". Now it shows the load of the channel in use all the same, and the card says why only those three are suggested. Thanks to ColDen for the screenshot.
 
 ## 2.2.0
 

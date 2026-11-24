@@ -969,7 +969,8 @@ function channelLoads() {   // average and peak load per channel across scans in
 	return { avg: avg, peak: peak, comp: comp, noise: noise, src: src, info: info, n: info.scans, latestOnly: info.latestOnly, filled: filled };
 }
 function renderChannels() {
-	$('wiBestSub').textContent = 'Best channel for each width, based on the load above.' + (kind() === '5g' ? ' DFS channels can be forced to change if radar is detected.' : '');
+	$('wiBestSub').textContent = 'Best channel for each width, based on the load above.' + (kind() === '5g' ? ' DFS channels can be forced to change if radar is detected.' : '') +
+		(kind() === '2g' ? ' Only 1, 6 and 11 are suggested: they\'re the three that don\'t overlap.' : '');
 	var ch = chans(), list = aps(), r = radio(), cur = r ? spanOf(r.center, r.width) : [];
 	if (!ch.length || !list.length && !(WI.scans && WI.scans.scans && (WI.scans.scans[WI.band] || []).length)) {
 		drawChart('cnt', 'wiCntChart', 'bar', [], { empty: noScansMsg() });
@@ -1073,17 +1074,24 @@ function renderBest(L, ch, r) {
 		if (w === 20) {
 			(kind() === '2g' ? [1, 6, 11] : ch).forEach(function (c) { if (L.avg[c] != null) cands.push([c]); });
 		} else ((BLOCKS[kind()] || {})[w] || []).forEach(function (b) { if (b.every(function (c) { return L.avg[c] != null; })) cands.push(b); });
-		if (!cands.length) return;
-		var scored = cands.map(function (b) {
+		var score = function (b) {
 			var s = b.reduce(function (t, c) { return t + L.avg[c]; }, 0) / b.length, pk = Math.max.apply(null, b.map(function (c) { return L.peak[c]; }));
 			return { b: b, s: Math.round(s * 10) / 10, pk: pk, dfs: b.some(isDfs), wx: b.some(isWx) };
-		}).sort(function (a, b) { return a.s - b.s || a.pk - b.pk || (a.dfs - b.dfs); });
-		var best = scored[0], nonDfs = scored.filter(function (x) { return !x.dfs; })[0];
+		};
+		var scored = cands.map(score).sort(function (a, b) { return a.s - b.s || a.pk - b.pk || (a.dfs - b.dfs); });
+		var best = scored[0] || null, nonDfs = scored.filter(function (x) { return !x.dfs; })[0];
 		/* Weather-radar channels need a much longer radar check (10 minutes in Europe): when a block
 		   without one is about as quiet (within half a percentage point), suggest that instead. */
-		if (best.wx) best = scored.filter(function (x) { return !x.wx && x.s <= best.s + 0.5; })[0] || best;
+		if (best && best.wx) best = scored.filter(function (x) { return !x.wx && x.s <= best.s + 0.5; })[0] || best;
 		var curBlk = null;
-		if (r && r.width === w) { var sp = spanOf(r.center, r.width); curBlk = scored.filter(function (x) { return x.b[0] === sp[0]; })[0] || null; }
+		if (r && r.width === w) {
+			var sp = spanOf(r.center, r.width);
+			curBlk = scored.filter(function (x) { return x.b[0] === sp[0]; })[0] || null;
+			/* the channel in use isn't one that's suggested (on 2.4 GHz only 1, 6 and 11 are, and no 40 MHz
+			   block): its load all the same, where every channel it covers was measured */
+			if (!curBlk && sp.every(function (c) { return L.avg[c] != null; })) curBlk = score(sp);
+		}
+		if (!best && !curBlk) return;
 		rows.push({ w: w, best: best, nonDfs: nonDfs, cur: curBlk });
 	});
 	if (!rows.length) { $('wiBest').innerHTML = ''; return; }
@@ -1097,7 +1105,7 @@ function renderBest(L, ch, r) {
 	var dfsBand = kind() === '5g';   /* 2.4 and 6 GHz have no DFS channels: no "without DFS" columns */
 	var h = '<table class="t"><tr><th style="width:80px">Width</th><th>Quietest channel</th><th class="num">' + lh + '</th>' + (dfsBand ? '<th>Quietest without DFS</th><th class="num">' + lh + '</th>' : '') + '<th>Your current</th></tr>';
 	rows.forEach(function (x) {
-		h += '<tr><td>' + x.w + ' MHz</td><td>' + name(x.best) + tag(x.best) + '</td><td class="num">' + x.best.s + '%</td>' +
+		h += '<tr><td>' + x.w + ' MHz</td><td>' + (x.best ? name(x.best) + tag(x.best) : '<span style="color:var(--muted)">–</span>') + '</td><td class="num">' + (x.best ? x.best.s + '%' : '') + '</td>' +
 			(dfsBand ? '<td>' + (x.nonDfs ? name(x.nonDfs) : '<span style="color:var(--muted)">–</span>') + '</td><td class="num">' + (x.nonDfs ? x.nonDfs.s + '%' : '') + '</td>' : '') +
 			'<td>' + (x.cur ? name(x.cur) + ' · ' + x.cur.s + '%' + (x.cur.wx ? tag(x.cur) : '') + '<span class="pill cur">in use</span>' : '<span style="color:var(--muted)">–</span>') + '</td></tr>';
 	});
