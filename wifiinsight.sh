@@ -1299,8 +1299,9 @@ export_live() {
 		printf '"measured":{%s},"country":"%s","territory":"%s","radios":%s,' "$mj" "$(js "$(country_code)")" "$(js "$(territory_code)")" "$(radios_json)"
 		printf '"damaged":%s,' "$(jnum "$(cat "$DATA_DIR/damaged" 2>/dev/null)")"   # when sqlite first said the database is damaged; null = fine
 		# the oldest sample (when the history starts, for the page's "history since"), in the same sqlite3 run as
-		# the day of samples: an index lookup, no extra run
-		json_out '"first":null,"samples":{}' "SELECT '\"first\":' || coalesce((SELECT min(ts) FROM samples), 'null') || ',\"samples\":' || coalesce((SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(ts,obss,nocat,tx,inbss,idle,glitch,noise,ctl,width,center,nopkt,doze,txop,goodtx,badtx,badplcp,knoise)) AS a FROM (SELECT * FROM samples WHERE ts>=$since ORDER BY band, ts) GROUP BY band)), '{}');"
+		# the day of samples: an index lookup, no extra run. Cast: the only value that goes into the JSON as text,
+		# so a planted database whose ts isn't a number can't add keys to live.htm (ts is a plain INTEGER column).
+		json_out '"first":null,"samples":{}' "SELECT '\"first\":' || coalesce((SELECT CAST(min(ts) AS INTEGER) FROM samples), 'null') || ',\"samples\":' || coalesce((SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(ts,obss,nocat,tx,inbss,idle,glitch,noise,ctl,width,center,nopkt,doze,txop,goodtx,badtx,badplcp,knoise)) AS a FROM (SELECT * FROM samples WHERE ts>=$since ORDER BY band, ts) GROUP BY band)), '{}');"
 		printf ',"events":'
 		json_out '[]' "SELECT json_group_array(json_array(ts,band,tag,old,new,detail)) FROM (SELECT * FROM events WHERE ts>=$evsince ORDER BY ts DESC LIMIT 500);"
 		printf '}\n'

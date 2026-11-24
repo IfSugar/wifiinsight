@@ -1461,10 +1461,11 @@ function tabHidden() { return document.visibilityState === 'hidden'; }
 function render() {
 	if (tabHidden()) { WI.redraw = true; return; }
 	WI.redraw = false; WI.drawn = (WI.drawn || 0) + 1;
-	var bands = ((WI.live && WI.live.radios) || []).map(function (r) { return r.band; });
+	/* only radio keys (2g, 5g2...): they go into onclick, and the names (escaped) into the buttons */
+	var bands = ((WI.live && WI.live.radios) || []).map(function (r) { return r.band; }).filter(function (b) { return /^[256]g\d?$/.test(String(b)); });
 	if (bands.length && bands.indexOf(WI.band) < 0) WI.band = bands[0];
 	$('wiTabs').innerHTML = VIEWS.map(function (v) { return '<button type="button" class="' + (v[0] === WI.view ? 'on' : '') + '" onclick="WiFiInsight.setView(\'' + v[0] + '\')">' + v[1] + '</button>'; }).join('');
-	$('wiBands').innerHTML = bands.map(function (b) { return '<button type="button" class="' + (b === WI.band ? 'on' : '') + '" onclick="WiFiInsight.setBand(\'' + b + '\')">' + bandName(b) + '</button>'; }).join('');
+	$('wiBands').innerHTML = bands.map(function (b) { return '<button type="button" class="' + (b === WI.band ? 'on' : '') + '" onclick="WiFiInsight.setBand(\'' + b + '\')">' + esc(bandName(b)) + '</button>'; }).join('');
 	$('wiRanges').innerHTML = Object.keys(RANGE_CFG).map(function (k) { return [k, RANGE_CFG[k].btn]; }).map(function (x) { return '<button type="button" class="' + (x[0] === WI.range ? 'on' : '') + '" onclick="WiFiInsight.setRange(\'' + x[0] + '\')">' + x[1] + '</button>'; }).join('');
 	var timed = WI.view === 'insight' || WI.view === 'trouble' || WI.view === 'channels';
 	$('wiRanges').style.display = timed ? '' : 'none';
