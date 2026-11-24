@@ -270,7 +270,7 @@ expect "background radar check over: trickle carries on" "4" "$(calls $((n + 1))
 : > "$F/eth7.refused"; step; step; step; step
 expect "gap shrinks: back to 20 s" "20" "$(cat "$R/tmp/wifiinsight/gap_5g" 2>/dev/null)"
 expect "gap shrinks: channels 20 s apart again, none refused" "20|0" "$(tail -2 "$F/eth7.times" | awk 'NR == 1 { a = $1 } NR == 2 { print $1 - a }')|$(wc -l < "$F/eth7.refused" | tr -d ' ')"
-rm -f "$F/eth7.reject_full" "$F/eth7.bgcac" "$R/tmp/wifiinsight/refused_5g" "$R/tmp/wifiinsight/sweep_5g" "$R/tmp/wifiinsight/trickle_5g.due" "$R/tmp/wifiinsight/gap_5g"
+rm -f "$F/eth7.reject_full" "$F/eth7.bgcac" "$R/tmp/wifiinsight/refused_5g" "$R/tmp/wifiinsight/sweep_5g" "$R/tmp/wifiinsight/trickle_5g.due" "$R/tmp/wifiinsight/trickle_5g.moved" "$R/tmp/wifiinsight/gap_5g"
 sched
 
 # 11: 2-hour scans: one channel every 2 minutes (a sweep in about 40 minutes)
@@ -288,9 +288,36 @@ echo 56 > "$F/eth7.refuse"; : > "$F/eth7.refused"; n=$(mark); i=0; while [ $i -l
 expect "refused every time: 5 tries, then the next channels" "56 56 56 56 56|60 64" "$(tr '\n' ' ' < "$F/eth7.refused" | sed 's/ $//')|$(calls $((n + 1)))"
 i=0; while [ $i -lt 40 ] && ! grep -q 'one channel at a time, spread out: .*skipped' "$F/log"; do step; i=$((i + 1)); done
 expect "refused every time: the sweep reaches the end of the band" "140" "$(calls $((n + 1)) | awk '{ print $NF }')"
-expect "refused every time: the sweep's line names it" "scan 5g (eth7): one channel at a time, spread out: 17 channels, 2 networks, 17 channels measured; skipped, refused 5 times in a row: 56" "$(grep 'one channel at a time, spread out: ' "$F/log" | tail -1)"
+expect "refused every time: the sweep's line names it" "scan 5g (eth7): one channel at a time, spread out: 17 channels, 2 networks, 17 channels measured; skipped, refused every time: 56" "$(grep 'one channel at a time, spread out: ' "$F/log" | tail -1)"
 rm -f "$F/eth7.refuse"; sched; n=$(mark); i=0; while [ $i -lt 30 ] && ! calls $((n + 1)) | grep -qw 56; do step; i=$((i + 1)); done
 expect "refused every time: the next sweep asks for it again" "36 40 44 48 52 56" "$(calls $((n + 1)))"
+
+# 11c: a radio on a DFS channel that refuses every other DFS channel, as an RT-BE88U on 136/80 did (52-144):
+# every sweep gets through the band. The first skips each of them after 5 refusals, and each skip counts as
+# moving on, so the sweep isn't dropped for an hour without a channel taken (before, it was, and started
+# over from 36: no sweep ever finished). The next sweeps skip them at their first refusal, and a channel
+# refused after a skip gets no 10 s of asking again (that's for a driver that needs a pause after one taken).
+sed -i '/^SCAN_INTERVAL=/d' "$R/jffs/addons/wifiinsight/config"   # 30-minute scans again
+printf '%s\n' 52 56 60 64 100 104 108 112 116 120 124 128 132 136 140 > "$F/eth7.refuse"
+sched; : > "$F/eth7.refused"; l0=$(wc -l < "$F/log"); n=$(mark); m=0
+while [ $m -lt 110 ]; do m=$((m + 1)); step; [ $((m % 30)) = 0 ] && sched; done
+sweeps=$(tail -n +$((l0 + 1)) "$F/log" | grep -c 'one channel at a time, spread out: ' || true)
+[ "$sweeps" -ge 2 ] && ok "DFS refused: sweeps get through the band ($sweeps in 110 minutes)" || bad "DFS refused: $sweeps sweeps in 110 minutes"
+expect "DFS refused: the sweep's line" "scan 5g (eth7): one channel at a time, spread out: 4 channels, 1 network, 4 channels measured; skipped, refused every time: 52 56 60 64 100 104 108 112 116 120 124 128 132 136 140" "$(grep 'one channel at a time, spread out: ' "$F/log" | tail -1)"
+r=$(wc -l < "$F/eth7.refused" | tr -d ' '); [ "$r" -le 120 ] && ok "DFS refused: $r refused requests in 110 minutes" || bad "DFS refused: $r refused requests in 110 minutes (asks too often)"
+sched; : > "$F/eth7.refused"; n=$(mark); i=0
+while [ $i -lt 15 ] && [ "$(tail -n +$((l0 + 1)) "$F/log" | grep -c 'one channel at a time, spread out: ')" -le "$sweeps" ]; do step; i=$((i + 1)); done
+[ $i -le 12 ] && ok "DFS refused: a later sweep takes $i minutes" || bad "DFS refused: a later sweep took $i minutes"
+expect "DFS refused: a later sweep asks for each once" "15" "$(wc -l < "$F/eth7.refused" | tr -d ' ')"
+
+# 11d: the first channels of the band refused every time: the sweep moves on from them instead of starting
+# over at the first channel each minute (a sweep with nothing taken yet still counts as under way)
+printf '%s\n' 36 40 > "$F/eth7.refuse"; rm -f "$R/tmp/wifiinsight/trickle_5g.skiplast"
+sched; l0=$(wc -l < "$F/log"); n=$(mark); i=0
+while [ $i -lt 40 ] && [ "$(tail -n +$((l0 + 1)) "$F/log" | grep -c 'one channel at a time, spread out: ')" = 0 ]; do step; i=$((i + 1)); done
+expect "first channels refused: the rest of the band" "44 48 52 56 60 64 100 104 108 112 116 120 124 128 132 136 140" "$(calls $((n + 1)))"
+expect "first channels refused: named" "skipped, refused every time: 36 40" "$(tail -1 "$F/log" | sed 's/.*; //')"
+rm -f "$F/eth7.refuse"
 
 # 12: scans paused: no trickle
 sed -i 's/^COLLECTION=.*//' "$R/jffs/addons/wifiinsight/config"; echo 'COLLECTION="paused"' >> "$R/jffs/addons/wifiinsight/config"
