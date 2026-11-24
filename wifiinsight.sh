@@ -15,7 +15,7 @@
 #              -o /tmp/wifiinsight.sh && sh /tmp/wifiinsight.sh install
 ###############################################################################
 
-VERSION="2.2.0"
+VERSION="2.3.0"
 NAME="wifiinsight"
 TITLE="WiFi Insight"
 
@@ -943,7 +943,7 @@ sweep_done() {   # band ifc: a sweep one channel at a time reached the end of th
 	# then a rest until the next scheduled scan starts the next sweep. The channels it skipped are kept for
 	# that one (trickle_<band>.skiplast): there, each is skipped at its first refusal.
 	_ts=$(cat "$TMPD/sweep_$1" 2>/dev/null); _sk=$(cat "$TMPD/trickle_$1.skipped" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
-	case "$_ts" in ''|*[!0-9]*) ;; *)
+	case "$_ts" in ''|*[!0-9]*) [ -n "$_sk" ] && log "scan $1 ($2): one channel at a time, spread out: no channel taken; skipped, refused every time: $_sk" ;; *)
 		_nn=$(sql "SELECT count(DISTINCT bssid) FROM aps WHERE band='$1' AND ts=$_ts;")
 		log "scan $1 ($2): one channel at a time, spread out: $(sql "SELECT count(*) FROM scans WHERE band='$1' AND ts=$_ts;") channels, $_nn network$( [ "$_nn" = 1 ] || printf s), $(sql "SELECT count(*) FROM chanim WHERE band='$1' AND ts=$_ts;") channels measured${_sk:+; skipped, refused every time: $_sk}" ;;
 	esac
@@ -1011,7 +1011,7 @@ trickle() {
 				# refused soon after the last one taken: this driver needs longer between single channels.
 				# Ask again each second for up to 10 s, and keep how long it took (see scan_each). Not after a
 				# channel skipped: this one is likely refused for the same reason, not for being too soon.
-				if [ $pk = 1 ] && ! grep -q 'Bad Channel' "$err" && ! bg_radar "$ifc" "$band"; then
+				if [ $pk = 1 ] && ! grep -q 'Bad Channel' "$err" && ! grep -qx "$c" "$skl" 2>/dev/null && ! bg_radar "$ifc" "$band"; then
 					tw=$(now)
 					while [ $(( $(now) - tw )) -lt 10 ]; do
 						sleep 1
@@ -1150,12 +1150,15 @@ scan_radio() {   # ifc band chanspec
 		if [ $quick = 1 ]; then result=busy; detail=$(wl_said "$err" 0 "refused" | sed 's/ for 0 s$/ again/'); return 0; fi
 		if [ $(( $(now) - t0 )) -ge 20 ]; then
 			result=busy; detail=$(wl_said "$err" 20 "still busy")
-			[ -n "$3" ] && grep -q 'Scan Rejected' "$err" && echo "$3 $(now)" > "$rf"
+			if [ -n "$3" ] && grep -q 'Scan Rejected' "$err"; then
+				[ "$4" = "$3" ] || rm -f "$TMPD"/trickle_"$2".* "$TMPD/sweep_$2"   # refused on another chanspec: a sweep from the old one is no use
+				echo "$3 $(now)" > "$rf"
+			fi
 			return 0
 		fi
 		sleep 2
 	done
-	rm -f "$rf" "$TMPD/trickle_$2.due" "$TMPD/gap_$2"   # full scans work: no spreading
+	rm -f "$rf" "$TMPD/gap_$2" "$TMPD"/trickle_"$2".* "$TMPD/sweep_$2"   # full scans work: no spreading, and nothing left of a sweep
 	limit=45; [ "${2%[0-9]}" = 2g ] && limit=20
 	t1=$(now); sleep 3
 	while :; do
@@ -1299,8 +1302,9 @@ export_live() {
 		printf '"measured":{%s},"country":"%s","territory":"%s","radios":%s,' "$mj" "$(js "$(country_code)")" "$(js "$(territory_code)")" "$(radios_json)"
 		printf '"damaged":%s,' "$(jnum "$(cat "$DATA_DIR/damaged" 2>/dev/null)")"   # when sqlite first said the database is damaged; null = fine
 		# the oldest sample (when the history starts, for the page's "history since"), in the same sqlite3 run as
-		# the day of samples: an index lookup, no extra run
-		json_out '"first":null,"samples":{}' "SELECT '\"first\":' || coalesce((SELECT min(ts) FROM samples), 'null') || ',\"samples\":' || coalesce((SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(ts,obss,nocat,tx,inbss,idle,glitch,noise,ctl,width,center,nopkt,doze,txop,goodtx,badtx,badplcp,knoise)) AS a FROM (SELECT * FROM samples WHERE ts>=$since ORDER BY band, ts) GROUP BY band)), '{}');"
+		# the day of samples: an index lookup, no extra run. Cast: the only value that goes into the JSON as text,
+		# so a planted database whose ts isn't a number can't add keys to live.htm (ts is a plain INTEGER column).
+		json_out '"first":null,"samples":{}' "SELECT '\"first\":' || coalesce((SELECT CAST(min(ts) AS INTEGER) FROM samples), 'null') || ',\"samples\":' || coalesce((SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(ts,obss,nocat,tx,inbss,idle,glitch,noise,ctl,width,center,nopkt,doze,txop,goodtx,badtx,badplcp,knoise)) AS a FROM (SELECT * FROM samples WHERE ts>=$since ORDER BY band, ts) GROUP BY band)), '{}');"
 		printf ',"events":'
 		json_out '[]' "SELECT json_group_array(json_array(ts,band,tag,old,new,detail)) FROM (SELECT * FROM events WHERE ts>=$evsince ORDER BY ts DESC LIMIT 500);"
 		printf '}\n'

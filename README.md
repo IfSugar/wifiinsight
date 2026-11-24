@@ -62,7 +62,7 @@ Ranges from 10 minutes to 30 days. Each radio has its own button: 2.4, 5 and 6 G
 | RT-AX86U | 2.4 + 5 GHz | Tested, including the measured spectrum |
 | RT-AX86U Pro | 2.4 + 5 GHz | Works (user reports) |
 | RT-AX88U, GT-AX6000 | 2.4 + 5 GHz | Works (user reports); on a DFS channel the driver refuses full 5 GHz scans (see below) |
-| RT-BE88U | 2.4 + 5 GHz | Works (user reports); some refuse full 5 GHz scans on a DFS channel |
+| RT-BE88U | 2.4 + 5 GHz | Works (user reports); some refuse full 5 GHz scans on a DFS channel, and a US one the other DFS channels one at a time too |
 | RT-BE96U | 2.4 + 5 + 6 GHz | Works, including 6 GHz (user report) |
 | RT-AX58U (V1), RT-AX68U, RT-AX88U Pro, RT-BE86U, RT-BE58 Go | 2.4 + 5 GHz | Should work |
 | GT-AXE11000, RT-BE92U, GT-BE19000AI | 2.4 + 5 + 6 GHz | Should work |
@@ -72,7 +72,7 @@ Ranges from 10 minutes to 30 days. Each radio has its own button: 2.4, 5 and 6 G
 
 *Should work*: meets the requirements and its radio layout comes from the Merlin source, but nobody has reported running it yet. Models on a sibling's firmware (RT-AX3000 V1, RT-AX86S, RT-BE7200) should match it; older models and Gnuton's firmware are untried. `check` tells you before anything is installed, and a [router report](https://github.com/IfSugar/wifiinsight/issues/new/choose) helps add your model.
 
-**Scans refused on DFS channels.** Some drivers refuse full 5 GHz scans while the router is on a DFS channel (52–144). WiFi Insight then scans one channel at a time, spread out over the scan interval, and the page says so. For full scans, use a channel outside 52–144: in Wireless → General, un-tick "Enable 160 MHz" and "Auto select channel including DFS channels". That costs 160 MHz in most regions, and the other channels may be busier.
+**Scans refused on DFS channels.** Some drivers refuse full 5 GHz scans while the router is on a DFS channel (52–144). WiFi Insight then scans one channel at a time, spread out over the scan interval, and the page says so. Some also refuse the other DFS channels one at a time (a US RT-BE88U): those are skipped, and Channel Statistics shows your own channel from what the router measures on it. For full scans, use a channel outside 52–144: in Wireless → General, un-tick "Enable 160 MHz" and "Auto select channel including DFS channels". That costs 160 MHz in most regions, and the other channels may be busier.
 
 ## Install
 

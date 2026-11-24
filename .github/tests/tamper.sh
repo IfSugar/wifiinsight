@@ -118,4 +118,18 @@ run collect --once > /dev/null || true
 expect "database replaced by a link: not used (the link's target unchanged)" "0" "$("$sqlite" "$T/other.db" "SELECT count(*) FROM samples")"
 has "database replaced by a link: not ready" "Ready:       no" "$(run status)"
 
+# 6: a planted database whose sample times aren't numbers can't add keys to live.htm through its "first" (the
+# oldest sample's time, the one value that went into the JSON as it was). Made read-only (header byte 18), so
+# the router's own samples can't be written into it and sort before the planted one.
+fresh firstinj
+"$sqlite" "$D/wifiinsight.db" < "$schema"
+"$sqlite" "$D/wifiinsight.db" "INSERT INTO samples(ts, band) VALUES('1,\"version\":\"<img src=x onerror=alert(1)>\",\"radios\":[],\"x\":0', '2g');"
+python3 -c 'import sys; f = open(sys.argv[1], "r+b"); f.seek(18); f.write(bytes([3]))' "$D/wifiinsight.db"
+run collect --once > /dev/null || true
+python3 - "$R/www/user/wifiinsight/live.htm" <<'PY' && ok "planted text sample time: live.htm's keys intact, first a number" || bad "planted text sample time leaks into live.htm"
+import json, sys
+d = json.load(open(sys.argv[1]))
+sys.exit(0 if d['first'] == 1 and not d['version'].startswith('<') and 'x' not in d and len(d['radios']) == 2 else 1)
+PY
+
 [ $fail -eq 0 ] && echo "Tamper: all checks passed." || { echo "::error::Tamper: some checks failed."; exit 1; }

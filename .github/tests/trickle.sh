@@ -244,6 +244,7 @@ rm -f "$F/eth7.reject_full"; echo $(( $(cat "$F/clock") + 6 * 3600 )) > "$F/cloc
 sched
 expect "full scans work again" "ok, 2 networks in 3 s, 19 channels measured" "$r5"
 [ ! -f "$R/tmp/wifiinsight/refused_5g" ] && ok "full scans work again: the refusal is forgotten" || bad "refused_5g still there"
+expect "full scans work again: nothing left of the sweep" "" "$(cd "$R/tmp/wifiinsight" && ls trickle_5g.* sweep_5g 2>/dev/null | tr '\n' ' ')"
 n=$(mark); step
 expect "full scans work again: trickle stops" "" "$(calls $((n + 1)))"
 
@@ -318,6 +319,14 @@ while [ $i -lt 40 ] && [ "$(tail -n +$((l0 + 1)) "$F/log" | grep -c 'one channel
 expect "first channels refused: the rest of the band" "44 48 52 56 60 64 100 104 108 112 116 120 124 128 132 136 140" "$(calls $((n + 1)))"
 expect "first channels refused: named" "skipped, refused every time: 36 40" "$(tail -1 "$F/log" | sed 's/.*; //')"
 rm -f "$F/eth7.refuse"
+
+# 11e: every channel refused (each was skipped last time, so once each): the sweep still ends with a line
+# saying so, instead of ending without a word
+printf '%s\n' $ALL > "$R/tmp/wifiinsight/trickle_5g.skiplast"; touch "$F/eth7.never"
+sched; l0=$(wc -l < "$F/log"); i=0
+while [ $i -lt 20 ] && [ "$(tail -n +$((l0 + 1)) "$F/log" | grep -c 'one channel at a time, spread out: ')" = 0 ]; do step; i=$((i + 1)); done
+expect "every channel refused: the sweep's line" "scan 5g (eth7): one channel at a time, spread out: no channel taken; skipped, refused every time: $ALL" "$(grep 'one channel at a time, spread out: ' "$F/log" | tail -1)"
+rm -f "$F/eth7.never"
 
 # 12: scans paused: no trickle
 sed -i 's/^COLLECTION=.*//' "$R/jffs/addons/wifiinsight/config"; echo 'COLLECTION="paused"' >> "$R/jffs/addons/wifiinsight/config"
