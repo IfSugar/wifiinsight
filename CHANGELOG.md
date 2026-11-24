@@ -2,6 +2,10 @@
 
 What changed in each release of WiFi Insight. The release workflow copies a version's section into its GitHub release notes, so write for people running the addon.
 
+## Unreleased
+
+- **One-channel scans no longer get stuck on a channel the driver won't take.** Where the driver refuses full scans (some do on a DFS channel), WiFi Insight scans the band one channel at a time, spread out, and asked again for a refused channel a minute later until the driver took it. A driver that refused one channel every time held up the rest of the band: the sweep was dropped after an hour and started over from the first channel, so the channels after the refused one, often including the router's own, were never measured. Now a channel refused 5 times in a row is skipped until the next sweep, and the sweep's line in the system log names it (*…, 17 channels measured; skipped, refused 5 times in a row: 56*). Thanks to scootertramp for the report that led to it.
+
 ## 2.2.0
 
 WiFi Insight is in amtm now (amtm 7.3, as **in**). This release keeps sampling going when a command it runs hangs, installs on routers with Entware's coreutils, follows the ROG and TUF themes, and keeps a development version when amtm updates.

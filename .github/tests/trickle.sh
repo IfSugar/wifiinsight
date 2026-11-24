@@ -57,7 +57,7 @@ case "$2" in ntp_ready) echo 1 ;; wl0_ifname) echo eth6 ;; wl1_ifname) echo eth7
 EOF
 # Stand-in driver. Per interface, in $F: <ifc>.list (the figures it keeps: channel|obss|nocat|noise),
 # <ifc>.reject_full (refuses full scans), <ifc>.every (takes a single channel at most once every N
-# seconds), <ifc>.never (refuses single channels too), <ifc>.bad (a channel it calls "Bad Channel"),
+# seconds), <ifc>.never (refuses single channels too), <ifc>.refuse (single channels it always refuses), <ifc>.bad (a channel it calls "Bad Channel"),
 # <ifc>.stuck (a channel whose figures never change), <ifc>.nets (channel bssid ssid), <ifc>.scans (log of
 # accepted scans), <ifc>.times (when each single channel was taken), <ifc>.tries (one line per full-scan
 # request), <ifc>.refused (one line per single channel refused), <ifc>.bgcac (a background radar check
@@ -91,6 +91,7 @@ case "$cmd" in
 		if [ "$4" = -c ]; then
 			if [ -f "$F/$ifc.bad" ] && [ "$(cat "$F/$ifc.bad")" = "$5" ]; then echo "wl: Bad Channel" >&2; exit 1; fi
 			if [ -f "$F/$ifc.never" ]; then echo "wl: Scan Rejected" >&2; echo "$5" >> "$F/$ifc.refused"; exit 1; fi
+			if [ -f "$F/$ifc.refuse" ] && grep -qx "$5" "$F/$ifc.refuse"; then echo "wl: Scan Rejected" >&2; echo "$5" >> "$F/$ifc.refused"; exit 1; fi
 			if [ -f "$F/$ifc.every" ] && [ "$now" -lt $(( $(cat "$F/$ifc.lastok" 2>/dev/null || echo 0) + $(cat "$F/$ifc.every") )) ]; then
 				echo "wl: Scan Rejected" >&2; echo "$5" >> "$F/$ifc.refused"; exit 1
 			fi
@@ -279,6 +280,17 @@ n=$(mark); step; step; step; step
 expect "2-hour scans: one channel every 2 minutes" "36 40" "$(calls $((n + 1)))"
 echo 44 > "$F/eth7.bad"; n=$(mark); step; step; step; step; rm -f "$F/eth7.bad"
 expect "a channel radar put off limits: skipped" "48 52" "$(calls $((n + 1)))"
+
+# 11b: a channel the driver refuses every time: tried 5 times (a minute apart), then skipped until the next
+# sweep, so it can't hold up the rest of the band. Before, the sweep asked for it again every minute, was
+# dropped after an hour and started over from 36: the channels after it were never scanned.
+echo 56 > "$F/eth7.refuse"; : > "$F/eth7.refused"; n=$(mark); i=0; while [ $i -lt 9 ]; do step; i=$((i + 1)); done
+expect "refused every time: 5 tries, then the next channels" "56 56 56 56 56|60 64" "$(tr '\n' ' ' < "$F/eth7.refused" | sed 's/ $//')|$(calls $((n + 1)))"
+i=0; while [ $i -lt 40 ] && ! grep -q 'one channel at a time, spread out: .*skipped' "$F/log"; do step; i=$((i + 1)); done
+expect "refused every time: the sweep reaches the end of the band" "140" "$(calls $((n + 1)) | awk '{ print $NF }')"
+expect "refused every time: the sweep's line names it" "scan 5g (eth7): one channel at a time, spread out: 17 channels, 2 networks, 17 channels measured; skipped, refused 5 times in a row: 56" "$(grep 'one channel at a time, spread out: ' "$F/log" | tail -1)"
+rm -f "$F/eth7.refuse"; sched; n=$(mark); i=0; while [ $i -lt 30 ] && ! calls $((n + 1)) | grep -qw 56; do step; i=$((i + 1)); done
+expect "refused every time: the next sweep asks for it again" "36 40 44 48 52 56" "$(calls $((n + 1)))"
 
 # 12: scans paused: no trickle
 sed -i 's/^COLLECTION=.*//' "$R/jffs/addons/wifiinsight/config"; echo 'COLLECTION="paused"' >> "$R/jffs/addons/wifiinsight/config"

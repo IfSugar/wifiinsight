@@ -939,6 +939,15 @@ scan() {   # [--delay]: a scheduled scan (cron), skipped when paused, off or in 
 # sample), but not for longer than the scan interval; none run in quiet hours, or with scans paused or
 # off. A sweep is stored as one scan whose time moves forward with each channel, so the page shows it
 # filling in; Scan now still scans the whole band at once.
+sweep_done() {   # band ifc: a sweep one channel at a time reached the end of the band. One line in the syslog,
+	# then a rest until the next scheduled scan starts the next sweep.
+	_ts=$(cat "$TMPD/sweep_$1" 2>/dev/null); _sk=$(cat "$TMPD/trickle_$1.skipped" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+	case "$_ts" in ''|*[!0-9]*) ;; *)
+		_nn=$(sql "SELECT count(DISTINCT bssid) FROM aps WHERE band='$1' AND ts=$_ts;")
+		log "scan $1 ($2): one channel at a time, spread out: $(sql "SELECT count(*) FROM scans WHERE band='$1' AND ts=$_ts;") channels, $_nn network$( [ "$_nn" = 1 ] || printf s), $(sql "SELECT count(*) FROM chanim WHERE band='$1' AND ts=$_ts;") channels measured${_sk:+; skipped, refused 5 times in a row: $_sk}" ;;
+	esac
+	rm -f "$TMPD/sweep_$1" "$TMPD/trickle_$1.due" "$TMPD/trickle_$1.skipped" "$TMPD/trickle_$1.refusing"
+}
 trickle() {
 	[ "$COLLECTION" = on ] && [ "$SCAN_INTERVAL" -gt 0 ] 2>/dev/null || return 0
 	set -- "$TMPD"/refused_*; [ -f "$1" ] || return 0   # no radio refuses full scans: nothing to do, and no lock taken
@@ -971,9 +980,10 @@ trickle() {
 		fi
 		# between sweeps: the next one starts after the next scheduled scan, from the start of the band
 		due="$TMPD/trickle_$band.due"; nxt="$TMPD/trickle_$band.next"; sw="$TMPD/sweep_$band"
+		rf="$TMPD/trickle_$band.refusing"; skf="$TMPD/trickle_$band.skipped"
 		sts=$(cat "$sw" 2>/dev/null); case "$sts" in ''|*[!0-9]*) sts="" ;; esac
 		[ -n "$sts" ] && [ $((t - sts)) -gt $((SCAN_INTERVAL * 120)) ] && { rm -f "$sw"; sts=""; }   # left too long: dropped
-		if [ -z "$sts" ]; then [ -f "$due" ] || continue; echo 0 > "$nxt"; fi
+		if [ -z "$sts" ]; then [ -f "$due" ] || continue; echo 0 > "$nxt"; rm -f "$rf" "$skf"; fi
 		# your own traffic in the latest sample (transmit + receive from your clients), if it's recent
 		own=$(sql "SELECT coalesce(tx, 0) + coalesce(inbss, 0) FROM samples WHERE band='$band' AND ts >= $((t - 180)) ORDER BY ts DESC LIMIT 1;")
 		if [ "$(awk -v o="${own:-0}" 'BEGIN { print (o > 10) }')" = 1 ] && [ $((t - last)) -lt $((SCAN_INTERVAL * 60)) ]; then continue; fi
@@ -1006,13 +1016,25 @@ trickle() {
 				if [ $tk = 0 ]; then
 					rm -f "$m0"
 					if grep -q 'Bad Channel' "$err"; then   # radar put it off limits: the next one
+						rm -f "$rf"
 						off=$(( (off + 1) % nch )); echo "$off" > "$nxt"
-						[ "$off" = 0 ] && { rm -f "$sw" "$due"; break; }
+						[ "$off" = 0 ] && { sweep_done "$band" "$ifc"; break; }
 						continue
 					fi
-					break   # refused: the same channel next time
+					# refused: the same channel next time. A channel refused 5 times in a row (5 runs, a minute
+					# apart) is skipped until the next sweep: a driver that never takes one channel would
+					# otherwise hold up the rest of the band, and the sweep would start over from its first
+					# channel every hour, never reaching the others.
+					set -- $(cat "$rf" 2>/dev/null); rn=1
+					[ "$1" = "$c" ] && case "${2:-}" in ''|*[!0-9]*) ;; *) rn=$(( $2 + 1 )) ;; esac
+					if [ $rn -lt 5 ]; then echo "$c $rn" > "$rf"; break; fi
+					rm -f "$rf"; echo "$c" >> "$skf"
+					off=$(( (off + 1) % nch )); echo "$off" > "$nxt"
+					[ "$off" = 0 ] && { sweep_done "$band" "$ifc"; break; }
+					continue
 				fi
 			fi
+			rm -f "$rf"
 			# taken at once after waiting the gap out (when it's over 20 s): the next waits a second less, so
 			# a one-off refusal doesn't keep the channels further apart for good
 			if [ $j -gt 1 ] && [ $tk = 0 ] && [ "$sp" -gt 20 ]; then sp=$((sp - 1)); gap_set "$band" "$sp" > /dev/null; fi
@@ -1047,11 +1069,7 @@ trickle() {
 			off=$(( (off + 1) % nch )); echo "$off" > "$nxt"
 			mc=$(sql "SELECT count(*) FROM chanim WHERE band='$band' AND ts=$t2;")
 			[ "$(cat "$DATA_DIR/measured_$band" 2>/dev/null)" = "$mc" ] || put_file "$DATA_DIR/measured_$band" "$mc"
-			if [ "$off" = 0 ]; then   # the band is done: one line in the syslog per sweep
-				nn=$(sql "SELECT count(DISTINCT bssid) FROM aps WHERE band='$band' AND ts=$t2;")
-				log "scan $band ($ifc): one channel at a time, spread out: $(sql "SELECT count(*) FROM scans WHERE band='$band' AND ts=$t2;") channels, $nn network$( [ "$nn" = 1 ] || printf s), $mc channels measured"
-				rm -f "$sw" "$due"
-			fi
+			[ "$off" = 0 ] && sweep_done "$band" "$ifc"
 			rm -f "$m0" "$m1" "$out"
 			did=1
 			[ "$off" = 0 ] && break   # one sweep per scheduled scan
