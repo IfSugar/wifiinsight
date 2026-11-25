@@ -2,6 +2,10 @@
 
 What changed in each release of WiFi Insight. The release workflow copies a version's section into its GitHub release notes, so write for people running the addon.
 
+## Unreleased
+
+- **The router no longer logs you out while the page is open.** The router's *Auto Logout* (30 minutes by default) counts the time since your last click, so with WiFi Insight open to watch, you were logged out mid-view. The page now turns that off while it's open, as the router's own System Log and real-time Traffic Monitor pages do. Thanks to Squall Leonhart for the suggestion.
+
 ## 2.3.0
 
 The 7- and 30-day views work again on routers west of UTC, one-channel scans get through a band of refused DFS channels, and the page shows your channel's load whichever it is, and when its history starts.

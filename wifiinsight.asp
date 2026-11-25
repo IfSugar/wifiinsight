@@ -179,6 +179,10 @@ var custom_settings = <% get_custom_settings(); %>;
 /* Everything below is private, so nothing clashes with the firmware's globals (jQuery's $, store, ...).
    Only initial() (called by <body onload>) and the WiFiInsight object (used by the page's buttons) are global. */
 (function () {
+/* The router logs you out after its Auto Logout time without a click (Administration > System), counted by its
+   state.js. A page you leave open to watch, like its own System Log and real-time Traffic Monitor, turns that
+   off for as long as it's open, the same way: 0 means no automatic logout. */
+if ('AUTOLOGOUT_MAX_MINUTE' in window) window.AUTOLOGOUT_MAX_MINUTE = 0;
 var WI = {
 	base: '/ext/wifiinsight/',
 	live: null, week: null, scans: null,
