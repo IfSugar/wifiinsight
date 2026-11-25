@@ -74,6 +74,7 @@ jobs:
         #   dev-update      update dev [branch]; plain update stays on releases; amtm keeps a development version
         #   stuck-run       a run stuck in a command that never returns is stopped by the next one
         #   entware-path    the firmware's own commands come before Entware's
+        #   time-axis       the charts' time axis ticks fall on round local times, in every time zone (node)
         run: bash .github/run-tests.sh
 
       - name: Check the page's JavaScript

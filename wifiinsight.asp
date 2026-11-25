@@ -386,12 +386,43 @@ function rangeInfo() {
 	var cfg = RANGE_CFG[WI.range], to = nowTs();
 	return { from: to - cfg.secs, to: to, multi: cfg.secs > 86400, month: cfg.secs > 604800, cfg: cfg };
 }
-function tickFmt(R) {
+function tickFmt(R) {   // the time axis' labels, at the ticks timeTicks gives: Nov 6 (30D), Wed 19 (7D), 14:30
 	return function (v) {
 		var d = new Date(v * 1000);
 		if (R.month) return MONS[d.getMonth()] + ' ' + d.getDate();
-		return R.multi ? DAYS[d.getDay()] + ' ' + pad(d.getHours()) + 'h' : hm(v);
+		return R.multi ? DAYS[d.getDay()] + ' ' + d.getDate() : hm(v);
 	};
+}
+/* Where the time axis has its ticks (and grid lines): at round times of the browser's local clock, as the labels
+   are, not wherever Chart.js's number steps fall (on 7D, every 100000 s: Tue 03h, Wed 06h, Thu 09h...). 7D: each
+   midnight; 30D: every 5th midnight; shorter ranges: every 3 h (1D), 2 h (12H), 10 min (1H) or 2 min (10M) of the
+   local day. Midnights come from local dates, so a day the clocks change is still one day (where a clock skips
+   midnight, the day starts at 01:00). The shorter steps follow the local clock's offset from UTC at each moment:
+   a time the clocks skip gets no tick, the hour they repeat gets its ticks twice, and a zone 30 or 45 minutes
+   off the hour gets its own round times. */
+function timeTicks(R) {
+	var out = [], f = new Date(R.from * 1000), span = R.to - R.from, k, t, d;
+	if (span > 86400) {
+		var every = span > 604800 ? 5 : 1;
+		for (k = 0; k <= Math.ceil(span / 86400) + 1; k += every) {
+			d = new Date(f.getFullYear(), f.getMonth(), f.getDate() + 1 + k); t = d.getTime() / 1000;
+			if (t >= R.from && t <= R.to && (!out.length || t > out[out.length - 1])) out.push(t);
+		}
+		return out;
+	}
+	var step = (span <= 600 ? 2 : span <= 3600 ? 10 : span <= 43200 ? 120 : 180) * 60;
+	var off = function (s) { return -new Date(s * 1000).getTimezoneOffset() * 60; };
+	for (t = R.from, k = 0; t <= R.to && k < 60; k++) {
+		var o = off(t), c = Math.ceil((t + o) / step) * step - o;
+		if (off(c) !== o) {   /* the clocks change before c: carry on from the change, at the new offset */
+			var lo = t, hi = c;
+			while (hi - lo > 1) { var mid = Math.floor((lo + hi) / 2); if (off(mid) === o) lo = mid; else hi = mid; }
+			t = hi; continue;
+		}
+		if (c > R.to) break;
+		out.push(c); t = c + 1;
+	}
+	return out;
 }
 function timeLabel(ts) {   // heatmap row labels
 	var d = new Date(ts * 1000), R = rangeInfo();
@@ -500,7 +531,11 @@ function drawChart(key, boxId, type, datasets, o) {
 	if (o.yFmt) scales.y.ticks.callback = o.yFmt;
 	if (o.yStep) scales.y.ticks.stepSize = o.yStep;
 	if (o.stacked) { scales.y.stacked = true; scales.x.stacked = true; }
-	if (o.R) { scales.x.min = o.R.from; scales.x.max = o.R.to; scales.x.ticks.callback = tickFmt(o.R); }
+	if (o.R) {
+		scales.x.min = o.R.from; scales.x.max = o.R.to; scales.x.ticks.callback = tickFmt(o.R);
+		scales.x.afterBuildTicks = function (axis) { axis.ticks = timeTicks(o.R).map(function (v) { return { value: v }; }); };
+		scales.x.ticks.maxTicksLimit = 12;   /* timeTicks gives up to 9 (a day the clocks go back has 25 hours): all of them */
+	}
 	var ch = new Chart(box.firstChild, {
 		type: type,
 		data: { labels: o.labels, datasets: datasets },
