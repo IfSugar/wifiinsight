@@ -5,6 +5,7 @@ What changed in each release of WiFi Insight. The release workflow copies a vers
 ## Unreleased
 
 - **The router no longer logs you out while the page is open.** The router's *Auto Logout* (30 minutes by default) counts the time since your last click, so with WiFi Insight open to watch, you were logged out mid-view. The page now turns that off while it's open, as the router's own System Log and real-time Traffic Monitor pages do. Thanks to Squall Leonhart for the suggestion.
+- **The charts' time axis has its ticks on round local times.** It put them wherever the chart library's number steps fell: on 7D, every 27.8 hours, labelled *Tue 03h, Wed 06h, Thu 09h…*, with the range's two ends as the first and last. Now 7D has one per day at midnight (*Wed 19*), 30D one every 5 days, and the shorter ranges every 3 h, 2 h, 10 min or 2 min of the day, by your browser's clock. Checked in every time zone, across every clock change of 2026 and 2027: a time the clocks skip gets no tick, the hour they repeat gets its ticks twice, and zones 30 or 45 minutes off the hour get their own round times. Thanks to scootertramp for the report.
 
 ## 2.3.0
 
