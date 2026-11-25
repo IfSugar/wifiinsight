@@ -66,7 +66,7 @@ run() { WI_ROOT="$R" WI_MOUNTS="$M" TZ=UTC PATH="$T/bin" BASH_ENV="$T/no-builtin
 conf() { printf 'SQLITE="%s"\nDATA_DIR="%s"\nAMTM_UPDATE=on\n' "$1" "$2" > "$A/config"; }
 fill() {   # a database with history in folder $1, written by Entware's (the host's) sqlite3
 	mkdir -p "$1"; "$host_sqlite" "$1/wifiinsight.db" < "$schema"
-	for i in 1 2 3 4 5; do "$host_sqlite" "$1/wifiinsight.db" "INSERT INTO samples(ts, band, obss, nocat, tx, inbss, idle, noise) VALUES($((1800000000 + i * 30)), '5g', 3, 1, 2, 1, 90, -92);"; done
+	for i in 1 2 3 4 5; do "$host_sqlite" "$1/wifiinsight.db" "INSERT INTO samples(ts, band, obss, nocat, tx, inbss, idle, noise) VALUES($(( $(date +%s) - 600 + i * 30 )), '5g', 3, 1, 2, 1, 90, -92);"; done
 	echo 19 > "$1/measured_5g"
 }
 inode() { ls -id "$1" | awk '{ print $1 }'; }

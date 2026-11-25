@@ -102,6 +102,14 @@ chart_ok() {   # the downloaded Chart.js is byte-identical to the published npm 
 	[ "$h" = "$CHART_SHA256" ]
 }
 
+# A row's radio, as WiFi Insight writes it: 2g, 5g, 6g, or 5g2... for a second radio on one band, as text.
+# A failing USB drive can flip a bit in a row: 2g turns into "g or 0g, 5g into 5f, or the text into a blob
+# that still reads 2g. Such rows are left out of every export (a blob 2g would become a second "2g" key in
+# the 30-day file, after the real one, and the page keeps the last: a few stray samples instead of weeks),
+# status counts them, and prune removes them. One per table alias the queries use.
+BAND_OK="typeof(band) = 'text' AND (band GLOB '[256]g' OR band GLOB '[256]g[2-4]')"
+BAND_OK_S="typeof(s.band) = 'text' AND (s.band GLOB '[256]g' OR s.band GLOB '[256]g[2-4]')"
+
 # sqlite's errors still go to stderr. "malformed" or "not a database" also marks the database as damaged
 # (a power cut while the USB drive was writing, say), which status and the page report until 'repair'.
 # The SQL comes as one argument or on stdin; the schema check runs first either way, and -bail stops
@@ -1304,9 +1312,9 @@ export_live() {
 		# the oldest sample (when the history starts, for the page's "history since"), in the same sqlite3 run as
 		# the day of samples: an index lookup, no extra run. Cast: the only value that goes into the JSON as text,
 		# so a planted database whose ts isn't a number can't add keys to live.htm (ts is a plain INTEGER column).
-		json_out '"first":null,"samples":{}' "SELECT '\"first\":' || coalesce((SELECT CAST(min(ts) AS INTEGER) FROM samples), 'null') || ',\"samples\":' || coalesce((SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(ts,obss,nocat,tx,inbss,idle,glitch,noise,ctl,width,center,nopkt,doze,txop,goodtx,badtx,badplcp,knoise)) AS a FROM (SELECT * FROM samples WHERE ts>=$since ORDER BY band, ts) GROUP BY band)), '{}');"
+		json_out '"first":null,"samples":{}' "SELECT '\"first\":' || coalesce((SELECT CAST(min(ts) AS INTEGER) FROM samples WHERE $BAND_OK), 'null') || ',\"samples\":' || coalesce((SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(ts,obss,nocat,tx,inbss,idle,glitch,noise,ctl,width,center,nopkt,doze,txop,goodtx,badtx,badplcp,knoise)) AS a FROM (SELECT * FROM samples WHERE ts>=$since AND $BAND_OK ORDER BY band, ts) GROUP BY band)), '{}');"
 		printf ',"events":'
-		json_out '[]' "SELECT json_group_array(json_array(ts,band,tag,old,new,detail)) FROM (SELECT * FROM events WHERE ts>=$evsince ORDER BY ts DESC LIMIT 500);"
+		json_out '[]' "SELECT json_group_array(json_array(ts,band,tag,old,new,detail)) FROM (SELECT * FROM events WHERE ts>=$evsince AND (band = 'all' OR $BAND_OK) ORDER BY ts DESC LIMIT 500);"
 		printf '}\n'
 	} | write_atomic "$wd/live.htm"
 }
@@ -1323,7 +1331,7 @@ tz_off() {
 # brackets: west of UTC it's negative, and "-$aoff" would be "--18000", which SQL reads as a comment.
 samples_agg() {   # days bucket-seconds -> JSON on stdout ({} if the DB is busy)
 	asince=$(( $(now) - $1 * 86400 )); B=$2; aoff=$(tz_off)
-	json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(b, o, n, u, i, m, g, bp, nz, np, tx, ib, gt, bt)) AS a FROM (SELECT band, ((ts+($aoff))/$B)*$B-($aoff) AS b, round(avg(obss),1) AS o, round(avg(nocat),1) AS n, round(avg(tx+inbss),1) AS u, round(avg(idle),1) AS i, max(obss+nocat) AS m, round(avg(glitch)) AS g, round(avg(badplcp)) AS bp, round(avg(noise),1) AS nz, round(avg(nopkt),1) AS np, round(avg(tx),1) AS tx, round(avg(inbss),1) AS ib, round(avg(goodtx),1) AS gt, round(avg(badtx),1) AS bt FROM samples WHERE ts>=$asince GROUP BY band, b ORDER BY band, b) GROUP BY band);"
+	json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json_array(b, o, n, u, i, m, g, bp, nz, np, tx, ib, gt, bt)) AS a FROM (SELECT band, ((ts+($aoff))/$B)*$B-($aoff) AS b, round(avg(obss),1) AS o, round(avg(nocat),1) AS n, round(avg(tx+inbss),1) AS u, round(avg(idle),1) AS i, max(obss+nocat) AS m, round(avg(glitch)) AS g, round(avg(badplcp)) AS bp, round(avg(noise),1) AS nz, round(avg(nopkt),1) AS np, round(avg(tx),1) AS tx, round(avg(inbss),1) AS ib, round(avg(goodtx),1) AS gt, round(avg(badtx),1) AS bt FROM samples WHERE ts>=$asince AND $BAND_OK GROUP BY band, b ORDER BY band, b) GROUP BY band);"
 }
 
 export_week() {   # 7 days in 15-minute buckets
@@ -1339,7 +1347,7 @@ export_month() {
 		printf '{"generated":%s,"bucket":3600,"agg":' "$t"
 		samples_agg 30 3600
 		printf ',"scan_bucket":21600,"scans":'
-		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json(CASE WHEN mn = 0 THEN json_array(b, ch, sc, ap, be, ow, n) ELSE json_array(b, ch, sc, ap, be, ow, n, mo, mc, mp, mz, mg, mn) END)) AS a FROM (SELECT s.band, ((s.ts+($off))/21600)*21600-($off) AS b, s.ch, round(avg(s.score),1) AS sc, max(s.aps) AS ap, max(s.best) AS be, round(avg(s.own),1) AS ow, count(*) AS n, round(avg(m.obss),1) AS mo, round(avg(m.nocat),1) AS mc, round(avg(m.nopkt),1) AS mp, round(avg(m.noise)) AS mz, round(avg(m.glitch)) AS mg, count(m.obss) AS mn FROM scans s LEFT JOIN chanim m ON m.band=s.band AND m.ts=s.ts AND m.ch=s.ch WHERE s.ts>=$since GROUP BY s.band, b, s.ch ORDER BY s.band, b, s.ch) GROUP BY band);"
+		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json(CASE WHEN mn = 0 THEN json_array(b, ch, sc, ap, be, ow, n) ELSE json_array(b, ch, sc, ap, be, ow, n, mo, mc, mp, mz, mg, mn) END)) AS a FROM (SELECT s.band, ((s.ts+($off))/21600)*21600-($off) AS b, s.ch, round(avg(s.score),1) AS sc, max(s.aps) AS ap, max(s.best) AS be, round(avg(s.own),1) AS ow, count(*) AS n, round(avg(m.obss),1) AS mo, round(avg(m.nocat),1) AS mc, round(avg(m.nopkt),1) AS mp, round(avg(m.noise)) AS mz, round(avg(m.glitch)) AS mg, count(m.obss) AS mn FROM scans s LEFT JOIN chanim m ON m.band=s.band AND m.ts=s.ts AND m.ch=s.ch WHERE s.ts>=$since AND $BAND_OK_S GROUP BY s.band, b, s.ch ORDER BY s.band, b, s.ch) GROUP BY band);"
 		printf '}\n'
 	} | write_atomic "$wd/month.htm"
 }
@@ -1349,16 +1357,16 @@ export_scans() {
 	t=$(now); since=$((t - 7 * 86400))
 	{
 		printf '{"generated":%s,"scan_interval":%s,"last_scan":' "$t" "$SCAN_INTERVAL"
-		json_out '{}' "SELECT json_group_object(band, mt) FROM (SELECT band, max(ts) AS mt FROM scans GROUP BY band);"
+		json_out '{}' "SELECT json_group_object(band, mt) FROM (SELECT band, max(ts) AS mt FROM scans WHERE $BAND_OK GROUP BY band);"
 		printf ',"scans":'
 		# [ts, ch, estimate, networks, strongest, own] and, where the radio measured the channel,
 		# [..., 1, others, non-Wi-Fi, unclassified, noise, glitches]
-		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json(CASE WHEN obss IS NULL THEN json_array(ts,ch,score,aps,best,own) ELSE json_array(ts,ch,score,aps,best,own,1,obss,nocat,nopkt,noise,glitch) END)) AS a FROM (SELECT s.ts, s.band, s.ch, s.score, s.aps, s.best, s.own, m.obss, m.nocat, m.nopkt, m.noise, m.glitch FROM scans s LEFT JOIN chanim m ON m.band=s.band AND m.ts=s.ts AND m.ch=s.ch WHERE s.ts>=$since ORDER BY s.band, s.ts, s.ch) GROUP BY band);"
+		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT band, json_group_array(json(CASE WHEN obss IS NULL THEN json_array(ts,ch,score,aps,best,own) ELSE json_array(ts,ch,score,aps,best,own,1,obss,nocat,nopkt,noise,glitch) END)) AS a FROM (SELECT s.ts, s.band, s.ch, s.score, s.aps, s.best, s.own, m.obss, m.nocat, m.nopkt, m.noise, m.glitch FROM scans s LEFT JOIN chanim m ON m.band=s.band AND m.ts=s.ts AND m.ch=s.ch WHERE s.ts>=$since AND $BAND_OK_S ORDER BY s.band, s.ts, s.ch) GROUP BY band);"
 		printf ',"aps":'
 		# The networks of the latest scan, and, for channels it didn't cover (a scan that took one channel at
 		# a time, or stopped early), those of the newest scan in the last 6 hours that did. Each with its time.
 		t6=$((t - 6 * 3600))
-		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT x.band, json_group_array(json_object('ssid',x.ssid,'bssid',x.bssid,'rssi',x.rssi,'ctl',x.ctl,'center',x.center,'width',x.width,'util',x.util,'own',x.own,'phy',x.phy,'sec',x.sec,'snr',x.snr,'ts',x.ts)) AS a FROM (SELECT * FROM (SELECT u.*, row_number() OVER (PARTITION BY u.band, u.bssid ORDER BY u.ts DESC) AS rn FROM (SELECT p.* FROM aps p JOIN (SELECT band, ch, max(ts) AS ct FROM scans WHERE ts>=$t6 GROUP BY band, ch) c ON p.band=c.band AND p.ctl=c.ch AND p.ts=c.ct UNION SELECT p.* FROM aps p JOIN (SELECT band, max(ts) AS mt FROM aps GROUP BY band) l ON p.band=l.band AND p.ts=l.mt) u) WHERE rn=1 ORDER BY band, rssi DESC) x GROUP BY x.band);"
+		json_out '{}' "SELECT json_group_object(band, json(a)) FROM (SELECT x.band, json_group_array(json_object('ssid',x.ssid,'bssid',x.bssid,'rssi',x.rssi,'ctl',x.ctl,'center',x.center,'width',x.width,'util',x.util,'own',x.own,'phy',x.phy,'sec',x.sec,'snr',x.snr,'ts',x.ts)) AS a FROM (SELECT * FROM (SELECT u.*, row_number() OVER (PARTITION BY u.band, u.bssid ORDER BY u.ts DESC) AS rn FROM (SELECT p.* FROM aps p JOIN (SELECT band, ch, max(ts) AS ct FROM scans WHERE ts>=$t6 GROUP BY band, ch) c ON p.band=c.band AND p.ctl=c.ch AND p.ts=c.ct UNION SELECT p.* FROM aps p JOIN (SELECT band, max(ts) AS mt FROM aps GROUP BY band) l ON p.band=l.band AND p.ts=l.mt) u) WHERE rn=1 AND $BAND_OK ORDER BY band, rssi DESC) x GROUP BY x.band);"
 		printf '}\n'
 	} | write_atomic "$wd/scans.htm"
 }
@@ -1473,6 +1481,11 @@ prune() {
 	lock_note collect prune
 	t=$(now); cut=$((t - RETAIN_DAYS * 86400)); evcut=$((t - 365 * 86400))
 	sql "DELETE FROM samples WHERE ts<$cut; DELETE FROM scans WHERE ts<$cut; DELETE FROM chanim WHERE ts<$cut; DELETE FROM aps WHERE ts<$cut; DELETE FROM events WHERE ts<$evcut; PRAGMA optimize;"
+	# Rows a failing drive damaged (see BAND_OK): a radio WiFi Insight never writes, or a time over a day ahead.
+	# The exports already leave them out; this removes them, and says so, as it may well happen again.
+	soon=$((t + 86400))
+	bad=$(sql "DELETE FROM samples WHERE NOT ($BAND_OK) OR ts>$soon; DELETE FROM scans WHERE NOT ($BAND_OK) OR ts>$soon; DELETE FROM chanim WHERE NOT ($BAND_OK) OR ts>$soon; DELETE FROM aps WHERE NOT ($BAND_OK) OR ts>$soon; DELETE FROM events WHERE NOT (band = 'all' OR $BAND_OK) OR ts>$soon; SELECT total_changes();")
+	[ "${bad:-0}" -gt 0 ] 2>/dev/null && log "prune: removed $bad damaged row$( [ "$bad" = 1 ] || printf s) (a radio or a time that can't be right). If this keeps happening, the USB drive may be failing: check it, or try another"
 	# Once a week, compact the file, but only when a quarter or more of it is free pages: it rewrites the
 	# whole file, which is the riskiest write if the power goes. Its temporary copy goes on the same drive,
 	# not in /tmp (the router's RAM).
@@ -2176,13 +2189,15 @@ status() {
 	say "Cron:";  cru l 2>/dev/null | grep "$NAME" | sed 's/^/  /'
 	if [ -f "$DB" ]; then
 		t=$(now)
-		sql "SELECT '  ' || band || ': ' || count(*) || ' samples, last ' || ($t - max(ts)) || 's ago' FROM samples GROUP BY band;"
+		sql "SELECT '  ' || band || ': ' || count(*) || ' samples, last ' || ($t - max(ts)) || 's ago' FROM samples WHERE $BAND_OK AND ts<=$((t + 86400)) GROUP BY band;"
+		dmg=$(sql "SELECT (SELECT count(*) FROM samples WHERE NOT ($BAND_OK) OR ts>$((t + 86400))) + (SELECT count(*) FROM scans WHERE NOT ($BAND_OK) OR ts>$((t + 86400))) + (SELECT count(*) FROM aps WHERE NOT ($BAND_OK) OR ts>$((t + 86400))) + (SELECT count(*) FROM chanim WHERE NOT ($BAND_OK) OR ts>$((t + 86400))) + (SELECT count(*) FROM events WHERE NOT (band = 'all' OR $BAND_OK) OR ts>$((t + 86400)));")
+		[ "${dmg:-0}" -gt 0 ] 2>/dev/null && say "  Damaged rows: $dmg (a radio or a time that can't be right), left out of the page; the nightly prune removes them. If they keep coming back, the USB drive may be failing: check it, or try another."
 		# no new samples for 10 min while collecting: something stops it (the syslog says what, when it knows)
 		if [ "$COLLECTION" != off ]; then
-			ls_=$(sql "SELECT max(ts) FROM samples;")
+			ls_=$(sql "SELECT max(ts) FROM samples WHERE $BAND_OK AND ts<=$((t + 86400));")
 			[ -n "$ls_" ] && [ $((t - ls_)) -gt 600 ] && say "  Sampling looks stuck: no new samples for $(( (t - ls_) / 60 )) min. The system log may say why (lines from $NAME)."
 		fi
-		sql "SELECT '  last scan: ' || ($t - max(ts)) || 's ago' FROM scans;"
+		sql "SELECT '  last scan: ' || ($t - max(ts)) || 's ago' FROM scans WHERE $BAND_OK AND ts<=$((t + 86400));"
 		say "Recent events:"
 		sql "SELECT '  ' || datetime(ts,'unixepoch','localtime') || '  ' || band || '  ' || tag || '  ' || coalesce(old,'') || ' -> ' || coalesce(new,'') FROM events ORDER BY ts DESC LIMIT 8;"
 	fi
